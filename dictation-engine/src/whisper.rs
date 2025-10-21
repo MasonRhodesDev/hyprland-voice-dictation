@@ -38,7 +38,7 @@ impl WhisperTranscriber {
     pub async fn transcribe(&self, audio_samples: &[f32], sample_rate: u32) -> Result<String> {
         let temp_file = NamedTempFile::new()?;
         let wav_path = temp_file.path();
-
+        
         debug!("Writing {} samples to temporary WAV file", audio_samples.len());
         write_wav_file(wav_path, audio_samples, sample_rate)?;
 
@@ -66,23 +66,12 @@ impl WhisperTranscriber {
         })
         .await??;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        
-        info!("Whisper stdout length: {}, stderr length: {}", stdout.len(), stderr.len());
-        info!("Whisper exit code: {:?}", output.status.code());
-        
         if !output.status.success() {
-            anyhow::bail!("Whisper transcription failed with code {:?}: {}", output.status.code(), stderr);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Whisper transcription failed: {}", stderr);
         }
-        
-        if stdout.is_empty() && !stderr.is_empty() {
-            // whisper.cpp outputs to stderr by default
-            info!("Using stderr as output");
-            let transcription = parse_whisper_output(&stderr)?;
-            return Ok(transcription);
-        }
-        
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let transcription = parse_whisper_output(&stdout)?;
 
         debug!("Transcribed: {}", transcription);
@@ -110,16 +99,12 @@ fn write_wav_file(path: &std::path::Path, samples: &[f32], sample_rate: u32) -> 
 }
 
 fn parse_whisper_output(output: &str) -> Result<String> {
-    for line in output.lines() {
-        if line.contains("-->") {
-            if let Some(text_start) = line.find(']') {
-                let text = line[text_start + 1..].trim();
-                if !text.is_empty() {
-                    return Ok(text.to_string());
-                }
-            }
-        }
+    // With -nt -np flags, whisper outputs plain text
+    let text = output.trim();
+    
+    if text.is_empty() {
+        anyhow::bail!("Empty transcription from whisper");
     }
-
-    anyhow::bail!("No transcription found in whisper output");
+    
+    Ok(text.to_string())
 }
