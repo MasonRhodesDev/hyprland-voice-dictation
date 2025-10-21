@@ -12,11 +12,11 @@ case "$1" in
         fi
         
         # Start engine
-        $ENGINE_BIN &
-        sleep 0.2  # Wait for socket creation
+        RUST_LOG=info $ENGINE_BIN > /tmp/dictation-engine.log 2>&1 &
         
-        # Start GUI
-        $GUI_BIN &
+        # TODO: Start GUI when implemented
+        # sleep 0.2  # Wait for socket creation
+        # $GUI_BIN &
         
         # Create state file
         touch "$STATE_FILE"
@@ -29,9 +29,9 @@ case "$1" in
             exit 0
         fi
         
-        # Kill both processes
-        pkill -f dictation-engine
-        pkill -f dictation-gui
+        # Kill engine (and GUI when implemented)
+        pkill -TERM -f dictation-engine
+        # pkill -TERM -f dictation-gui
         
         # Remove state file
         rm -f "$STATE_FILE"
