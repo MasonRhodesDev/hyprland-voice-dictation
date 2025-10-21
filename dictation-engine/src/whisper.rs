@@ -110,5 +110,17 @@ fn parse_whisper_output(output: &str) -> Result<String> {
         anyhow::bail!("Empty transcription from whisper");
     }
     
-    Ok(text.to_string())
+    // Remove special tokens like [BLANK_AUDIO], [silence], etc.
+    let cleaned = text
+        .replace("[BLANK_AUDIO]", "")
+        .replace("[silence]", "")
+        .replace("[SILENCE]", "")
+        .trim()
+        .to_string();
+    
+    if cleaned.is_empty() {
+        anyhow::bail!("Only special tokens in transcription");
+    }
+    
+    Ok(cleaned)
 }

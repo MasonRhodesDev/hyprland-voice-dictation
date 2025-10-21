@@ -15,6 +15,7 @@ use whisper::WhisperTranscriber;
 const SAMPLE_RATE: u32 = 16000;
 const VAD_FRAME_DURATION_MS: u64 = 30;
 const VAD_THRESHOLD_DB: f32 = -40.0;
+const SILENCE_BUFFER_MS: u64 = 1000; // Extra audio to capture after silence detected
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -99,7 +100,8 @@ async fn main() -> Result<()> {
                     let duration = start_time.elapsed();
                     info!("Speech ended after {:.1}s, transcribing...", duration.as_secs_f32());
 
-                    let duration_ms = duration.as_millis() as u64 + 500;
+                    // Capture speech + extra buffer to avoid cutting off
+                    let duration_ms = duration.as_millis() as u64 + SILENCE_BUFFER_MS;
                     let speech_samples = audio.get_samples_for_duration(duration_ms);
 
                     if speech_samples.is_empty() {
