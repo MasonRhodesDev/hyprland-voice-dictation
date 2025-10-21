@@ -1,0 +1,63 @@
+#!/bin/bash
+
+STATE_FILE="/tmp/voice-dictation-active"
+ENGINE_BIN="$HOME/.local/bin/dictation-engine"
+GUI_BIN="$HOME/.local/bin/dictation-gui"
+
+case "$1" in
+    start)
+        if [ -f "$STATE_FILE" ]; then
+            echo "Voice dictation already running"
+            exit 0
+        fi
+        
+        # Start engine
+        $ENGINE_BIN &
+        sleep 0.2  # Wait for socket creation
+        
+        # Start GUI
+        $GUI_BIN &
+        
+        # Create state file
+        touch "$STATE_FILE"
+        echo "Voice dictation started"
+        ;;
+        
+    stop)
+        if [ ! -f "$STATE_FILE" ]; then
+            echo "Voice dictation not running"
+            exit 0
+        fi
+        
+        # Kill both processes
+        pkill -f dictation-engine
+        pkill -f dictation-gui
+        
+        # Remove state file
+        rm -f "$STATE_FILE"
+        echo "Voice dictation stopped"
+        ;;
+        
+    toggle)
+        if [ -f "$STATE_FILE" ]; then
+            $0 stop
+        else
+            $0 start
+        fi
+        ;;
+        
+    status)
+        if [ -f "$STATE_FILE" ]; then
+            echo "Voice dictation is running"
+            pgrep -f dictation-engine > /dev/null && echo "  Engine: running" || echo "  Engine: NOT running"
+            pgrep -f dictation-gui > /dev/null && echo "  GUI: running" || echo "  GUI: NOT running"
+        else
+            echo "Voice dictation is stopped"
+        fi
+        ;;
+        
+    *)
+        echo "Usage: $0 {start|stop|toggle|status}"
+        exit 1
+        ;;
+esac

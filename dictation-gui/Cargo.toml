@@ -1,0 +1,28 @@
+[package]
+name = "dictation-gui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Wayland layer-shell
+smithay-client-toolkit = "0.18"
+wayland-client = "0.31"
+
+# Rendering (choose one)
+# Option 1: GPU rendering
+wgpu = "0.20"
+# Option 2: CPU rendering (lighter)
+# tiny-skia = "0.11"
+
+# FFT
+rustfft = "6"
+
+# Configuration
+toml = "0.8"
+shellexpand = "3"
+dirs = "5"
