@@ -66,12 +66,23 @@ impl WhisperTranscriber {
         })
         .await??;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Whisper transcription failed: {}", stderr);
-        }
-
         let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        
+        info!("Whisper stdout length: {}, stderr length: {}", stdout.len(), stderr.len());
+        info!("Whisper exit code: {:?}", output.status.code());
+        
+        if !output.status.success() {
+            anyhow::bail!("Whisper transcription failed with code {:?}: {}", output.status.code(), stderr);
+        }
+        
+        if stdout.is_empty() && !stderr.is_empty() {
+            // whisper.cpp outputs to stderr by default
+            info!("Using stderr as output");
+            let transcription = parse_whisper_output(&stderr)?;
+            return Ok(transcription);
+        }
+        
         let transcription = parse_whisper_output(&stdout)?;
 
         debug!("Transcribed: {}", transcription);

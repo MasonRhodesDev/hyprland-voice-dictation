@@ -54,7 +54,25 @@ async fn main() -> Result<()> {
             continue;
         }
 
+        // Debug: check for NaN values
+        if samples.iter().any(|s| s.is_nan() || s.is_infinite()) {
+            warn!("Invalid audio samples detected (NaN/Inf), skipping frame");
+            continue;
+        }
+
         let event = vad.process_frame(&samples);
+
+        // Periodically log VAD status
+        static mut FRAME_COUNT: usize = 0;
+        unsafe {
+            FRAME_COUNT += 1;
+            if FRAME_COUNT % 100 == 0 {
+                let rms: f32 = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
+                let rms = rms.sqrt();
+                let db = if rms > 0.0 { 20.0 * rms.log10() } else { -100.0 };
+                info!("VAD status: speaking={}, rms={:.6}, db={:.1}dB", vad.is_speaking(), rms, db);
+            }
+        }
 
         match event {
             VadEvent::SpeechStart => {

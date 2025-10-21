@@ -48,8 +48,15 @@ impl VadDetector {
     
     fn detect_speech(&self, samples: &[f32]) -> bool {
         let rms = calculate_rms(samples);
+        if rms <= 0.0 || rms.is_nan() {
+            return false;
+        }
         let db = 20.0 * rms.log10();
         db > self.energy_threshold_db
+    }
+    
+    pub fn is_speaking(&self) -> bool {
+        self.is_speaking
     }
 }
 

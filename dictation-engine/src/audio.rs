@@ -40,20 +40,40 @@ impl AudioCapture {
 
         info!("Using input device: {}", device.name()?);
 
-        let config = StreamConfig {
-            channels: 1,
-            sample_rate: cpal::SampleRate(self.sample_rate),
-            buffer_size: cpal::BufferSize::Default,
-        };
+        // Get the device's supported config
+        let mut supported_configs = device.supported_input_configs()?;
+        let supported_config = supported_configs
+            .next()
+            .context("No supported input config")?
+            .with_max_sample_rate();
+
+        info!("Device sample rate: {}Hz", supported_config.sample_rate().0);
+
+        let config: StreamConfig = supported_config.into();
+        let device_sample_rate = config.sample_rate.0;
 
         let buffer = Arc::clone(&self.buffer);
+        let target_sample_rate = self.sample_rate;
 
         let stream = device.build_input_stream(
             &config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 let mut buf = buffer.lock().unwrap();
-                for &sample in data {
-                    let _ = buf.push_overwrite(sample);
+                
+                // Simple downsampling if needed
+                if device_sample_rate == target_sample_rate {
+                    // No resampling needed
+                    for &sample in data {
+                        let _ = buf.push_overwrite(sample);
+                    }
+                } else {
+                    // Downsample by skipping samples
+                    let ratio = device_sample_rate as f32 / target_sample_rate as f32;
+                    let mut sample_index = 0.0;
+                    while (sample_index as usize) < data.len() {
+                        let _ = buf.push_overwrite(data[sample_index as usize]);
+                        sample_index += ratio;
+                    }
                 }
             },
             |err| {
