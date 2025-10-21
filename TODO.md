@@ -2,23 +2,23 @@
 
 ## Phase 0: Setup & Dependencies
 
-- [ ] Verify whisper.cpp installation
-  - [ ] Clone repo to `~/repos/whisper.cpp`
-  - [ ] Build binary: `make`
-  - [ ] Download base.en model
-  - [ ] Symlink to `~/.local/bin/whisper`
-  - [ ] Test: `whisper --help`
+- [x] Verify whisper.cpp installation
+  - [x] Clone repo to `~/repos/whisper.cpp`
+  - [x] Build binary: `make`
+  - [x] Download base.en model
+  - [x] Symlink to `~/.local/bin/whisper-cpp`
+  - [x] Test: `whisper-cpp --help`
 
-- [ ] Verify system dependencies
-  - [ ] Check wtype: `which wtype`
-  - [ ] Check PulseAudio/PipeWire: `pactl list sources`
-  - [ ] Check Wayland compositor: `echo $WAYLAND_DISPLAY`
+- [x] Verify system dependencies
+  - [x] Check wtype: `which wtype` (/usr/bin/wtype)
+  - [x] Check PulseAudio/PipeWire: (using PipeWire)
+  - [x] Check Wayland compositor: Hyprland
 
-- [ ] Setup Rust workspace
+- [x] Setup Rust workspace
   - [x] Create workspace `Cargo.toml`
-  - [ ] Create `dictation-engine/` subdirectory
-  - [ ] Create `dictation-gui/` subdirectory
-  - [ ] Create `scripts/` subdirectory
+  - [x] Create `dictation-engine/` subdirectory
+  - [x] Create `dictation-gui/` subdirectory
+  - [x] Create `scripts/` subdirectory
 
 ## Phase 1: dictation-engine Core
 
