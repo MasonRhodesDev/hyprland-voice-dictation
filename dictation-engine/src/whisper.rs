@@ -31,7 +31,7 @@ impl WhisperTranscriber {
             binary_path,
             model_path,
             language,
-            threads: 4,
+            threads: 6,
         })
     }
 
@@ -59,8 +59,12 @@ impl WhisperTranscriber {
                     .arg(threads.to_string())
                     .arg("-l")
                     .arg(&language)
-                    .arg("-nt")
-                    .arg("-np")
+                    .arg("-nt") // no timestamps
+                    .arg("-np") // no progress
+                    .arg("-bs") // beam size
+                    .arg("1")   // beam size 1 for speed
+                    .arg("-bo") // best of
+                    .arg("1")   // best of 1 for speed
                     .output()
             }
         })
