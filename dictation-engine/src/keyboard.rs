@@ -1,8 +1,8 @@
 // Keyboard text injection via wtype
 
 use anyhow::Result;
-use std::process::Command;
 use tokio::time::{sleep, Duration};
+use tracing::debug;
 
 pub struct KeyboardInjector {
     typing_delay_ms: u64,
@@ -18,6 +18,7 @@ impl KeyboardInjector {
     }
     
     pub async fn type_text(&self, text: &str) -> Result<()> {
+        debug!("Typing text: {}", text);
         let words: Vec<&str> = text.split_whitespace().collect();
         
         for (i, word) in words.iter().enumerate() {
@@ -30,17 +31,20 @@ impl KeyboardInjector {
             }
         }
         
+        debug!("Finished typing {} words", words.len());
         Ok(())
     }
     
     async fn type_word(&self, word: &str) -> Result<()> {
         // Use wtype to inject text
-        let output = Command::new("wtype")
+        let output = tokio::process::Command::new("wtype")
             .arg(word)
-            .output()?;
+            .output()
+            .await?;
         
         if !output.status.success() {
-            anyhow::bail!("wtype failed: {:?}", output.stderr);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("wtype failed for '{}': {}", word, stderr);
         }
         
         sleep(Duration::from_millis(self.typing_delay_ms)).await;

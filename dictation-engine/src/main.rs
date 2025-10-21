@@ -46,8 +46,23 @@ async fn main() -> Result<()> {
 
     info!("Listening for speech...");
 
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+
     loop {
-        sleep(Duration::from_millis(VAD_FRAME_DURATION_MS)).await;
+        tokio::select! {
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM, shutting down...");
+                break;
+            }
+            _ = sigint.recv() => {
+                info!("Received SIGINT, shutting down...");
+                break;
+            }
+            _ = sleep(Duration::from_millis(VAD_FRAME_DURATION_MS)) => {
+                // Continue with VAD processing
+            }
+        }
 
         let samples = audio.get_latest_samples(vad_frame_samples);
         if samples.len() < vad_frame_samples {
@@ -110,4 +125,8 @@ async fn main() -> Result<()> {
             VadEvent::None => {}
         }
     }
+
+    info!("Shutting down dictation-engine");
+    audio.stop()?;
+    Ok(())
 }
