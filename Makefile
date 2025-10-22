@@ -1,4 +1,4 @@
-.PHONY: help check deps build install test clean dev fmt lint
+.PHONY: help check deps build install test test-manual clean dev fmt lint
 
 help:  ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -17,6 +17,9 @@ release:  ## Build release binaries
 
 install: release  ## Build and install to ~/.local/bin
 	./install.sh
+
+test:  ## Run automated tests
+	cargo test
 
 test-manual:  ## Run manual test with mic
 	./test_manual.sh
@@ -39,7 +42,9 @@ clean:  ## Clean build artifacts and temp files
 uninstall:  ## Uninstall system
 	./uninstall.sh
 
-rpm:  ## Build RPM package
+rpm:  ## Build RPM package (requires rpm-build, takes 5-10 minutes)
+	@command -v rpmbuild >/dev/null 2>&1 || { echo "Error: rpmbuild not found. Install with: sudo dnf install rpm-build"; exit 1; }
+	@echo "Note: This will take 5-10 minutes as it compiles the entire project..."
 	./packaging/rpm/build-rpm.sh
 
 status:  ## Check if dictation is running

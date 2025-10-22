@@ -18,11 +18,12 @@ use wayland_client::{
     Connection, Dispatch, QueueHandle,
 };
 
-const WIDTH: u32 = 200;
-const HEIGHT: u32 = 50;
+const WIDTH: u32 = 400;
+const HEIGHT: u32 = 150;
 
 pub struct WaylandContext {
     pub wl_surface: wl_surface::WlSurface,
+    pub layer_surface: LayerSurface,
 }
 
 pub struct AppState {
@@ -68,7 +69,7 @@ impl AppState {
         let layer_surface = self.layer_shell.create_layer_surface(
             qh,
             wl_surface.clone(),
-            Layer::Overlay,
+            Layer::Top,
             Some("voice-dictation"),
             None,
         );
@@ -83,6 +84,7 @@ impl AppState {
 
         self.context = Some(WaylandContext {
             wl_surface,
+            layer_surface,
         });
     }
 }
@@ -159,7 +161,6 @@ impl LayerShellHandler for AppState {
         _configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-
         if let Some(context) = &self.context {
             context.wl_surface.commit();
         }

@@ -31,3 +31,11 @@ rustfft = "6"
 toml = "0.8"
 shellexpand = "3"
 dirs = "5"
+
+[lib]
+name = "dictation_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gui-test"
+path = "src/bin/gui-test.rs"

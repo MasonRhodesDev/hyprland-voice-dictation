@@ -27,7 +27,16 @@ audio spectrum and transcription.
 %setup -q
 
 %build
-cargo build --release
+# Configure cargo for non-interactive builds
+export CARGO_NET_OFFLINE=false
+export CARGO_TERM_COLOR=never
+export CARGO_HTTP_TIMEOUT=300
+export RUST_BACKTRACE=1
+
+# Build with parallel jobs
+echo "Starting cargo build (this may take 5-10 minutes)..."
+cargo build --release --jobs=%{_smp_build_ncpus}
+echo "Cargo build completed successfully"
 
 %install
 # Install binaries
@@ -40,10 +49,17 @@ mkdir -p %{buildroot}%{_datadir}/%{name}/scripts
 install -m 755 scripts/dictation-control %{buildroot}%{_datadir}/%{name}/scripts/
 install -m 755 scripts/send_confirm.py %{buildroot}%{_datadir}/%{name}/scripts/
 
-# Install models
+# Install models (if they exist)
 mkdir -p %{buildroot}%{_datadir}/%{name}/models
-cp -r models/vosk-model-small-en-us-0.15 %{buildroot}%{_datadir}/%{name}/models/
-cp -r models/vosk-model-en-us-0.22 %{buildroot}%{_datadir}/%{name}/models/
+if [ -d "models/vosk-model-small-en-us-0.15" ]; then
+    cp -r models/vosk-model-small-en-us-0.15 %{buildroot}%{_datadir}/%{name}/models/
+fi
+if [ -d "models/vosk-model-en-us-0.22" ]; then
+    cp -r models/vosk-model-en-us-0.22 %{buildroot}%{_datadir}/%{name}/models/
+fi
+if [ -d "models/vosk-model-en-us-daanzu-20200905-lgraph" ]; then
+    cp -r models/vosk-model-en-us-daanzu-20200905-lgraph %{buildroot}%{_datadir}/%{name}/models/
+fi
 
 # Install documentation
 mkdir -p %{buildroot}%{_docdir}/%{name}
@@ -67,8 +83,7 @@ echo "  bind=\$Meh, V, exec, ~/scripts/dictation-control toggle"
 %{_bindir}/dictation-gui
 %{_datadir}/%{name}/scripts/dictation-control
 %{_datadir}/%{name}/scripts/send_confirm.py
-%{_datadir}/%{name}/models/vosk-model-small-en-us-0.15/*
-%{_datadir}/%{name}/models/vosk-model-en-us-0.22/*
+%{_datadir}/%{name}/models/
 
 %changelog
 * Mon Oct 21 2024 Mason <you@email.com> - 0.1.0-1

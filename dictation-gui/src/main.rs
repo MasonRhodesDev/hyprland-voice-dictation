@@ -36,8 +36,10 @@ async fn main() -> Result<()> {
     let is_finalizing_clone = is_finalizing.clone();
 
     thread::spawn(move || {
-        if let Err(e) = run_wayland_window(band_values_clone, transcription_text_clone, is_finalizing_clone) {
-            error!("Wayland thread error: {}", e);
+        info!("Wayland thread starting...");
+        match run_wayland_window(band_values_clone, transcription_text_clone, is_finalizing_clone) {
+            Ok(_) => info!("Wayland thread exited normally"),
+            Err(e) => error!("Wayland thread error: {}", e),
         }
     });
 
@@ -124,18 +126,45 @@ fn run_wayland_window(band_values: Arc<Mutex<Vec<f32>>>, transcription_text: Arc
     use std::os::fd::AsFd;
     use wayland_client::protocol::{wl_shm};
 
+    info!("Creating Wayland connection...");
     let (mut app_state, conn, _qh) = wayland::AppState::new()?;
+    info!("Wayland connection established");
     
     let mut event_queue = conn.new_event_queue::<wayland::AppState>();
     let qh2 = event_queue.handle();
     
+    info!("Creating layer surface...");
     app_state.create_layer_surface(&qh2);
     
-    // Process initial events to get configure
+    info!("Processing Wayland events and waiting for configure...");
+    
+    // Do a blocking roundtrip to ensure the compositor processes our surface
     conn.roundtrip()?;
-    event_queue.blocking_dispatch(&mut app_state)?;
-
-    event_queue.blocking_dispatch(&mut app_state)?;
+    info!("Roundtrip complete");
+    
+    // Now wait for the configure event with blocking dispatch
+    let start = std::time::Instant::now();
+    while !app_state.configured && start.elapsed() < std::time::Duration::from_secs(5) {
+        match event_queue.blocking_dispatch(&mut app_state) {
+            Ok(_) => {
+                conn.flush()?;
+                if app_state.configured {
+                    info!("Wayland surface configured by compositor!");
+                    break;
+                }
+            }
+            Err(e) => {
+                error!("Dispatch error: {:?}", e);
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    
+    if !app_state.configured {
+        error!("Wayland configure timeout after 5 seconds - compositor not responding");
+        return Err(anyhow::anyhow!("Configure timeout - compositor not responding"));
+    }
     
     let mut shm: Option<wl_shm::WlShm> = None;
     for global in app_state.registry_state.globals() {
@@ -176,14 +205,12 @@ fn run_wayland_window(band_values: Arc<Mutex<Vec<f32>>>, transcription_text: Arc
 
     let mut frame = 0;
     loop {
-        event_queue.blocking_dispatch(&mut app_state)?;
-
-        if !app_state.configured {
-            continue;
-        }
+        // Non-blocking dispatch to process Wayland events
+        let _ = event_queue.dispatch_pending(&mut app_state);
+        conn.flush()?;
 
         if let Some(context) = &app_state.context {
-            let finalizing = is_finalizing.lock().unwrap().clone();
+            let finalizing = *is_finalizing.lock().unwrap();
             let values = if finalizing {
                 vec![0.0; 8] // Hide spectrum when finalizing
             } else {

@@ -224,3 +224,120 @@ impl SpectrumRenderer {
         pb.finish().unwrap()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_colors_default() {
+        let colors = Colors::default();
+        assert_eq!(colors.background.red(), 0.0);
+        assert_eq!(colors.background.green(), 0.0);
+        assert_eq!(colors.background.blue(), 0.0);
+        assert!((colors.background.alpha() * 255.0 - 230.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_parse_color_value_valid() {
+        let line = "@define-color primary #FF5733;";
+        let color = SpectrumRenderer::parse_color_value(line);
+        assert!(color.is_some());
+        if let Some(c) = color {
+            assert!((c.red() - 1.0).abs() < 0.01);
+            assert!((c.green() - 87.0 / 255.0).abs() < 0.01);
+            assert!((c.blue() - 51.0 / 255.0).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn test_parse_color_value_invalid() {
+        let line = "@define-color primary #ZZ5733;";
+        let color = SpectrumRenderer::parse_color_value(line);
+        assert!(color.is_none());
+    }
+
+    #[test]
+    fn test_parse_color_value_short() {
+        let line = "@define-color primary #FFF;";
+        let color = SpectrumRenderer::parse_color_value(line);
+        assert!(color.is_none());
+    }
+
+    #[test]
+    fn test_renderer_new() {
+        let result = SpectrumRenderer::new(400, 150);
+        assert!(result.is_ok());
+        
+        if let Ok(renderer) = result {
+            assert_eq!(renderer.width, 400);
+            assert_eq!(renderer.height, 150);
+        }
+    }
+
+    #[test]
+    fn test_renderer_render_empty() {
+        let mut renderer = SpectrumRenderer::new(400, 150).unwrap();
+        let bands = vec![0.0f32; 8];
+        let pixels = renderer.render(&bands, "");
+        
+        assert_eq!(pixels.len(), (400 * 150 * 4) as usize);
+    }
+
+    #[test]
+    fn test_renderer_render_with_bands() {
+        let mut renderer = SpectrumRenderer::new(400, 150).unwrap();
+        let bands = vec![0.5f32; 8];
+        let pixels = renderer.render(&bands, "");
+        
+        assert_eq!(pixels.len(), (400 * 150 * 4) as usize);
+    }
+
+    #[test]
+    fn test_renderer_render_with_text() {
+        let mut renderer = SpectrumRenderer::new(400, 150).unwrap();
+        let bands = vec![0.0f32; 8];
+        let pixels = renderer.render(&bands, "Hello World");
+        
+        assert_eq!(pixels.len(), (400 * 150 * 4) as usize);
+    }
+
+    #[test]
+    fn test_create_rounded_rect() {
+        let path = SpectrumRenderer::create_rounded_rect(0.0, 0.0, 100.0, 50.0, 10.0);
+        let bounds = path.bounds();
+        assert!(bounds.width() > 0.0);
+    }
+
+    #[test]
+    fn test_create_rounded_rect_zero_radius() {
+        let path = SpectrumRenderer::create_rounded_rect(0.0, 0.0, 100.0, 50.0, 0.0);
+        let bounds = path.bounds();
+        assert!(bounds.width() > 0.0);
+    }
+
+    #[test]
+    fn test_create_rounded_rect_large_radius() {
+        let path = SpectrumRenderer::create_rounded_rect(0.0, 0.0, 100.0, 50.0, 100.0);
+        let bounds = path.bounds();
+        assert!(bounds.width() > 0.0);
+    }
+
+    #[test]
+    fn test_parse_colors_empty() {
+        let css = "";
+        let colors = SpectrumRenderer::parse_colors(css);
+        assert!((colors.background.alpha() * 255.0 - 230.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_parse_colors_valid() {
+        let css = r#"
+            @define-color surface #1e1e1e;
+            @define-color primary #ff6b35;
+        "#;
+        let colors = SpectrumRenderer::parse_colors(css);
+        assert!((colors.background.red() - 30.0 / 255.0).abs() < 0.01);
+        assert!((colors.bar.red() - 1.0).abs() < 0.01);
+    }
+}

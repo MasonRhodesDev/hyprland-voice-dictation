@@ -68,9 +68,13 @@ fi
 
 # Build RPM
 echo ""
-echo "5. Building RPM..."
+echo "5. Building RPM (this may take several minutes)..."
 cd ~/rpmbuild/SPECS
-rpmbuild -ba voice-dictation.spec
+rpmbuild -ba voice-dictation.spec 2>&1 | tee /tmp/rpm-build.log || {
+    echo ""
+    echo "✗ RPM build failed. Check /tmp/rpm-build.log for details"
+    exit 1
+}
 
 echo ""
 echo "✓ RPM build complete!"

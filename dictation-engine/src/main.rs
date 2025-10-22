@@ -25,8 +25,7 @@ struct VoskEngine {
     audio_buffer: Arc<Mutex<Vec<i16>>>, // Store all audio for correction pass
 }
 
-fn remove_duplicate_suffix(accumulated: &str, new_chunk: &str) -> String {
-    // Check if the new chunk starts with the end of accumulated text (overlap)
+pub fn remove_duplicate_suffix(accumulated: &str, new_chunk: &str) -> String {
     let acc_words: Vec<&str> = accumulated.split_whitespace().collect();
     let new_words: Vec<&str> = new_chunk.split_whitespace().collect();
     
@@ -34,13 +33,11 @@ fn remove_duplicate_suffix(accumulated: &str, new_chunk: &str) -> String {
         return new_chunk.to_string();
     }
     
-    // Look for overlapping sequences (check last N words of accumulated against first N words of new)
     for overlap_len in (1..=acc_words.len().min(new_words.len())).rev() {
         let acc_suffix = &acc_words[acc_words.len() - overlap_len..];
         let new_prefix = &new_words[..overlap_len];
         
         if acc_suffix == new_prefix {
-            // Found overlap - return only the non-overlapping part
             return new_words[overlap_len..].join(" ");
         }
     }
@@ -314,15 +311,10 @@ async fn main() -> Result<()> {
         let mut server = control_server_shared.lock().await;
         server.try_accept().await;
         
-        if let Some(msg) = server.receive_from_any().await {
-            match msg {
-                ControlMessage::Confirm => {
-                    info!("Received Confirm command");
-                    drop(server);
-                    break;
-                }
-                _ => {}
-            }
+        if let Some(ControlMessage::Confirm) = server.receive_from_any().await {
+            info!("Received Confirm command");
+            drop(server);
+            break;
         }
         drop(server);
         
@@ -361,4 +353,69 @@ async fn main() -> Result<()> {
     }
     
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_duplicate_suffix_no_overlap() {
+        let result = remove_duplicate_suffix("hello world", "foo bar");
+        assert_eq!(result, "foo bar");
+    }
+
+    #[test]
+    fn test_remove_duplicate_suffix_full_overlap() {
+        let result = remove_duplicate_suffix("hello world", "hello world");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_remove_duplicate_suffix_partial_overlap() {
+        let result = remove_duplicate_suffix("hello world", "world this is new");
+        assert_eq!(result, "this is new");
+    }
+
+    #[test]
+    fn test_remove_duplicate_suffix_multi_word_overlap() {
+        let result = remove_duplicate_suffix("the quick brown", "quick brown fox");
+        assert_eq!(result, "fox");
+    }
+
+    #[test]
+    fn test_remove_duplicate_suffix_empty_accumulated() {
+        let result = remove_duplicate_suffix("", "hello world");
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_remove_duplicate_suffix_empty_new() {
+        let result = remove_duplicate_suffix("hello world", "");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_remove_duplicate_suffix_both_empty() {
+        let result = remove_duplicate_suffix("", "");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_remove_duplicate_suffix_single_word_overlap() {
+        let result = remove_duplicate_suffix("test", "test again");
+        assert_eq!(result, "again");
+    }
+
+    #[test]
+    fn test_remove_duplicate_suffix_no_match_similar() {
+        let result = remove_duplicate_suffix("hello world", "hello universe");
+        assert_eq!(result, "hello universe");
+    }
+
+    #[test]
+    fn test_remove_duplicate_suffix_longer_overlap() {
+        let result = remove_duplicate_suffix("one two three four", "two three four five six");
+        assert_eq!(result, "five six");
+    }
 }

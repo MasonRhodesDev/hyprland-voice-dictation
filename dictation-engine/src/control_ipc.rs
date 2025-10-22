@@ -117,4 +117,76 @@ impl ControlServer {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_control_message_ready_serialize() {
+        let msg = ControlMessage::Ready;
+        let json = serde_json::to_string(&msg);
+        assert!(json.is_ok());
+    }
+
+    #[test]
+    fn test_control_message_confirm_serialize() {
+        let msg = ControlMessage::Confirm;
+        let json = serde_json::to_string(&msg);
+        assert!(json.is_ok());
+    }
+
+    #[test]
+    fn test_control_message_transcription_serialize() {
+        let msg = ControlMessage::TranscriptionUpdate {
+            text: "test text".to_string(),
+            is_final: true,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("test text"));
+    }
+
+    #[test]
+    fn test_control_message_roundtrip() {
+        let original = ControlMessage::TranscriptionUpdate {
+            text: "hello world".to_string(),
+            is_final: false,
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: ControlMessage = serde_json::from_str(&json).unwrap();
+        
+        match parsed {
+            ControlMessage::TranscriptionUpdate { text, is_final } => {
+                assert_eq!(text, "hello world");
+                assert!(!is_final);
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_control_server_new() {
+        let socket_path = "/tmp/test_control_server_12345.sock";
+        let _ = std::fs::remove_file(socket_path);
+        
+        let result = ControlServer::new(socket_path).await;
+        assert!(result.is_ok());
+        
+        if let Ok(_server) = result {
+            let _ = std::fs::remove_file(socket_path);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_control_server_broadcast_no_clients() {
+        let socket_path = "/tmp/test_control_broadcast_12345.sock";
+        let _ = std::fs::remove_file(socket_path);
+        
+        let mut server = ControlServer::new(socket_path).await.unwrap();
+        let result = server.broadcast(&ControlMessage::Ready).await;
+        assert!(result.is_ok());
+        
+        let _ = std::fs::remove_file(socket_path);
+    }
+}
+
 

@@ -19,3 +19,7 @@ vosk = "0.3.1"
 
 # Audio capture
 cpal = "0.15"
+
+[lib]
+name = "dictation_engine"
+path = "src/lib.rs"

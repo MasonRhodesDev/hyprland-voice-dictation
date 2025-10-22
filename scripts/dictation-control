@@ -1,6 +1,7 @@
 #!/bin/bash
 
 STATE_FILE="/tmp/voice-dictation-state"
+MEDIA_STATE_FILE="/tmp/voice-dictation-media-state"
 ENGINE_BIN="$HOME/.local/bin/dictation-engine"
 GUI_BIN="$HOME/.local/bin/dictation-gui"
 CONTROL_SOCKET="/tmp/voice-dictation-control.sock"
@@ -29,11 +30,20 @@ case "$1" in
             exit 0
         fi
         
+        # Check if media is playing and save state
+        if playerctl status 2>/dev/null | grep -q "Playing"; then
+            echo "playing" > "$MEDIA_STATE_FILE"
+        else
+            echo "stopped" > "$MEDIA_STATE_FILE"
+        fi
+        
         # Change to repo directory so models can be found
         cd ~/repos/voice-dictation-rust
         RUST_LOG=info $ENGINE_BIN > /tmp/dictation-engine.log 2>&1 &
         sleep 0.3
-        $GUI_BIN > /tmp/dictation-gui.log 2>&1 &
+        $GUI_BIN > /tmp/dictation-gui.log 2>&1 < /dev/null &
+        
+        playerctl pause 2>/dev/null || true
         
         set_state "recording"
         echo "Voice dictation started - recording"
@@ -48,6 +58,12 @@ case "$1" in
         
         pkill -TERM -f dictation-engine
         pkill -TERM -f dictation-gui
+        
+        # Resume media if it was playing before
+        if [ -f "$MEDIA_STATE_FILE" ] && grep -q "playing" "$MEDIA_STATE_FILE"; then
+            playerctl play 2>/dev/null || true
+        fi
+        rm -f "$MEDIA_STATE_FILE"
         
         set_state "stopped"
         rm -f "$CONTROL_SOCKET"
@@ -75,6 +91,12 @@ case "$1" in
         
         # Now kill GUI
         pkill -TERM -f dictation-gui 2>/dev/null
+        
+        # Resume media if it was playing before
+        if [ -f "$MEDIA_STATE_FILE" ] && grep -q "playing" "$MEDIA_STATE_FILE"; then
+            playerctl play 2>/dev/null || true
+        fi
+        rm -f "$MEDIA_STATE_FILE"
         
         set_state "stopped"
         rm -f "$CONTROL_SOCKET"

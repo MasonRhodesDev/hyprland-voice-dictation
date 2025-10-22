@@ -12,8 +12,8 @@ pub enum ControlMessage {
 }
 
 pub struct ControlClient {
-    stream: Option<UnixStream>,
-    socket_path: String,
+    pub stream: Option<UnixStream>,
+    pub socket_path: String,
 }
 
 impl ControlClient {
@@ -57,9 +57,60 @@ impl ControlClient {
     }
 
     #[allow(dead_code)]
-    pub async fn reconnect(&mut self) -> Result<()> {
+    pub async fn _reconnect(&mut self) -> Result<()> {
         self.stream = None;
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         self.connect().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_control_message_serialize() {
+        let msg = ControlMessage::Ready;
+        let serialized = serde_json::to_string(&msg);
+        assert!(serialized.is_ok());
+    }
+
+    #[test]
+    fn test_control_message_deserialize() {
+        let json = r#"{"Ready":null}"#;
+        let msg: Result<ControlMessage, _> = serde_json::from_str(json);
+        assert!(msg.is_ok());
+    }
+
+    #[test]
+    fn test_control_message_transcription_update() {
+        let msg = ControlMessage::TranscriptionUpdate {
+            text: "hello".to_string(),
+            is_final: false,
+        };
+        let serialized = serde_json::to_string(&msg).unwrap();
+        let deserialized: ControlMessage = serde_json::from_str(&serialized).unwrap();
+        
+        match deserialized {
+            ControlMessage::TranscriptionUpdate { text, is_final } => {
+                assert_eq!(text, "hello");
+                assert!(!is_final);
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_control_client_new() {
+        let client = ControlClient::new("/tmp/test_control.sock".to_string());
+        assert!(client.stream.is_none());
+        assert_eq!(client.socket_path, "/tmp/test_control.sock");
+    }
+
+    #[tokio::test]
+    async fn test_control_client_connect_nonexistent() {
+        let mut client = ControlClient::new("/tmp/nonexistent_control_12345.sock".to_string());
+        let result = client.connect().await;
+        assert!(result.is_err());
     }
 }

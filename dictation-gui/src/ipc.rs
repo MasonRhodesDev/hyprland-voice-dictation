@@ -7,8 +7,8 @@ const SAMPLES_PER_MESSAGE: usize = 512;
 const BYTES_PER_MESSAGE: usize = SAMPLES_PER_MESSAGE * 4;
 
 pub struct IpcClient {
-    socket_path: String,
-    stream: Option<UnixStream>,
+    pub socket_path: String,
+    pub stream: Option<UnixStream>,
 }
 
 impl IpcClient {
@@ -53,5 +53,28 @@ impl IpcClient {
         warn!("Attempting to reconnect to IPC socket");
         self.stream = None;
         self.connect().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ipc_client_new() {
+        let client = IpcClient::new("/tmp/test.sock".to_string());
+        assert!(client.stream.is_none());
+    }
+
+    #[test]
+    fn test_bytes_per_message_constant() {
+        assert_eq!(BYTES_PER_MESSAGE, SAMPLES_PER_MESSAGE * 4);
+    }
+
+    #[tokio::test]
+    async fn test_ipc_client_connect_nonexistent() {
+        let mut client = IpcClient::new("/tmp/nonexistent_socket_12345.sock".to_string());
+        let result = client.connect().await;
+        assert!(result.is_err());
     }
 }

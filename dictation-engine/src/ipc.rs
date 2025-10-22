@@ -8,15 +8,17 @@ use tracing::{debug, error, info};
 
 const SAMPLES_PER_MESSAGE: usize = 512;
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum EngineMessage {
     TranscriptionUpdate { text: String, is_final: bool },
     Ready,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GuiCommand {
-    Confirm, // User pressed MEH+v to confirm and type
+    Confirm,
 }
 
 pub struct IpcServer {
@@ -101,5 +103,35 @@ impl IpcServer {
 impl Drop for IpcServer {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ipc_server_new() {
+        let server = IpcServer::new("/tmp/test_audio.sock".to_string());
+        assert_eq!(server.socket_path, "/tmp/test_audio.sock");
+    }
+
+    #[test]
+    fn test_samples_per_message_constant() {
+        assert_eq!(SAMPLES_PER_MESSAGE, 512);
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_samples_wrong_size() {
+        let server = Arc::new(IpcServer::new("/tmp/test_ipc.sock".to_string()));
+        let samples = vec![0.0f32; 256];
+        server.broadcast_samples(&samples).await;
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_samples_correct_size() {
+        let server = Arc::new(IpcServer::new("/tmp/test_ipc2.sock".to_string()));
+        let samples = vec![0.0f32; 512];
+        server.broadcast_samples(&samples).await;
     }
 }
