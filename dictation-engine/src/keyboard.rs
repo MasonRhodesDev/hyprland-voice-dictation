@@ -1,53 +1,51 @@
 // Keyboard text injection via wtype
 
 use anyhow::Result;
-use tokio::time::{sleep, Duration};
 use tracing::debug;
 
-pub struct KeyboardInjector {
-    typing_delay_ms: u64,
-    word_delay_ms: u64,
-}
+pub struct KeyboardInjector {}
 
 impl KeyboardInjector {
-    pub fn new(typing_delay_ms: u64, word_delay_ms: u64) -> Self {
-        Self {
-            typing_delay_ms,
-            word_delay_ms,
-        }
+    pub fn new(_typing_delay_ms: u64, _word_delay_ms: u64) -> Self {
+        Self {}
     }
     
     pub async fn type_text(&self, text: &str) -> Result<()> {
         debug!("Typing text: {}", text);
-        let words: Vec<&str> = text.split_whitespace().collect();
         
-        for (i, word) in words.iter().enumerate() {
-            self.type_word(word).await?;
-            
-            // Add space between words (except last word)
-            if i < words.len() - 1 {
-                self.type_word(" ").await?;
-                sleep(Duration::from_millis(self.word_delay_ms)).await;
-            }
-        }
-        
-        debug!("Finished typing {} words", words.len());
-        Ok(())
-    }
-    
-    async fn type_word(&self, word: &str) -> Result<()> {
-        // Use wtype to inject text
+        // Use wtype to type the text directly (preserves exact spacing)
         let output = tokio::process::Command::new("wtype")
-            .arg(word)
+            .arg(text)
             .output()
             .await?;
         
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("wtype failed for '{}': {}", word, stderr);
+            anyhow::bail!("wtype failed: {}", stderr);
         }
         
-        sleep(Duration::from_millis(self.typing_delay_ms)).await;
         Ok(())
     }
+    
+    pub async fn _delete_chars(&self, count: usize) -> Result<()> {
+        debug!("Deleting {} chars", count);
+        
+        // Use wtype to send backspace key presses
+        let output = tokio::process::Command::new("wtype")
+            .arg("-k")
+            .arg("BackSpace")
+            .arg("-P")
+            .arg(count.to_string())
+            .output()
+            .await?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("wtype backspace failed: {}", stderr);
+        }
+        
+        Ok(())
+    }
+    
+
 }

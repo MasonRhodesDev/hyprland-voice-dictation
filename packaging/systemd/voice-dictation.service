@@ -1,0 +1,15 @@
+[Unit]
+Description=Voice Dictation Engine
+After=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/dictation-engine
+ExecStop=/usr/bin/pkill -TERM dictation-engine
+Restart=no
+Environment="RUST_LOG=info"
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

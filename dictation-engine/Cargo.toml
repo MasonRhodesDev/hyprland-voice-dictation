@@ -11,17 +11,11 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# Path expansion
+shellexpand = "3"
+
+# Vosk speech recognition
+vosk = "0.3.1"
+
 # Audio capture
 cpal = "0.15"
-hound = "3"
-
-# Configuration
-toml = "0.8"
-shellexpand = "3"
-dirs = "5"
-
-# Ring buffer for audio
-ringbuf = "0.4"
-
-# Temporary files
-tempfile = "3"

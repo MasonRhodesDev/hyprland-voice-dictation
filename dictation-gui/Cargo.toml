@@ -8,16 +8,21 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Wayland layer-shell
 smithay-client-toolkit = "0.18"
 wayland-client = "0.31"
+wayland-protocols-wlr = "0.2"
 
-# Rendering (choose one)
-# Option 1: GPU rendering
-wgpu = "0.20"
-# Option 2: CPU rendering (lighter)
-# tiny-skia = "0.11"
+# Rendering
+tiny-skia = "0.11"
+fontdue = "0.9"
+
+# Shared memory
+memmap2 = "0.9"
+tempfile = "3"
 
 # FFT
 rustfft = "6"
