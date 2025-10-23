@@ -1,0 +1,290 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to release from'
+        required: true
+        default: 'main'
+
+permissions:
+  contents: write
+
+jobs:
+  build-packages:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            package: deb
+          - os: ubuntu-22.04
+            package: rpm
+    
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+          fetch-depth: 0
+      
+      - name: Generate version
+        id: version
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          VERSION="0.1.0-${SHORT_SHA}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "Generated version: ${VERSION}"
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            pkg-config
+      
+      - name: Install RPM build tools
+        if: matrix.package == 'rpm'
+        run: sudo apt-get install -y rpm
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-${{ matrix.package }}-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build release binaries
+        run: cargo build --release --verbose
+      
+      - name: Build DEB package
+        if: matrix.package == 'deb'
+        continue-on-error: true
+        run: |
+          make deb VERSION=${{ steps.version.outputs.version }} || {
+            echo "::warning::DEB build failed, continuing with other packages"
+            exit 0
+          }
+      
+      - name: Build RPM package
+        if: matrix.package == 'rpm'
+        continue-on-error: true
+        run: |
+          VERSION=${{ steps.version.outputs.version }} make rpm || {
+            echo "::warning::RPM build failed, continuing with other packages"
+            exit 0
+          }
+      
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: ${{ matrix.package }}-package
+          path: |
+            *.deb
+            *.rpm
+          retention-days: 1
+        if: always()
+
+  create-release:
+    needs: build-packages
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+          fetch-depth: 0
+      
+      - name: Generate version
+        id: version
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          VERSION="0.1.0-${SHORT_SHA}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "Generated version: ${VERSION}"
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            pkg-config
+      
+      - name: Build release binaries
+        run: cargo build --release --verbose
+      
+      - name: Download DEB artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: deb-package
+          path: packages/
+      
+      - name: Download RPM artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: rpm-package
+          path: packages/
+      
+      - name: Create source tarball
+        run: |
+          mkdir -p release-pkg/voice-dictation-${{ steps.version.outputs.version }}/{bin,scripts}
+          
+          cp target/release/dictation-engine release-pkg/voice-dictation-${{ steps.version.outputs.version }}/bin/
+          cp target/release/dictation-gui release-pkg/voice-dictation-${{ steps.version.outputs.version }}/bin/
+          
+          cp scripts/dictation-control release-pkg/voice-dictation-${{ steps.version.outputs.version }}/scripts/
+          cp scripts/send_confirm.py release-pkg/voice-dictation-${{ steps.version.outputs.version }}/scripts/
+          cp scripts/update.sh release-pkg/voice-dictation-${{ steps.version.outputs.version }}/scripts/
+          cp install.sh release-pkg/voice-dictation-${{ steps.version.outputs.version }}/
+          cp README.md release-pkg/voice-dictation-${{ steps.version.outputs.version }}/
+          cp LICENSE-MIT release-pkg/voice-dictation-${{ steps.version.outputs.version }}/
+          cp LICENSE-APACHE release-pkg/voice-dictation-${{ steps.version.outputs.version }}/
+          
+          cd release-pkg
+          tar -czf voice-dictation-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz voice-dictation-${{ steps.version.outputs.version }}/
+          cd ..
+      
+      - name: Check which packages were built
+        id: check_packages
+        run: |
+          DEB_EXISTS="false"
+          RPM_EXISTS="false"
+          
+          if ls packages/*.deb 1> /dev/null 2>&1; then
+            DEB_EXISTS="true"
+            echo "✓ DEB package available"
+          else
+            echo "⚠ DEB package not available"
+          fi
+          
+          if ls packages/*.rpm 1> /dev/null 2>&1; then
+            RPM_EXISTS="true"
+            echo "✓ RPM package available"
+          else
+            echo "⚠ RPM package not available"
+          fi
+          
+          echo "deb_exists=${DEB_EXISTS}" >> $GITHUB_OUTPUT
+          echo "rpm_exists=${RPM_EXISTS}" >> $GITHUB_OUTPUT
+      
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          ## Voice Dictation System v${{ steps.version.outputs.version }}
+          
+          Built from branch: `${{ github.event.inputs.branch }}`
+          Commit: `${{ steps.version.outputs.short_sha }}`
+          
+          ### Installation
+          
+          #### Quick Update (Existing Users)
+          ```bash
+          curl -fsSL https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/update.sh | bash
+          ```
+          
+          EOF
+          
+          if [ "${{ steps.check_packages.outputs.deb_exists }}" = "true" ]; then
+            cat >> release_notes.md << 'EOF'
+          #### Debian/Ubuntu (.deb)
+          ```bash
+          wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/voice-dictation_${{ steps.version.outputs.version }}_amd64.deb
+          sudo dpkg -i voice-dictation_${{ steps.version.outputs.version }}_amd64.deb
+          sudo apt-get install -f
+          ```
+          
+          EOF
+          fi
+          
+          if [ "${{ steps.check_packages.outputs.rpm_exists }}" = "true" ]; then
+            cat >> release_notes.md << 'EOF'
+          #### Fedora/RHEL (.rpm)
+          ```bash
+          wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/voice-dictation-${{ steps.version.outputs.version }}-1.x86_64.rpm
+          sudo dnf install voice-dictation-${{ steps.version.outputs.version }}-1.x86_64.rpm
+          ```
+          
+          EOF
+          fi
+          
+          cat >> release_notes.md << 'EOF'
+          #### Source/Generic Linux (.tar.gz)
+          ```bash
+          wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/voice-dictation-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz
+          tar -xzf voice-dictation-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz
+          cd voice-dictation-${{ steps.version.outputs.version }}
+          ./install.sh
+          ```
+          
+          ### What's Changed
+          - Release from commit ${{ steps.version.outputs.short_sha }}
+          
+          ### Available Files
+          EOF
+          
+          if [ "${{ steps.check_packages.outputs.deb_exists }}" = "true" ]; then
+            echo "- \`voice-dictation_${{ steps.version.outputs.version }}_amd64.deb\` - Debian/Ubuntu package" >> release_notes.md
+          fi
+          
+          if [ "${{ steps.check_packages.outputs.rpm_exists }}" = "true" ]; then
+            echo "- \`voice-dictation-${{ steps.version.outputs.version }}-1.x86_64.rpm\` - Fedora/RHEL package" >> release_notes.md
+          fi
+          
+          echo "- \`voice-dictation-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz\` - Source tarball with pre-built binaries" >> release_notes.md
+          echo "- \`update.sh\` - One-command update script for existing users" >> release_notes.md
+          
+          if [ "${{ steps.check_packages.outputs.deb_exists }}" = "false" ] || [ "${{ steps.check_packages.outputs.rpm_exists }}" = "false" ]; then
+            cat >> release_notes.md << 'EOF'
+          
+          > **Note:** Some package formats failed to build during this release. The source tarball is always available.
+          EOF
+          fi
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Release v${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: false
+          files: |
+            release-pkg/voice-dictation-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz
+            scripts/update.sh
+            packages/*.deb
+            packages/*.rpm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

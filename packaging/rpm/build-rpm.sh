@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-VERSION="0.1.0"
+VERSION="${VERSION:-0.1.0}"
 NAME="voice-dictation"
 
 echo "=== Building RPM for $NAME v$VERSION ==="
@@ -14,7 +14,8 @@ mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 # Create source tarball
 echo ""
 echo "2. Creating source tarball..."
-cd /home/mason/repos/voice-dictation-rust
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/../.."
 tar --exclude='.git' \
     --exclude='target' \
     --exclude='*.log' \
@@ -23,11 +24,11 @@ tar --exclude='.git' \
     --transform "s,^,${NAME}-${VERSION}/," \
     .
 
-# Copy spec file
+# Copy and update spec file
 echo ""
-echo "3. Copying spec file..."
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cp "$SCRIPT_DIR/voice-dictation.spec" ~/rpmbuild/SPECS/
+echo "3. Copying and updating spec file..."
+sed "s/^Version:.*/Version:        $VERSION/" \
+    "$SCRIPT_DIR/voice-dictation.spec" > ~/rpmbuild/SPECS/voice-dictation.spec
 
 # Add license files if missing
 if [ ! -f LICENSE-MIT ] || [ ! -f LICENSE-APACHE ]; then
