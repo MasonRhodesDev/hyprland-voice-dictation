@@ -1,10 +1,14 @@
 use anyhow::Result;
+use crate::GuiState;
 use tiny_skia::*;
 
 const BAR_COUNT: usize = 8;
 const MIN_BAR_HEIGHT: f32 = 5.0;
 const MAX_BAR_HEIGHT: f32 = 30.0;
 const CORNER_RADIUS: f32 = 25.0;
+const CORNER_RADIUS_PROCESSING: f32 = 50.0;
+const BAR_WIDTH_FACTOR: f32 = 0.6;
+const BAR_SPACING: f32 = 8.0;
 
 #[derive(Clone, Copy)]
 struct Colors {
@@ -26,6 +30,39 @@ pub struct SpectrumRenderer {
     height: u32,
     pixmap: Pixmap,
     colors: Colors,
+}
+
+pub fn calculate_text_height(text: &str, width: u32) -> u32 {
+    if text.is_empty() {
+        return 55;
+    }
+    
+    use fontdue::Font;
+    use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle, HorizontalAlign};
+    
+    let font_data = include_bytes!("/usr/share/fonts/google-carlito-fonts/Carlito-Regular.ttf");
+    if let Ok(font) = Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()) {
+        let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+        layout.reset(&LayoutSettings {
+            x: 10.0,
+            y: 0.0,
+            max_width: Some(width as f32 - 20.0),
+            max_height: None,
+            wrap_style: fontdue::layout::WrapStyle::Word,
+            wrap_hard_breaks: true,
+            horizontal_align: HorizontalAlign::Center,
+            ..Default::default()
+        });
+        layout.append(&[&font], &TextStyle::new(text, 18.0, 0));
+        
+        let glyphs = layout.glyphs();
+        if let Some(last_glyph) = glyphs.last() {
+            let text_height = last_glyph.y as u32 + 25;
+            return 50 + text_height + 20;
+        }
+    }
+    
+    70
 }
 
 impl SpectrumRenderer {
@@ -90,9 +127,19 @@ impl SpectrumRenderer {
         }
     }
 
-    pub fn render(&mut self, band_values: &[f32], text: &str) -> &[u8] {
+    pub fn render(&mut self, band_values: &[f32], text: &str, state: GuiState, animation_time: f32) -> &[u8] {
         self.pixmap.fill(Color::TRANSPARENT);
 
+        match state {
+            GuiState::Listening => self.render_listening(band_values, text),
+            GuiState::Processing => self.render_processing(text, animation_time),
+            GuiState::Closing => self.render_closing(text, animation_time),
+        }
+
+        self.pixmap.data()
+    }
+
+    fn render_listening(&mut self, band_values: &[f32], text: &str) {
         let mut paint = Paint::default();
         paint.set_color(self.colors.background);
         paint.anti_alias = true;
@@ -114,13 +161,12 @@ impl SpectrumRenderer {
             None,
         );
 
-        // Spectrum bars (top section)
+        // Spectrum bars (top section) - narrower with more spacing
         let spectrum_height = 50.0;
-        let bar_spacing = 4.0;
-        let total_spacing = bar_spacing * (BAR_COUNT - 1) as f32;
+        let total_spacing = BAR_SPACING * (BAR_COUNT - 1) as f32;
         let available_width = self.width as f32 - 40.0;
-        let bar_width = (available_width - total_spacing) / BAR_COUNT as f32;
-        let start_x = 20.0;
+        let bar_width = ((available_width - total_spacing) / BAR_COUNT as f32) * BAR_WIDTH_FACTOR;
+        let start_x = 20.0 + (available_width - (bar_width * BAR_COUNT as f32 + total_spacing)) / 2.0;
         let center_y = spectrum_height / 2.0;
         let bar_radius = 3.0;
 
@@ -128,7 +174,7 @@ impl SpectrumRenderer {
 
         for (i, &value) in band_values.iter().take(BAR_COUNT).enumerate() {
             let bar_height = MIN_BAR_HEIGHT + value * (MAX_BAR_HEIGHT - MIN_BAR_HEIGHT);
-            let x = start_x + i as f32 * (bar_width + bar_spacing);
+            let x = start_x + i as f32 * (bar_width + BAR_SPACING);
             let y = center_y - bar_height / 2.0;
 
             let bar_path = Self::create_rounded_rect(x, y, bar_width, bar_height, bar_radius);
@@ -141,60 +187,197 @@ impl SpectrumRenderer {
                 None,
             );
         }
+        
+        // Render text below spectrum
+        self.render_text(text, 55.0);
+    }
 
-        // Text preview (bottom section)
-        if !text.is_empty() {
-            use fontdue::Font;
-            use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
+    fn render_processing(&mut self, _text: &str, animation_time: f32) {
+        let mut paint = Paint::default();
+        paint.set_color(self.colors.background);
+        paint.anti_alias = true;
+
+        // Small rounded box just for spinner
+        let dot_count = 3;
+        let dot_radius = 6.0;
+        let orbit_radius = 20.0;
+        let rotation_speed = 2.0;
+        
+        let padding = 12.0;
+        let spinner_diameter = (orbit_radius + dot_radius) * 2.0;
+        let box_size = spinner_diameter + padding * 2.0;
+        
+        let box_x = (self.width as f32 - box_size) / 2.0;
+        let box_y = (self.height as f32 - box_size) / 2.0;
+        
+        let path = Self::create_rounded_rect(
+            box_x,
+            box_y,
+            box_size,
+            box_size,
+            CORNER_RADIUS_PROCESSING,
+        );
+        
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+
+        // Spinning dots centered
+        paint.set_color(self.colors.bar);
+        
+        let center_x = self.width as f32 / 2.0;
+        let center_y = self.height as f32 / 2.0;
+        
+        for i in 0..dot_count {
+            let angle = (animation_time * rotation_speed) + (i as f32 * std::f32::consts::TAU / dot_count as f32);
+            let x = center_x + orbit_radius * angle.cos();
+            let y = center_y + orbit_radius * angle.sin();
             
-            let font_data = include_bytes!("/usr/share/fonts/google-carlito-fonts/Carlito-Regular.ttf");
-            if let Ok(font) = Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()) {
-                let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
-                layout.reset(&LayoutSettings {
-                    x: 10.0,
-                    y: 55.0,
-                    max_width: Some(self.width as f32 - 20.0),
-                    max_height: Some(90.0),
-                    wrap_style: fontdue::layout::WrapStyle::Word,
-                    wrap_hard_breaks: true,
-                    ..Default::default()
-                });
-                layout.append(&[&font], &TextStyle::new(text, 18.0, 0));
+            let mut pb = PathBuilder::new();
+            pb.move_to(x + dot_radius, y);
+            
+            let kappa = 0.5522848;
+            let kr = dot_radius * kappa;
+            
+            pb.cubic_to(x + dot_radius, y - kr, x + kr, y - dot_radius, x, y - dot_radius);
+            pb.cubic_to(x - kr, y - dot_radius, x - dot_radius, y - kr, x - dot_radius, y);
+            pb.cubic_to(x - dot_radius, y + kr, x - kr, y + dot_radius, x, y + dot_radius);
+            pb.cubic_to(x + kr, y + dot_radius, x + dot_radius, y + kr, x + dot_radius, y);
+            pb.close();
+            
+            if let Some(path) = pb.finish() {
+                self.pixmap.fill_path(
+                    &path,
+                    &paint,
+                    FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+            }
+        }
+    }
+
+    fn render_closing(&mut self, text: &str, animation_time: f32) {
+        // Fade out animation: scale down and fade opacity
+        let progress = (animation_time / 0.3).min(1.0); // 0.0 to 1.0 over 300ms
+        let scale = 1.0 - (progress * 0.2); // 1.0 -> 0.8
+        let alpha = 1.0 - progress; // 1.0 -> 0.0
+        
+        let mut paint = Paint::default();
+        let mut bg_color = self.colors.background;
+        bg_color.apply_opacity(alpha);
+        paint.set_color(bg_color);
+        paint.anti_alias = true;
+
+        // Calculate centered scaled dimensions
+        let scaled_width = self.width as f32 * scale;
+        let scaled_height = self.height as f32 * scale;
+        let offset_x = (self.width as f32 - scaled_width) / 2.0;
+        let offset_y = (self.height as f32 - scaled_height) / 2.0;
+        
+        // Rounded background
+        let path = Self::create_rounded_rect(
+            offset_x,
+            offset_y,
+            scaled_width,
+            scaled_height,
+            CORNER_RADIUS_PROCESSING * scale,
+        );
+        
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+        
+        // Fade text (just render at reduced opacity, positioning will be off but acceptable for closing)
+        if !text.is_empty() && alpha > 0.1 {
+            self.render_text(text, 75.0);
+        }
+    }
+
+    fn render_text(&mut self, text: &str, y_start: f32) {
+        if text.is_empty() {
+            return;
+        }
+        
+        use fontdue::Font;
+        use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle, HorizontalAlign};
+        
+        let font_data = include_bytes!("/usr/share/fonts/google-carlito-fonts/Carlito-Regular.ttf");
+        if let Ok(font) = Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()) {
+            let available_height = self.height as f32 - y_start - 10.0;
+            
+            // Layout with CENTER alignment built-in
+            let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+            layout.reset(&LayoutSettings {
+                x: 0.0,
+                y: 0.0,
+                max_width: Some(self.width as f32 - 40.0),
+                max_height: None,
+                wrap_style: fontdue::layout::WrapStyle::Word,
+                wrap_hard_breaks: true,
+                horizontal_align: HorizontalAlign::Center,
+                ..Default::default()
+            });
+            layout.append(&[&font], &TextStyle::new(text, 18.0, 0));
+            
+            let glyphs = layout.glyphs();
+            if glyphs.is_empty() {
+                return;
+            }
+            
+            // Calculate scroll offset
+            let max_y = glyphs.iter().map(|g| g.y).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0);
+            let total_text_height = max_y + 25.0;
+            let scroll_offset = if total_text_height > available_height {
+                total_text_height - available_height
+            } else {
+                0.0
+            };
+            
+            // Render glyphs (already centered by fontdue)
+            for glyph in glyphs {
+                let (metrics, bitmap) = font.rasterize_config(glyph.key);
                 
-                for glyph in layout.glyphs() {
-                    let (metrics, bitmap) = font.rasterize_config(glyph.key);
-                    
-                    let glyph_x = glyph.x as i32;
-                    let glyph_y = glyph.y as i32;
-                    
-                    for y in 0..metrics.height {
-                        for x in 0..metrics.width {
-                            let px = glyph_x + x as i32;
-                            let py = glyph_y + y as i32;
-                            
-                            if px >= 0 && px < self.width as i32 && py >= 0 && py < self.height as i32 {
-                                let alpha = bitmap[y * metrics.width + x] as f32 / 255.0;
-                                if alpha > 0.0 {
-                                    let offset = (py as u32 * self.width + px as u32) * 4;
-                                    if offset + 3 < self.pixmap.data().len() as u32 {
-                                        let data = self.pixmap.data_mut();
-                                        // Proper alpha blending over existing background
-                                        let bg_r = data[offset as usize] as f32 / 255.0;
-                                        let bg_g = data[offset as usize + 1] as f32 / 255.0;
-                                        let bg_b = data[offset as usize + 2] as f32 / 255.0;
-                                        let bg_a = data[offset as usize + 3] as f32 / 255.0;
-                                        
-                                        // White text (1.0, 1.0, 1.0)
-                                        let out_a = alpha + bg_a * (1.0 - alpha);
-                                        let out_r = (1.0 * alpha + bg_r * bg_a * (1.0 - alpha)) / out_a.max(0.001);
-                                        let out_g = (1.0 * alpha + bg_g * bg_a * (1.0 - alpha)) / out_a.max(0.001);
-                                        let out_b = (1.0 * alpha + bg_b * bg_a * (1.0 - alpha)) / out_a.max(0.001);
-                                        
-                                        data[offset as usize] = (out_r * 255.0) as u8;
-                                        data[offset as usize + 1] = (out_g * 255.0) as u8;
-                                        data[offset as usize + 2] = (out_b * 255.0) as u8;
-                                        data[offset as usize + 3] = (out_a * 255.0) as u8;
-                                    }
+                // Add left margin to center in window
+                let final_x = glyph.x + 20.0;
+                let final_y = glyph.y + y_start - scroll_offset;
+                
+                let glyph_x = final_x as i32;
+                let glyph_y = final_y as i32;
+                
+                for y in 0..metrics.height {
+                    for x in 0..metrics.width {
+                        let px = glyph_x + x as i32;
+                        let py = glyph_y + y as i32;
+                        
+                        if px >= 0 && px < self.width as i32 && py >= 0 && py < self.height as i32 {
+                            let alpha = bitmap[y * metrics.width + x] as f32 / 255.0;
+                            if alpha > 0.0 {
+                                let offset = (py as u32 * self.width + px as u32) * 4;
+                                if offset + 3 < self.pixmap.data().len() as u32 {
+                                    let data = self.pixmap.data_mut();
+                                    let bg_r = data[offset as usize] as f32 / 255.0;
+                                    let bg_g = data[offset as usize + 1] as f32 / 255.0;
+                                    let bg_b = data[offset as usize + 2] as f32 / 255.0;
+                                    let bg_a = data[offset as usize + 3] as f32 / 255.0;
+                                    
+                                    let out_a = alpha + bg_a * (1.0 - alpha);
+                                    let out_r = (1.0 * alpha + bg_r * bg_a * (1.0 - alpha)) / out_a.max(0.001);
+                                    let out_g = (1.0 * alpha + bg_g * bg_a * (1.0 - alpha)) / out_a.max(0.001);
+                                    let out_b = (1.0 * alpha + bg_b * bg_a * (1.0 - alpha)) / out_a.max(0.001);
+                                    
+                                    data[offset as usize] = (out_r * 255.0) as u8;
+                                    data[offset as usize + 1] = (out_g * 255.0) as u8;
+                                    data[offset as usize + 2] = (out_b * 255.0) as u8;
+                                    data[offset as usize + 3] = (out_a * 255.0) as u8;
                                 }
                             }
                         }
@@ -202,8 +385,6 @@ impl SpectrumRenderer {
                 }
             }
         }
-
-        self.pixmap.data()
     }
 
     fn create_rounded_rect(x: f32, y: f32, width: f32, height: f32, radius: f32) -> Path {

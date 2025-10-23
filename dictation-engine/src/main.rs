@@ -337,6 +337,11 @@ async fn main() -> Result<()> {
     drop(server);
     
     if !fast_result.is_empty() {
+        // Broadcast processing state
+        let mut server = control_server_shared.lock().await;
+        server.broadcast(&ControlMessage::ProcessingStarted).await?;
+        drop(server);
+        
         info!("Waiting for accurate model to finish loading...");
         let accurate_model = accurate_model_handle.await?
             .ok_or_else(|| anyhow::anyhow!("Failed to load accurate model"))?;
@@ -348,8 +353,23 @@ async fn main() -> Result<()> {
         info!("Typing final text...");
         keyboard.type_text(&accurate_result).await?;
         info!("✓ Typed!");
+        
+        // Broadcast complete state
+        let mut server = control_server_shared.lock().await;
+        server.broadcast(&ControlMessage::Complete).await?;
+        drop(server);
+        
+        // Give GUI time to animate closing
+        tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
     } else {
         info!("No text to type");
+        
+        // Still broadcast complete even if no text
+        let mut server = control_server_shared.lock().await;
+        server.broadcast(&ControlMessage::Complete).await?;
+        drop(server);
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
     }
     
     Ok(())

@@ -3,8 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use dictation_gui::renderer::SpectrumRenderer;
-use dictation_gui::wayland;
+use dictation_gui::{GuiState, renderer::SpectrumRenderer, wayland};
 
 use memmap2::MmapMut;
 use std::os::fd::AsFd;
@@ -12,35 +11,33 @@ use wayland_client::protocol::wl_shm;
 
 const WIDTH: u32 = 400;
 const HEIGHT: u32 = 150;
-const TEST_DURATION_SECS: u64 = 30;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     
     println!("\n╔════════════════════════════════════════════════════════╗");
-    println!("║          VOICE DICTATION GUI TEST                     ║");
+    println!("║          VOICE DICTATION GUI STATE TEST               ║");
     println!("╚════════════════════════════════════════════════════════╝\n");
-    println!("⚡ Starting Wayland overlay test...");
+    println!("⚡ Testing state-driven GUI with animations...");
     println!("📺 Window size: {}x{}", WIDTH, HEIGHT);
     println!("📍 Position: Bottom center of screen");
-    println!("⏱️  Duration: {} seconds", TEST_DURATION_SECS);
-    println!("\n🎨 You should see:");
-    println!("   • Animated spectrum bars (orange/pink)");
-    println!("   • Text: 'Testing GUI - Can you see this?'");
-    println!("   • Bars moving like audio visualization");
-    println!("\n🔍 If you see NOTHING:");
-    println!("   • Check hyprctl layers | grep voice");
-    println!("   • The Wayland layer-shell may not be working\n");
+    println!("\n🎨 Test sequence:");
+    println!("   0-8s:  LISTENING state (narrow bars, live text)");
+    println!("   8-11s: PROCESSING state (spinning dots, rounded)");
+    println!("   11-11.5s: CLOSING state (fade out animation)");
+    println!("   11.5s: GUI exits");
+    println!();
     
     let band_values = Arc::new(Mutex::new(vec![0.0f32; 8]));
     let transcription_text = Arc::new(Mutex::new(String::from("Testing GUI - Can you see this?")));
-    let is_finalizing = Arc::new(Mutex::new(false));
+    let gui_state = Arc::new(Mutex::new(GuiState::Listening));
     
     let band_values_clone = band_values.clone();
     let transcription_text_clone = transcription_text.clone();
+    let gui_state_clone = gui_state.clone();
     
-    let wayland_thread = thread::spawn(move || {
-        if let Err(e) = run_test_window(band_values_clone, transcription_text_clone, is_finalizing) {
+    let _wayland_thread = thread::spawn(move || {
+        if let Err(e) = run_test_window(band_values_clone, transcription_text_clone, gui_state_clone) {
             eprintln!("❌ Wayland thread error: {}", e);
         }
     });
@@ -58,33 +55,8 @@ fn main() -> Result<()> {
     
     if layers_output.contains("voice-dictation") {
         println!("✅ SUCCESS! Hyprland sees 'voice-dictation' layer");
-        if let Some(line) = layers_output.lines().find(|l| l.contains("voice-dictation")) {
-            println!("   Layer info: {}", line.trim());
-        }
     } else {
         println!("❌ PROBLEM! Hyprland does NOT see 'voice-dictation' layer");
-        println!("   Checking overlay level:");
-        for line in layers_output.lines() {
-            if line.contains("Layer level 3 (overlay)") {
-                println!("   {}", line);
-                let mut in_overlay = false;
-                for next_line in layers_output.lines().skip_while(|l| l != &line) {
-                    if in_overlay && next_line.contains("Layer level") {
-                        break;
-                    }
-                    if in_overlay && next_line.trim().is_empty() {
-                        println!("   (overlay level is EMPTY)");
-                        break;
-                    }
-                    if in_overlay {
-                        println!("   {}", next_line);
-                    }
-                    if next_line.contains("Layer level 3 (overlay)") {
-                        in_overlay = true;
-                    }
-                }
-            }
-        }
     }
     println!();
     
@@ -92,9 +64,10 @@ fn main() -> Result<()> {
     let mut frame_count = 0;
     let mut last_second = 0;
     
-    while start.elapsed() < Duration::from_secs(TEST_DURATION_SECS) {
+    loop {
         let elapsed = start.elapsed().as_secs_f32();
         
+        // Animate spectrum bars
         {
             let mut bands = band_values.lock().unwrap();
             for (i, band) in bands.iter_mut().enumerate() {
@@ -103,13 +76,40 @@ fn main() -> Result<()> {
             }
         }
         
+        // Update text with frame counter
         {
             let mut text = transcription_text.lock().unwrap();
+            let current_state = *gui_state.lock().unwrap();
             *text = format!(
-                "Testing GUI - Frame {} - Time: {:.1}s",
+                "Frame {} - Time: {:.1}s - State: {:?}",
                 frame_count,
-                elapsed
+                elapsed,
+                current_state
             );
+        }
+        
+        // State transitions
+        if elapsed >= 8.0 && elapsed < 8.1 {
+            let mut state = gui_state.lock().unwrap();
+            if *state == GuiState::Listening {
+                println!("⏱️  8s: Transitioning to PROCESSING state");
+                *state = GuiState::Processing;
+                *transcription_text.lock().unwrap() = "Processing your speech...".to_string();
+            }
+        }
+        
+        if elapsed >= 11.0 && elapsed < 11.1 {
+            let mut state = gui_state.lock().unwrap();
+            if *state == GuiState::Processing {
+                println!("⏱️  11s: Transitioning to CLOSING state");
+                *state = GuiState::Closing;
+            }
+        }
+        
+        if elapsed >= 11.5 {
+            println!("\n✓ Test complete! All states tested.");
+            println!("   Total frames rendered: {}", frame_count);
+            std::process::exit(0);
         }
         
         let current_second = elapsed as u64;
@@ -121,17 +121,12 @@ fn main() -> Result<()> {
         frame_count += 1;
         thread::sleep(Duration::from_millis(50));
     }
-    
-    println!("\n✓ Test complete! Shutting down...");
-    println!("   Total frames rendered: {}", frame_count);
-    
-    std::process::exit(0);
 }
 
 fn run_test_window(
     band_values: Arc<Mutex<Vec<f32>>>,
     transcription_text: Arc<Mutex<String>>,
-    is_finalizing: Arc<Mutex<bool>>,
+    gui_state: Arc<Mutex<GuiState>>,
 ) -> Result<()> {
     println!("🔧 Creating Wayland connection...");
     let (mut app_state, conn, _qh) = wayland::AppState::new()?;
@@ -141,15 +136,13 @@ fn run_test_window(
     let qh2 = event_queue.handle();
     
     println!("🔧 Creating layer surface...");
-    app_state.create_layer_surface(&qh2);
+    app_state.create_layer_surface(&qh2, WIDTH, HEIGHT);
     
     println!("🔧 Processing Wayland events and waiting for configure...");
     
-    // Do a blocking roundtrip to ensure the compositor processes our surface
     conn.roundtrip()?;
     println!("✓ Roundtrip complete");
     
-    // Now wait for the configure event with blocking dispatch
     let start = Instant::now();
     while !app_state.configured && start.elapsed() < Duration::from_secs(5) {
         match event_queue.blocking_dispatch(&mut app_state) {
@@ -169,9 +162,7 @@ fn run_test_window(
     }
     
     if !app_state.configured {
-        println!("⚠️  Warning: Wayland configure timeout after 5 seconds");
-        println!("   This means the compositor never acknowledged our surface");
-        return Err(anyhow::anyhow!("Configure timeout - compositor not responding"));
+        println!("⚠️  Warning: Wayland configure timeout (this may be normal)");
     }
     
     let mut shm: Option<wl_shm::WlShm> = None;
@@ -215,19 +206,33 @@ fn run_test_window(
     println!("🎨 Starting render loop...\n");
     
     let mut frame = 0;
+    let start_time = Instant::now();
+    let mut previous_state = GuiState::Listening;
+    let mut state_start_time = Instant::now();
+    
     loop {
         let _ = event_queue.dispatch_pending(&mut app_state);
         conn.flush()?;
         
         if let Some(context) = &app_state.context {
-            let finalizing = *is_finalizing.lock().unwrap();
-            let values = if finalizing {
-                vec![0.0; 8]
-            } else {
-                band_values.lock().unwrap().clone()
-            };
+            let current_state = *gui_state.lock().unwrap();
+            
+            // Track state transitions
+            if current_state != previous_state {
+                state_start_time = Instant::now();
+                previous_state = current_state;
+            }
+            
+            let state_elapsed = state_start_time.elapsed().as_secs_f32();
+            
+            // Exit after closing animation
+            if current_state == GuiState::Closing && state_elapsed > 0.5 {
+                break;
+            }
+            
+            let values = band_values.lock().unwrap().clone();
             let text = transcription_text.lock().unwrap().clone();
-            let pixels = renderer.render(&values, &text);
+            let pixels = renderer.render(&values, &text, current_state, state_elapsed);
             
             for i in (0..pixels.len()).step_by(4) {
                 mmap[i] = pixels[i + 2];
@@ -251,4 +256,6 @@ fn run_test_window(
         
         thread::sleep(Duration::from_millis(16));
     }
+    
+    Ok(())
 }

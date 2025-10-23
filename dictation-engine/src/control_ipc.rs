@@ -10,6 +10,8 @@ pub enum ControlMessage {
     Ready,
     TranscriptionUpdate { text: String, is_final: bool },
     Confirm,
+    ProcessingStarted,
+    Complete,
 }
 
 pub struct ControlServer {

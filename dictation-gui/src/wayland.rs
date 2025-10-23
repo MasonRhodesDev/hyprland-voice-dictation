@@ -18,12 +18,9 @@ use wayland_client::{
     Connection, Dispatch, QueueHandle,
 };
 
-const WIDTH: u32 = 400;
-const HEIGHT: u32 = 150;
-
 pub struct WaylandContext {
     pub wl_surface: wl_surface::WlSurface,
-    pub layer_surface: LayerSurface,
+    pub layer_surface: Option<LayerSurface>,
 }
 
 pub struct AppState {
@@ -63,7 +60,7 @@ impl AppState {
         ))
     }
 
-    pub fn create_layer_surface(&mut self, qh: &QueueHandle<Self>) {
+    pub fn create_layer_surface(&mut self, qh: &QueueHandle<Self>, width: u32, height: u32) {
         let wl_surface = self.compositor_state.create_surface(qh);
         
         let layer_surface = self.layer_shell.create_layer_surface(
@@ -77,14 +74,14 @@ impl AppState {
         layer_surface.set_anchor(Anchor::BOTTOM);
         layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer_surface.set_margin(0, 0, 50, 0);
-        layer_surface.set_size(WIDTH, HEIGHT);
+        layer_surface.set_size(width, height);
         layer_surface.set_exclusive_zone(-1);
 
         wl_surface.commit();
 
         self.context = Some(WaylandContext {
             wl_surface,
-            layer_surface,
+            layer_surface: Some(layer_surface),
         });
     }
 }
