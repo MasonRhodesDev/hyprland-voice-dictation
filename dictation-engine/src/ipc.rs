@@ -28,10 +28,7 @@ pub struct IpcServer {
 
 impl IpcServer {
     pub fn new(socket_path: String) -> Self {
-        Self {
-            socket_path,
-            clients: Arc::new(Mutex::new(Vec::new())),
-        }
+        Self { socket_path, clients: Arc::new(Mutex::new(Vec::new())) }
     }
 
     pub fn start_server(self: &Arc<Self>) {
@@ -46,8 +43,8 @@ impl IpcServer {
     async fn run_server(&self) -> Result<()> {
         let _ = std::fs::remove_file(&self.socket_path);
 
-        let listener = UnixListener::bind(&self.socket_path)
-            .context("Failed to bind Unix socket")?;
+        let listener =
+            UnixListener::bind(&self.socket_path).context("Failed to bind Unix socket")?;
         info!("IPC server listening on {}", self.socket_path);
 
         loop {
@@ -69,7 +66,7 @@ impl IpcServer {
             debug!("Wrong sample count: {} (expected {})", samples.len(), SAMPLES_PER_MESSAGE);
             return;
         }
-        
+
         let client_count = self.clients.lock().await.len();
         if client_count > 0 {
             debug!("Broadcasting {} samples to {} clients", samples.len(), client_count);
@@ -81,10 +78,7 @@ impl IpcServer {
         let mut clients = self.clients.lock().await;
         let mut to_remove = Vec::new();
 
-        let bytes: Vec<u8> = samples
-            .iter()
-            .flat_map(|&s| s.to_le_bytes())
-            .collect();
+        let bytes: Vec<u8> = samples.iter().flat_map(|&s| s.to_le_bytes()).collect();
 
         for (i, client) in clients.iter_mut().enumerate() {
             if let Err(e) = client.write_all(&bytes).await {

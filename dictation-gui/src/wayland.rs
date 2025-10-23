@@ -5,11 +5,9 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
-    shell::{
-        wlr_layer::{
-            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
-            LayerSurfaceConfigure,
-        },
+    shell::wlr_layer::{
+        Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+        LayerSurfaceConfigure,
     },
 };
 use wayland_client::{
@@ -28,7 +26,7 @@ pub struct AppState {
     output_state: OutputState,
     compositor_state: CompositorState,
     layer_shell: LayerShell,
-    
+
     pub context: Option<WaylandContext>,
     pub configured: bool,
 }
@@ -36,15 +34,15 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Result<(Self, Connection, QueueHandle<Self>)> {
         let conn = Connection::connect_to_env().context("Failed to connect to Wayland")?;
-        let (globals, event_queue) = registry_queue_init(&conn).context("Failed to initialize registry")?;
+        let (globals, event_queue) =
+            registry_queue_init(&conn).context("Failed to initialize registry")?;
         let qh = event_queue.handle();
 
         let registry_state = RegistryState::new(&globals);
         let output_state = OutputState::new(&globals, &qh);
-        let compositor_state = CompositorState::bind(&globals, &qh)
-            .context("wl_compositor not available")?;
-        let layer_shell = LayerShell::bind(&globals, &qh)
-            .context("layer_shell not available")?;
+        let compositor_state =
+            CompositorState::bind(&globals, &qh).context("wl_compositor not available")?;
+        let layer_shell = LayerShell::bind(&globals, &qh).context("layer_shell not available")?;
 
         Ok((
             Self {
@@ -62,7 +60,7 @@ impl AppState {
 
     pub fn create_layer_surface(&mut self, qh: &QueueHandle<Self>, width: u32, height: u32) {
         let wl_surface = self.compositor_state.create_surface(qh);
-        
+
         let layer_surface = self.layer_shell.create_layer_surface(
             qh,
             wl_surface.clone(),
@@ -79,10 +77,7 @@ impl AppState {
 
         wl_surface.commit();
 
-        self.context = Some(WaylandContext {
-            wl_surface,
-            layer_surface: Some(layer_surface),
-        });
+        self.context = Some(WaylandContext { wl_surface, layer_surface: Some(layer_surface) });
     }
 }
 

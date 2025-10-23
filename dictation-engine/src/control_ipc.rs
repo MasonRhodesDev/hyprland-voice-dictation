@@ -28,21 +28,7 @@ impl ControlServer {
         let listener = UnixListener::bind(socket_path)?;
         info!("Control IPC server listening on {}", socket_path);
 
-        Ok(Self {
-            listener,
-            clients: Vec::new(),
-        })
-    }
-
-    pub async fn _accept_client(&mut self) -> Result<()> {
-        match self.listener.accept().await {
-            Ok((stream, _)) => {
-                info!("Control client connected");
-                self.clients.push(stream);
-                Ok(())
-            }
-            Err(e) => Err(e.into()),
-        }
+        Ok(Self { listener, clients: Vec::new() })
     }
 
     pub async fn broadcast(&mut self, msg: &ControlMessage) -> Result<()> {
@@ -52,9 +38,7 @@ impl ControlServer {
         let mut disconnected = Vec::new();
 
         for (idx, client) in self.clients.iter_mut().enumerate() {
-            if client.write_u32(len).await.is_err()
-                || client.write_all(&data).await.is_err()
-            {
+            if client.write_u32(len).await.is_err() || client.write_all(&data).await.is_err() {
                 disconnected.push(idx);
             }
         }
@@ -94,7 +78,7 @@ impl ControlServer {
                 Ok(n) if n >= 4 => {
                     let len = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
                     let mut msg_buf = vec![0u8; len as usize];
-                    
+
                     match client.read_exact(&mut msg_buf).await {
                         Ok(_) => {
                             if let Ok(msg) = serde_json::from_slice(&msg_buf) {
@@ -139,10 +123,8 @@ mod tests {
 
     #[test]
     fn test_control_message_transcription_serialize() {
-        let msg = ControlMessage::TranscriptionUpdate {
-            text: "test text".to_string(),
-            is_final: true,
-        };
+        let msg =
+            ControlMessage::TranscriptionUpdate { text: "test text".to_string(), is_final: true };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("test text"));
     }
@@ -155,7 +137,7 @@ mod tests {
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: ControlMessage = serde_json::from_str(&json).unwrap();
-        
+
         match parsed {
             ControlMessage::TranscriptionUpdate { text, is_final } => {
                 assert_eq!(text, "hello world");
@@ -169,10 +151,10 @@ mod tests {
     async fn test_control_server_new() {
         let socket_path = "/tmp/test_control_server_12345.sock";
         let _ = std::fs::remove_file(socket_path);
-        
+
         let result = ControlServer::new(socket_path).await;
         assert!(result.is_ok());
-        
+
         if let Ok(_server) = result {
             let _ = std::fs::remove_file(socket_path);
         }
@@ -182,13 +164,11 @@ mod tests {
     async fn test_control_server_broadcast_no_clients() {
         let socket_path = "/tmp/test_control_broadcast_12345.sock";
         let _ = std::fs::remove_file(socket_path);
-        
+
         let mut server = ControlServer::new(socket_path).await.unwrap();
         let result = server.broadcast(&ControlMessage::Ready).await;
         assert!(result.is_ok());
-        
+
         let _ = std::fs::remove_file(socket_path);
     }
 }
-
-

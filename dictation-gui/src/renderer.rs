@@ -1,5 +1,6 @@
-use anyhow::Result;
+use crate::animations::{self, ClosingAnimation};
 use crate::GuiState;
+use anyhow::Result;
 use tiny_skia::*;
 
 const BAR_COUNT: usize = 8;
@@ -30,16 +31,17 @@ pub struct SpectrumRenderer {
     height: u32,
     pixmap: Pixmap,
     colors: Colors,
+    closing_animation: ClosingAnimation,
 }
 
 pub fn calculate_text_height(text: &str, width: u32) -> u32 {
     if text.is_empty() {
         return 55;
     }
-    
+
+    use fontdue::layout::{CoordinateSystem, HorizontalAlign, Layout, LayoutSettings, TextStyle};
     use fontdue::Font;
-    use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle, HorizontalAlign};
-    
+
     let font_data = include_bytes!("/usr/share/fonts/google-carlito-fonts/Carlito-Regular.ttf");
     if let Ok(font) = Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()) {
         let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
@@ -54,14 +56,14 @@ pub fn calculate_text_height(text: &str, width: u32) -> u32 {
             ..Default::default()
         });
         layout.append(&[&font], &TextStyle::new(text, 18.0, 0));
-        
+
         let glyphs = layout.glyphs();
         if let Some(last_glyph) = glyphs.last() {
             let text_height = last_glyph.y as u32 + 25;
             return 50 + text_height + 20;
         }
     }
-    
+
     70
 }
 
@@ -69,19 +71,13 @@ impl SpectrumRenderer {
     pub fn new(width: u32, height: u32) -> Result<Self> {
         let pixmap = Pixmap::new(width, height).expect("Failed to create pixmap");
         let colors = Self::load_colors();
-        
-        Ok(Self {
-            width,
-            height,
-            pixmap,
-            colors,
-        })
+
+        Ok(Self { width, height, pixmap, colors, closing_animation: ClosingAnimation::Collapse })
     }
 
     fn load_colors() -> Colors {
-        let config_path = std::env::var("HOME")
-            .map(|h| format!("{}/.config/matugen/colors.css", h))
-            .ok();
+        let config_path =
+            std::env::var("HOME").map(|h| format!("{}/.config/matugen/colors.css", h)).ok();
 
         if let Some(path) = config_path {
             if std::path::Path::new(&path).exists() {
@@ -116,7 +112,7 @@ impl SpectrumRenderer {
     fn parse_color_value(line: &str) -> Option<Color> {
         let hex = line.split('#').nth(1)?.split(';').next()?;
         let hex = hex.trim();
-        
+
         if hex.len() == 6 {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
             let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
@@ -127,13 +123,20 @@ impl SpectrumRenderer {
         }
     }
 
-    pub fn render(&mut self, band_values: &[f32], text: &str, state: GuiState, animation_time: f32) -> &[u8] {
+    pub fn render(
+        &mut self,
+        band_values: &[f32],
+        text: &str,
+        state: GuiState,
+        state_time: f32,
+        total_time: f32,
+    ) -> &[u8] {
         self.pixmap.fill(Color::TRANSPARENT);
 
         match state {
             GuiState::Listening => self.render_listening(band_values, text),
-            GuiState::Processing => self.render_processing(text, animation_time),
-            GuiState::Closing => self.render_closing(text, animation_time),
+            GuiState::Processing => self.render_processing(text, total_time),
+            GuiState::Closing => self.render_closing(text, state_time, total_time),
         }
 
         self.pixmap.data()
@@ -152,21 +155,16 @@ impl SpectrumRenderer {
             self.height as f32,
             CORNER_RADIUS,
         );
-        
-        self.pixmap.fill_path(
-            &path,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
+
+        self.pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
 
         // Spectrum bars (top section) - narrower with more spacing
         let spectrum_height = 50.0;
         let total_spacing = BAR_SPACING * (BAR_COUNT - 1) as f32;
         let available_width = self.width as f32 - 40.0;
         let bar_width = ((available_width - total_spacing) / BAR_COUNT as f32) * BAR_WIDTH_FACTOR;
-        let start_x = 20.0 + (available_width - (bar_width * BAR_COUNT as f32 + total_spacing)) / 2.0;
+        let start_x =
+            20.0 + (available_width - (bar_width * BAR_COUNT as f32 + total_spacing)) / 2.0;
         let center_y = spectrum_height / 2.0;
         let bar_radius = 3.0;
 
@@ -187,7 +185,7 @@ impl SpectrumRenderer {
                 None,
             );
         }
-        
+
         // Render text below spectrum
         self.render_text(text, 55.0);
     }
@@ -202,53 +200,43 @@ impl SpectrumRenderer {
         let dot_radius = 6.0;
         let orbit_radius = 20.0;
         let rotation_speed = 2.0;
-        
+
         let padding = 12.0;
         let spinner_diameter = (orbit_radius + dot_radius) * 2.0;
         let box_size = spinner_diameter + padding * 2.0;
-        
+
         let box_x = (self.width as f32 - box_size) / 2.0;
         let box_y = (self.height as f32 - box_size) / 2.0;
-        
-        let path = Self::create_rounded_rect(
-            box_x,
-            box_y,
-            box_size,
-            box_size,
-            CORNER_RADIUS_PROCESSING,
-        );
-        
-        self.pixmap.fill_path(
-            &path,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
+
+        let path =
+            Self::create_rounded_rect(box_x, box_y, box_size, box_size, CORNER_RADIUS_PROCESSING);
+
+        self.pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
 
         // Spinning dots centered
         paint.set_color(self.colors.bar);
-        
+
         let center_x = self.width as f32 / 2.0;
         let center_y = self.height as f32 / 2.0;
-        
+
         for i in 0..dot_count {
-            let angle = (animation_time * rotation_speed) + (i as f32 * std::f32::consts::TAU / dot_count as f32);
+            let angle = (animation_time * rotation_speed)
+                + (i as f32 * std::f32::consts::TAU / dot_count as f32);
             let x = center_x + orbit_radius * angle.cos();
             let y = center_y + orbit_radius * angle.sin();
-            
+
             let mut pb = PathBuilder::new();
             pb.move_to(x + dot_radius, y);
-            
+
             let kappa = 0.5522848;
             let kr = dot_radius * kappa;
-            
+
             pb.cubic_to(x + dot_radius, y - kr, x + kr, y - dot_radius, x, y - dot_radius);
             pb.cubic_to(x - kr, y - dot_radius, x - dot_radius, y - kr, x - dot_radius, y);
             pb.cubic_to(x - dot_radius, y + kr, x - kr, y + dot_radius, x, y + dot_radius);
             pb.cubic_to(x + kr, y + dot_radius, x + dot_radius, y + kr, x + dot_radius, y);
             pb.close();
-            
+
             if let Some(path) = pb.finish() {
                 self.pixmap.fill_path(
                     &path,
@@ -261,44 +249,21 @@ impl SpectrumRenderer {
         }
     }
 
-    fn render_closing(&mut self, text: &str, animation_time: f32) {
-        // Fade out animation: scale down and fade opacity
-        let progress = (animation_time / 0.3).min(1.0); // 0.0 to 1.0 over 300ms
-        let scale = 1.0 - (progress * 0.2); // 1.0 -> 0.8
-        let alpha = 1.0 - progress; // 1.0 -> 0.0
-        
-        let mut paint = Paint::default();
-        let mut bg_color = self.colors.background;
-        bg_color.apply_opacity(alpha);
-        paint.set_color(bg_color);
-        paint.anti_alias = true;
+    fn render_closing(&mut self, _text: &str, state_elapsed: f32, total_time: f32) {
+        let anim_colors =
+            animations::Colors { background: self.colors.background, bar: self.colors.bar };
 
-        // Calculate centered scaled dimensions
-        let scaled_width = self.width as f32 * scale;
-        let scaled_height = self.height as f32 * scale;
-        let offset_x = (self.width as f32 - scaled_width) / 2.0;
-        let offset_y = (self.height as f32 - scaled_height) / 2.0;
-        
-        // Rounded background
-        let path = Self::create_rounded_rect(
-            offset_x,
-            offset_y,
-            scaled_width,
-            scaled_height,
-            CORNER_RADIUS_PROCESSING * scale,
-        );
-        
-        self.pixmap.fill_path(
-            &path,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
-        
-        // Fade text (just render at reduced opacity, positioning will be off but acceptable for closing)
-        if !text.is_empty() && alpha > 0.1 {
-            self.render_text(text, 75.0);
+        match self.closing_animation {
+            ClosingAnimation::Collapse => {
+                animations::render_collapse(
+                    &mut self.pixmap,
+                    anim_colors,
+                    state_elapsed,
+                    total_time,
+                    self.width,
+                    self.height,
+                );
+            }
         }
     }
 
@@ -306,14 +271,16 @@ impl SpectrumRenderer {
         if text.is_empty() {
             return;
         }
-        
+
+        use fontdue::layout::{
+            CoordinateSystem, HorizontalAlign, Layout, LayoutSettings, TextStyle,
+        };
         use fontdue::Font;
-        use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle, HorizontalAlign};
-        
+
         let font_data = include_bytes!("/usr/share/fonts/google-carlito-fonts/Carlito-Regular.ttf");
         if let Ok(font) = Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()) {
             let available_height = self.height as f32 - y_start - 10.0;
-            
+
             // Layout with CENTER alignment built-in
             let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
             layout.reset(&LayoutSettings {
@@ -327,37 +294,38 @@ impl SpectrumRenderer {
                 ..Default::default()
             });
             layout.append(&[&font], &TextStyle::new(text, 18.0, 0));
-            
+
             let glyphs = layout.glyphs();
             if glyphs.is_empty() {
                 return;
             }
-            
+
             // Calculate scroll offset
-            let max_y = glyphs.iter().map(|g| g.y).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0);
+            let max_y =
+                glyphs.iter().map(|g| g.y).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0);
             let total_text_height = max_y + 25.0;
             let scroll_offset = if total_text_height > available_height {
                 total_text_height - available_height
             } else {
                 0.0
             };
-            
+
             // Render glyphs (already centered by fontdue)
             for glyph in glyphs {
                 let (metrics, bitmap) = font.rasterize_config(glyph.key);
-                
+
                 // Add left margin to center in window
                 let final_x = glyph.x + 20.0;
                 let final_y = glyph.y + y_start - scroll_offset;
-                
+
                 let glyph_x = final_x as i32;
                 let glyph_y = final_y as i32;
-                
+
                 for y in 0..metrics.height {
                     for x in 0..metrics.width {
                         let px = glyph_x + x as i32;
                         let py = glyph_y + y as i32;
-                        
+
                         if px >= 0 && px < self.width as i32 && py >= 0 && py < self.height as i32 {
                             let alpha = bitmap[y * metrics.width + x] as f32 / 255.0;
                             if alpha > 0.0 {
@@ -368,12 +336,15 @@ impl SpectrumRenderer {
                                     let bg_g = data[offset as usize + 1] as f32 / 255.0;
                                     let bg_b = data[offset as usize + 2] as f32 / 255.0;
                                     let bg_a = data[offset as usize + 3] as f32 / 255.0;
-                                    
+
                                     let out_a = alpha + bg_a * (1.0 - alpha);
-                                    let out_r = (1.0 * alpha + bg_r * bg_a * (1.0 - alpha)) / out_a.max(0.001);
-                                    let out_g = (1.0 * alpha + bg_g * bg_a * (1.0 - alpha)) / out_a.max(0.001);
-                                    let out_b = (1.0 * alpha + bg_b * bg_a * (1.0 - alpha)) / out_a.max(0.001);
-                                    
+                                    let out_r = (1.0 * alpha + bg_r * bg_a * (1.0 - alpha))
+                                        / out_a.max(0.001);
+                                    let out_g = (1.0 * alpha + bg_g * bg_a * (1.0 - alpha))
+                                        / out_a.max(0.001);
+                                    let out_b = (1.0 * alpha + bg_b * bg_a * (1.0 - alpha))
+                                        / out_a.max(0.001);
+
                                     data[offset as usize] = (out_r * 255.0) as u8;
                                     data[offset as usize + 1] = (out_g * 255.0) as u8;
                                     data[offset as usize + 2] = (out_b * 255.0) as u8;
@@ -449,7 +420,7 @@ mod tests {
     fn test_renderer_new() {
         let result = SpectrumRenderer::new(400, 150);
         assert!(result.is_ok());
-        
+
         if let Ok(renderer) = result {
             assert_eq!(renderer.width, 400);
             assert_eq!(renderer.height, 150);
@@ -460,8 +431,8 @@ mod tests {
     fn test_renderer_render_empty() {
         let mut renderer = SpectrumRenderer::new(400, 150).unwrap();
         let bands = vec![0.0f32; 8];
-        let pixels = renderer.render(&bands, "");
-        
+        let pixels = renderer.render(&bands, "", GuiState::Listening, 0.0, 0.0);
+
         assert_eq!(pixels.len(), (400 * 150 * 4) as usize);
     }
 
@@ -469,8 +440,8 @@ mod tests {
     fn test_renderer_render_with_bands() {
         let mut renderer = SpectrumRenderer::new(400, 150).unwrap();
         let bands = vec![0.5f32; 8];
-        let pixels = renderer.render(&bands, "");
-        
+        let pixels = renderer.render(&bands, "", GuiState::Listening, 0.0, 0.0);
+
         assert_eq!(pixels.len(), (400 * 150 * 4) as usize);
     }
 
@@ -478,8 +449,8 @@ mod tests {
     fn test_renderer_render_with_text() {
         let mut renderer = SpectrumRenderer::new(400, 150).unwrap();
         let bands = vec![0.0f32; 8];
-        let pixels = renderer.render(&bands, "Hello World");
-        
+        let pixels = renderer.render(&bands, "Hello World", GuiState::Listening, 0.0, 0.0);
+
         assert_eq!(pixels.len(), (400 * 150 * 4) as usize);
     }
 

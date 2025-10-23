@@ -20,10 +20,7 @@ pub struct ControlClient {
 
 impl ControlClient {
     pub fn new(socket_path: String) -> Self {
-        Self {
-            stream: None,
-            socket_path,
-        }
+        Self { stream: None, socket_path }
     }
 
     pub async fn connect(&mut self) -> Result<()> {
@@ -57,13 +54,6 @@ impl ControlClient {
             Err(anyhow::anyhow!("Not connected"))
         }
     }
-
-    #[allow(dead_code)]
-    pub async fn _reconnect(&mut self) -> Result<()> {
-        self.stream = None;
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        self.connect().await
-    }
 }
 
 #[cfg(test)]
@@ -86,13 +76,11 @@ mod tests {
 
     #[test]
     fn test_control_message_transcription_update() {
-        let msg = ControlMessage::TranscriptionUpdate {
-            text: "hello".to_string(),
-            is_final: false,
-        };
+        let msg =
+            ControlMessage::TranscriptionUpdate { text: "hello".to_string(), is_final: false };
         let serialized = serde_json::to_string(&msg).unwrap();
         let deserialized: ControlMessage = serde_json::from_str(&serialized).unwrap();
-        
+
         match deserialized {
             ControlMessage::TranscriptionUpdate { text, is_final } => {
                 assert_eq!(text, "hello");

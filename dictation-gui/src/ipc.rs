@@ -13,10 +13,7 @@ pub struct IpcClient {
 
 impl IpcClient {
     pub fn new(socket_path: String) -> Self {
-        Self {
-            socket_path,
-            stream: None,
-        }
+        Self { socket_path, stream: None }
     }
 
     pub async fn connect(&mut self) -> Result<()> {
@@ -30,16 +27,10 @@ impl IpcClient {
     }
 
     pub async fn receive_samples(&mut self) -> Result<Vec<f32>> {
-        let stream = self
-            .stream
-            .as_mut()
-            .context("Not connected to IPC socket")?;
+        let stream = self.stream.as_mut().context("Not connected to IPC socket")?;
 
         let mut buffer = [0u8; BYTES_PER_MESSAGE];
-        stream
-            .read_exact(&mut buffer)
-            .await
-            .context("Failed to read from IPC socket")?;
+        stream.read_exact(&mut buffer).await.context("Failed to read from IPC socket")?;
 
         let samples: Vec<f32> = buffer
             .chunks_exact(4)

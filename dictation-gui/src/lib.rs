@@ -1,3 +1,4 @@
+pub mod animations;
 pub mod control_ipc;
 pub mod fft;
 pub mod ipc;
