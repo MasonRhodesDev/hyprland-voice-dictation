@@ -1,325 +1,297 @@
-use anyhow::{Context, Result};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use tracing::{error, info};
+use iced::widget::{canvas, column, container, scrollable, text, Space};
+use iced::{Alignment, Color, Element, Length, Task, time};
+use iced_layershell::build_pattern::application;
+use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
+use iced_layershell::settings::LayerShellSettings;
+use iced_layershell::to_layer_message;
+use std::time::Duration;
+use tracing::{debug, info, trace};
 
-mod animations;
+mod collapse_widget;
 mod control_ipc;
 mod fft;
 mod ipc;
-mod renderer;
-mod wayland;
+mod ipc_subscription;
+mod spectrum_widget;
+mod spinner_widget;
 
-use control_ipc::ControlMessage;
-use dictation_gui::GuiState;
+use collapse_widget::CollapsingDots;
 use fft::SpectrumAnalyzer;
-use renderer::SpectrumRenderer;
+use spectrum_widget::SpectrumBars;
+use spinner_widget::Spinner;
 
-const SOCKET_PATH: &str = "/tmp/voice-dictation.sock";
-const CONTROL_SOCKET_PATH: &str = "/tmp/voice-dictation-control.sock";
 const WIDTH: u32 = 400;
-const MIN_HEIGHT: u32 = 55;
-const MAX_HEIGHT: u32 = 200;
 const SAMPLE_RATE: u32 = 16000;
 const FFT_SIZE: usize = 512;
+const SOCKET_PATH: &str = "/tmp/voice-dictation.sock";
+const CONTROL_SOCKET_PATH: &str = "/tmp/voice-dictation-control.sock";
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+pub fn main() -> Result<(), iced_layershell::Error> {
+    let log_level = std::env::var("GUI_LOG")
+        .unwrap_or_else(|_| "error".to_string())
+        .to_lowercase();
+    
+    let filter = match log_level.as_str() {
+        "silent" => tracing::Level::ERROR,
+        "error" => tracing::Level::ERROR,
+        "warning" | "warn" => tracing::Level::WARN,
+        "info" => tracing::Level::INFO,
+        "debug" => tracing::Level::DEBUG,
+        "verbose" | "trace" => tracing::Level::TRACE,
+        _ => tracing::Level::ERROR,
+    };
+    
+    tracing_subscriber::fmt()
+        .with_max_level(filter)
+        .init();
+    
+    info!("Starting dictation-gui with iced_layershell");
 
-    info!("Starting dictation-gui");
+    application(namespace, update, view)
+        .layer_settings(LayerShellSettings {
+            size: Some((WIDTH, 160)),
+            anchor: Anchor::Bottom | Anchor::Left | Anchor::Right,
+            layer: Layer::Overlay,
+            keyboard_interactivity: KeyboardInteractivity::None,
+            margin: (0, 0, 10, 0),
+            ..Default::default()
+        })
+        .subscription(subscription)
+        .style(style)
+        .run()
+}
 
-    let band_values = Arc::new(Mutex::new(vec![0.0f32; 8]));
-    let band_values_clone = band_values.clone();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuiState {
+    Listening,
+    Processing,
+    Closing,
+}
 
-    let transcription_text = Arc::new(Mutex::new(String::new()));
-    let transcription_text_clone = transcription_text.clone();
+#[derive(Default)]
+struct DictationOverlay {
+    state: GuiState,
+    transcription: String,
+    band_values: Vec<f32>,
+    animation_time: f32,
+    analyzer: Option<SpectrumAnalyzer>,
+    closing_animation_time: f32,
+}
 
-    let gui_state = Arc::new(Mutex::new(GuiState::Listening));
-    let gui_state_clone = gui_state.clone();
+impl Default for GuiState {
+    fn default() -> Self {
+        GuiState::Listening
+    }
+}
 
-    thread::spawn(move || {
-        info!("Wayland thread starting...");
-        match run_wayland_window(band_values_clone, transcription_text_clone, gui_state_clone) {
-            Ok(_) => info!("Wayland thread exited normally"),
-            Err(e) => error!("Wayland thread error: {}", e),
-        }
-    });
+#[to_layer_message]
+#[derive(Debug, Clone)]
+enum Message {
+    Tick,
+    SpectrumUpdate(Vec<f32>),
+    TranscriptionUpdate(String),
+    StateChange(GuiState),
+    IpcError(String),
+    Exit,
+}
 
-    let mut ipc_client = ipc::IpcClient::new(SOCKET_PATH.to_string());
-    let mut spectrum_analyzer = SpectrumAnalyzer::new(FFT_SIZE, SAMPLE_RATE);
-    let mut audio_connected = false;
+fn namespace(_overlay: &DictationOverlay) -> String {
+    String::from("Dictation Overlay")
+}
 
-    info!("GUI initialized");
+fn subscription(_overlay: &DictationOverlay) -> iced::Subscription<Message> {
+    iced::Subscription::batch([
+        time::every(Duration::from_millis(16)).map(|_| Message::Tick),
+        ipc_subscription::audio_subscription(),
+        ipc_subscription::control_subscription(),
+    ])
+}
 
-    let transcription_clone = transcription_text.clone();
-    let gui_state_clone2 = gui_state.clone();
-    tokio::spawn(async move {
-        let mut control = control_ipc::ControlClient::new(CONTROL_SOCKET_PATH.to_string());
-        loop {
-            if control.connect().await.is_ok() {
-                info!("Connected to control socket");
-                loop {
-                    match control.receive().await {
-                        Ok(ControlMessage::TranscriptionUpdate { text, is_final }) => {
-                            info!("Transcription: '{}' (final: {})", text, is_final);
-                            if let Ok(mut locked) = transcription_clone.lock() {
-                                *locked = text.clone();
-                            }
-                        }
-                        Ok(ControlMessage::Ready) => {
-                            info!("Engine ready");
-                        }
-                        Ok(ControlMessage::ProcessingStarted) => {
-                            info!("Entering processing state");
-                            if let Ok(mut locked) = gui_state_clone2.lock() {
-                                *locked = GuiState::Processing;
-                            }
-                        }
-                        Ok(ControlMessage::Complete) => {
-                            info!("Entering closing state");
-                            if let Ok(mut locked) = gui_state_clone2.lock() {
-                                if *locked == GuiState::Processing {
-                                    *locked = GuiState::Closing;
-                                }
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            error!("Control receive error: {}", e);
-                            break;
-                        }
-                    }
+fn update(overlay: &mut DictationOverlay, message: Message) -> Task<Message> {
+    match message {
+        Message::Tick => {
+            trace!("UPDATE: Tick (animation_time: {:.3})", overlay.animation_time);
+            overlay.animation_time += 0.016;
+            
+            if overlay.state == GuiState::Closing {
+                overlay.closing_animation_time += 0.016;
+                if overlay.closing_animation_time >= 0.5 {
+                    info!("Closing animation complete, exiting");
+                    return Task::perform(async {}, |_| Message::Exit);
                 }
             }
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            
+            Task::none()
         }
-    });
 
-    let mut frame_count = 0;
-    loop {
-        if !audio_connected {
-            if ipc_client.connect().await.is_ok() {
-                info!("Connected to audio socket");
-                audio_connected = true;
+        Message::SpectrumUpdate(values) => {
+            let max_val = values.iter().cloned().fold(0.0f32, f32::max);
+            debug!("UPDATE: SpectrumUpdate (values: {}, max: {:.3})", values.len(), max_val);
+            trace!("UPDATE: Spectrum values: {:?}", values);
+            overlay.band_values = values;
+            Task::none()
+        }
+
+        Message::TranscriptionUpdate(text) => {
+            if !text.is_empty() {
+                info!("UPDATE: Transcription = '{}'", text);
+                debug!("UPDATE: Transcription length: {} chars", text.len());
             } else {
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                continue;
+                trace!("UPDATE: Transcription (empty)");
             }
+            overlay.transcription = text;
+            Task::none()
         }
 
-        match ipc_client.receive_samples().await {
-            Ok(samples) => {
-                let new_values = spectrum_analyzer.process(&samples);
-
-                if let Ok(mut locked) = band_values.lock() {
-                    *locked = new_values;
-                }
-
-                frame_count += 1;
-                if frame_count == 1 {
-                    info!("Receiving and processing audio");
-                }
+        Message::StateChange(state) => {
+            info!("UPDATE: State change {:?} -> {:?}", overlay.state, state);
+            eprintln!("STATE CHANGE: {:?} -> {:?}", overlay.state, state);
+            overlay.state = state;
+            
+            if state == GuiState::Closing {
+                overlay.closing_animation_time = 0.0;
             }
-            Err(e) => {
-                error!("Audio IPC error: {}. Reconnecting...", e);
-                audio_connected = false;
-                let _ = ipc_client.reconnect().await;
-            }
+            
+            Task::none()
+        }
+
+        Message::IpcError(err) => {
+            tracing::warn!("UPDATE: IPC error: {}", err);
+            Task::none()
+        }
+
+        Message::Exit => {
+            info!("EXIT: Exiting application");
+            std::process::exit(0);
+        }
+
+        _ => {
+            debug!("UPDATE: Unhandled message");
+            Task::none()
         }
     }
 }
 
-fn run_wayland_window(
-    band_values: Arc<Mutex<Vec<f32>>>,
-    transcription_text: Arc<Mutex<String>>,
-    gui_state: Arc<Mutex<GuiState>>,
-) -> Result<()> {
-    use memmap2::MmapMut;
-    use std::os::fd::AsFd;
-    use wayland_client::protocol::wl_shm;
-
-    let current_width = WIDTH;
-    let mut current_height = MIN_HEIGHT;
-
-    info!("Creating Wayland connection...");
-    let (mut app_state, conn, _qh) = wayland::AppState::new()?;
-    info!("Wayland connection established");
-
-    let mut event_queue = conn.new_event_queue::<wayland::AppState>();
-    let qh2 = event_queue.handle();
-
-    info!("Creating layer surface...");
-    app_state.create_layer_surface(&qh2, current_width, current_height);
-
-    info!("Processing Wayland events and waiting for configure...");
-
-    // Do a blocking roundtrip to ensure the compositor processes our surface
-    conn.roundtrip()?;
-    info!("Roundtrip complete");
-
-    // Now wait for the configure event with blocking dispatch
-    let start = std::time::Instant::now();
-    while !app_state.configured && start.elapsed() < std::time::Duration::from_secs(5) {
-        match event_queue.blocking_dispatch(&mut app_state) {
-            Ok(_) => {
-                conn.flush()?;
-                if app_state.configured {
-                    info!("Wayland surface configured by compositor!");
-                    break;
-                }
-            }
-            Err(e) => {
-                error!("Dispatch error: {:?}", e);
-                break;
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+fn view<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
+    match overlay.state {
+        GuiState::Listening => view_listening(overlay),
+        GuiState::Processing => view_processing(overlay),
+        GuiState::Closing => view_closing(overlay),
     }
+}
 
-    if !app_state.configured {
-        error!("Wayland configure timeout after 5 seconds - compositor not responding");
-        return Err(anyhow::anyhow!("Configure timeout - compositor not responding"));
+fn view_listening<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
+    let band_values = if overlay.band_values.is_empty() {
+        vec![0.0; 8]
+    } else {
+        overlay.band_values.clone()
+    };
+
+    let spectrum = SpectrumBars::new(band_values)
+        .height(50.0)
+        .width(WIDTH as f32);
+
+    let text_content = if overlay.transcription.is_empty() {
+        text("Listening...").size(18).color(Color::WHITE)
+    } else {
+        text(&overlay.transcription).size(18).color(Color::WHITE)
+    };
+
+    let scrollable_text = scrollable(
+        container(text_content)
+            .width(Length::Fill)
+            .padding(10)
+    )
+    .height(Length::Fixed(90.0));
+
+    let content = column![
+        spectrum,
+        scrollable_text,
+    ]
+    .spacing(5)
+    .padding(10)
+    .width(Length::Fill);
+
+    container(content)
+        .width(Length::Fill)
+        .padding(5)
+        .style(|_theme: &iced::Theme| {
+            container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba8(0, 0, 0, 0.9))),
+                border: iced::Border {
+                    radius: 15.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
+fn view_processing<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
+    let spinner = canvas(Spinner::new(overlay.animation_time))
+        .width(Length::Fixed(100.0))
+        .height(Length::Fixed(100.0));
+
+    let content = column![
+        Space::with_height(Length::Fixed(10.0)),
+        spinner,
+        Space::with_height(Length::Fixed(10.0)),
+    ]
+    .align_x(Alignment::Center)
+    .width(Length::Fill);
+
+    container(content)
+        .width(Length::Fill)
+        .padding(5)
+        .style(|_theme: &iced::Theme| {
+            container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba8(0, 0, 0, 0.9))),
+                border: iced::Border {
+                    radius: 50.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
+fn view_closing<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
+    let progress = (overlay.closing_animation_time / 0.5).min(1.0);
+    let alpha = 0.9 * (1.0 - progress);
+    
+    let collapse = canvas(CollapsingDots::new(progress))
+        .width(Length::Fixed(100.0))
+        .height(Length::Fixed(100.0));
+    
+    let content = column![
+        Space::with_height(Length::Fixed(10.0)),
+        collapse,
+        Space::with_height(Length::Fixed(10.0)),
+    ]
+    .align_x(Alignment::Center)
+    .width(Length::Fill);
+    
+    container(content)
+        .width(Length::Fill)
+        .padding(5)
+        .style(move |_theme: &iced::Theme| {
+            container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba8(0, 0, 0, alpha))),
+                border: iced::Border {
+                    radius: 50.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
+fn style(_overlay: &DictationOverlay, theme: &iced::Theme) -> iced_layershell::Appearance {
+    iced_layershell::Appearance {
+        background_color: Color::TRANSPARENT,
+        text_color: theme.palette().text,
     }
-
-    let mut shm: Option<wl_shm::WlShm> = None;
-    for global in app_state.registry_state.globals() {
-        if global.interface == "wl_shm" {
-            let version = global.version.min(1);
-            shm = Some(app_state.registry_state.bind_specific(
-                &qh2,
-                global.name,
-                version..=version,
-                (),
-            )?);
-            break;
-        }
-    }
-
-    let shm = shm.context("wl_shm not found")?;
-
-    let stride = current_width * 4;
-
-    let tmp_file = tempfile::tempfile()?;
-    tmp_file.set_len((stride * 400) as u64)?;
-
-    let pool = shm.create_pool(tmp_file.as_fd(), (stride * 400) as i32, &qh2, ());
-    let mut buffer = pool.create_buffer(
-        0,
-        current_width as i32,
-        current_height as i32,
-        stride as i32,
-        wl_shm::Format::Argb8888,
-        &qh2,
-        (),
-    );
-
-    let mut mmap = unsafe { MmapMut::map_mut(&tmp_file)? };
-    let mut renderer = SpectrumRenderer::new(current_width, current_height)?;
-
-    info!("Wayland layer surface ready");
-
-    let mut frame = 0;
-    let mut previous_state = GuiState::Listening;
-    let mut state_start_time = std::time::Instant::now();
-    let mut last_text = String::new();
-    let mut display_text = String::new();
-    let animation_start = std::time::Instant::now();
-
-    loop {
-        // Non-blocking dispatch to process Wayland events
-        let _ = event_queue.dispatch_pending(&mut app_state);
-        conn.flush()?;
-
-        if let Some(context) = &app_state.context {
-            let current_state = *gui_state.lock().unwrap();
-
-            // Track state changes
-            if current_state != previous_state {
-                info!("State transition: {:?} -> {:?}", previous_state, current_state);
-                state_start_time = std::time::Instant::now();
-
-                // When entering Processing, capture the current text
-                if current_state == GuiState::Processing {
-                    display_text = last_text.clone();
-                }
-
-                previous_state = current_state;
-            }
-
-            let state_elapsed = state_start_time.elapsed().as_secs_f32();
-            let total_elapsed = animation_start.elapsed().as_secs_f32();
-
-            // Exit after closing animation completes
-            if current_state == GuiState::Closing && state_elapsed > 0.6 {
-                info!("Closing animation complete, exiting");
-                break;
-            }
-
-            let values = band_values.lock().unwrap().clone();
-            let text = transcription_text.lock().unwrap().clone();
-
-            // Update display text only during Listening state
-            if current_state == GuiState::Listening {
-                display_text = text.clone();
-            }
-
-            // Resize window if text changed during Listening
-            if text != last_text && current_state == GuiState::Listening {
-                let new_height =
-                    renderer::calculate_text_height(&text, current_width).min(MAX_HEIGHT);
-                if new_height != current_height {
-                    current_height = new_height;
-                    renderer = SpectrumRenderer::new(current_width, current_height)?;
-
-                    buffer = pool.create_buffer(
-                        0,
-                        current_width as i32,
-                        current_height as i32,
-                        stride as i32,
-                        wl_shm::Format::Argb8888,
-                        &qh2,
-                        (),
-                    );
-
-                    if let Some(layer_surface) = &context.layer_surface {
-                        layer_surface.set_size(current_width, current_height);
-                        context.wl_surface.commit();
-                    }
-                }
-                last_text = text.clone();
-            }
-
-            let pixels = renderer.render(
-                &values,
-                &display_text,
-                current_state,
-                state_elapsed,
-                total_elapsed,
-            );
-
-            // Convert RGBA to BGRA (tiny-skia outputs RGBA, Wayland ARGB8888 is actually BGRA in memory)
-            let pixel_count = (current_width * current_height * 4) as usize;
-            for i in (0..pixel_count).step_by(4) {
-                mmap[i] = pixels[i + 2]; // B
-                mmap[i + 1] = pixels[i + 1]; // G
-                mmap[i + 2] = pixels[i]; // R
-                mmap[i + 3] = pixels[i + 3]; // A
-            }
-            mmap.flush()?;
-
-            context.wl_surface.attach(Some(&buffer), 0, 0);
-            context.wl_surface.damage_buffer(0, 0, current_width as i32, current_height as i32);
-            context.wl_surface.commit();
-
-            frame += 1;
-            if frame == 1 {
-                info!("GUI overlay visible");
-            }
-        }
-
-        std::thread::sleep(std::time::Duration::from_millis(16)); // ~60 FPS
-    }
-
-    Ok(())
 }

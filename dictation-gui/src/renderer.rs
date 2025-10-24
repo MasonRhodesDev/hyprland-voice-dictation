@@ -11,6 +11,13 @@ const CORNER_RADIUS_PROCESSING: f32 = 50.0;
 const BAR_WIDTH_FACTOR: f32 = 0.6;
 const BAR_SPACING: f32 = 8.0;
 
+const TEXT_MIN_LINES: usize = 1;
+const TEXT_MAX_LINES: usize = 2;
+const TEXT_FONT_SIZE: f32 = 18.0;
+const SPECTRUM_HEIGHT: f32 = 50.0;
+const TEXT_LINE_HEIGHT: f32 = 30.0;
+const TEXT_VERTICAL_PADDING: f32 = 10.0;
+
 #[derive(Clone, Copy)]
 struct Colors {
     background: Color,
@@ -32,11 +39,14 @@ pub struct SpectrumRenderer {
     pixmap: Pixmap,
     colors: Colors,
     closing_animation: ClosingAnimation,
+    current_height: f32,
+    target_height: f32,
+    height_animation_start: Option<std::time::Instant>,
 }
 
 pub fn calculate_text_height(text: &str, width: u32) -> u32 {
     if text.is_empty() {
-        return 55;
+        return (SPECTRUM_HEIGHT + TEXT_LINE_HEIGHT + TEXT_VERTICAL_PADDING * 2.0) as u32;
     }
 
     use fontdue::layout::{CoordinateSystem, HorizontalAlign, Layout, LayoutSettings, TextStyle};
@@ -48,31 +58,120 @@ pub fn calculate_text_height(text: &str, width: u32) -> u32 {
         layout.reset(&LayoutSettings {
             x: 10.0,
             y: 0.0,
-            max_width: Some(width as f32 - 20.0),
+            max_width: Some(width as f32 - 40.0),
             max_height: None,
             wrap_style: fontdue::layout::WrapStyle::Word,
             wrap_hard_breaks: true,
             horizontal_align: HorizontalAlign::Center,
             ..Default::default()
         });
-        layout.append(&[&font], &TextStyle::new(text, 18.0, 0));
+        layout.append(&[&font], &TextStyle::new(text, TEXT_FONT_SIZE, 0));
 
         let glyphs = layout.glyphs();
-        if let Some(last_glyph) = glyphs.last() {
-            let text_height = last_glyph.y as u32 + 25;
-            return 50 + text_height + 20;
+        if !glyphs.is_empty() {
+            let line_count = count_lines(&glyphs);
+            let clamped_lines = line_count.max(TEXT_MIN_LINES).min(TEXT_MAX_LINES);
+            let text_section_height = clamped_lines as f32 * TEXT_LINE_HEIGHT;
+            return (SPECTRUM_HEIGHT + text_section_height + TEXT_VERTICAL_PADDING * 2.0) as u32;
         }
     }
 
-    70
+    (SPECTRUM_HEIGHT + TEXT_LINE_HEIGHT + TEXT_VERTICAL_PADDING * 2.0) as u32
+}
+
+fn count_lines(glyphs: &[fontdue::layout::GlyphPosition]) -> usize {
+    if glyphs.is_empty() {
+        return 0;
+    }
+    
+    let mut lines = 1;
+    let mut last_y = glyphs[0].y;
+    
+    for glyph in glyphs.iter().skip(1) {
+        if (glyph.y - last_y).abs() > 5.0 {
+            lines += 1;
+            last_y = glyph.y;
+        }
+    }
+    
+    lines
+}
+
+struct LineInfo {
+    min_y: f32,
+    max_y: f32,
+}
+
+fn get_lines(glyphs: &[fontdue::layout::GlyphPosition]) -> Vec<LineInfo> {
+    if glyphs.is_empty() {
+        return vec![];
+    }
+    
+    let mut lines = vec![];
+    let mut current_line = LineInfo { min_y: glyphs[0].y, max_y: glyphs[0].y };
+    
+    for glyph in glyphs.iter().skip(1) {
+        if (glyph.y - current_line.min_y).abs() > 5.0 {
+            lines.push(current_line);
+            current_line = LineInfo { min_y: glyph.y, max_y: glyph.y };
+        } else {
+            current_line.min_y = current_line.min_y.min(glyph.y);
+            current_line.max_y = current_line.max_y.max(glyph.y);
+        }
+    }
+    lines.push(current_line);
+    
+    lines
+}
+
+fn ease_out_cubic(t: f32) -> f32 {
+    let t1 = t - 1.0;
+    t1 * t1 * t1 + 1.0
 }
 
 impl SpectrumRenderer {
     pub fn new(width: u32, height: u32) -> Result<Self> {
         let pixmap = Pixmap::new(width, height).expect("Failed to create pixmap");
         let colors = Self::load_colors();
+        let current_height = height as f32;
 
-        Ok(Self { width, height, pixmap, colors, closing_animation: ClosingAnimation::Collapse })
+        Ok(Self {
+            width,
+            height,
+            pixmap,
+            colors,
+            closing_animation: ClosingAnimation::Collapse,
+            current_height,
+            target_height: current_height,
+            height_animation_start: None,
+        })
+    }
+    
+    pub fn set_target_height(&mut self, target: f32) {
+        if (target - self.target_height).abs() > 0.5 {
+            self.target_height = target;
+            if self.height_animation_start.is_none() {
+                self.height_animation_start = Some(std::time::Instant::now());
+            }
+        }
+    }
+    
+    pub fn get_animated_height(&self) -> u32 {
+        self.current_height.round() as u32
+    }
+    
+    fn update_height_animation(&mut self) {
+        if let Some(_start_time) = self.height_animation_start {
+            let eased_progress = ease_out_cubic(0.15);
+            
+            self.current_height = self.current_height + 
+                (self.target_height - self.current_height) * eased_progress;
+            
+            if (self.current_height - self.target_height).abs() < 0.5 {
+                self.current_height = self.target_height;
+                self.height_animation_start = None;
+            }
+        }
     }
 
     fn load_colors() -> Colors {
@@ -131,6 +230,7 @@ impl SpectrumRenderer {
         state_time: f32,
         total_time: f32,
     ) -> &[u8] {
+        self.update_height_animation();
         self.pixmap.fill(Color::TRANSPARENT);
 
         match state {
@@ -144,28 +244,25 @@ impl SpectrumRenderer {
 
     fn render_listening(&mut self, band_values: &[f32], text: &str) {
         let mut paint = Paint::default();
-        paint.set_color(self.colors.background);
         paint.anti_alias = true;
 
-        // Background
-        let path = Self::create_rounded_rect(
+        // Draw background box only around content (no extra padding/borders)
+        paint.set_color(self.colors.background);
+        let content_path = Self::create_rounded_rect(
             0.0,
             0.0,
             self.width as f32,
             self.height as f32,
             CORNER_RADIUS,
         );
+        self.pixmap.fill_path(&content_path, &paint, FillRule::Winding, Transform::identity(), None);
 
-        self.pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-
-        // Spectrum bars (top section) - narrower with more spacing
-        let spectrum_height = 50.0;
+        // Spectrum bars (top section)
         let total_spacing = BAR_SPACING * (BAR_COUNT - 1) as f32;
-        let available_width = self.width as f32 - 40.0;
+        let available_width = self.width as f32 - 20.0;  // Reduced padding
         let bar_width = ((available_width - total_spacing) / BAR_COUNT as f32) * BAR_WIDTH_FACTOR;
-        let start_x =
-            20.0 + (available_width - (bar_width * BAR_COUNT as f32 + total_spacing)) / 2.0;
-        let center_y = spectrum_height / 2.0;
+        let start_x = 10.0 + (available_width - (bar_width * BAR_COUNT as f32 + total_spacing)) / 2.0;
+        let center_y = SPECTRUM_HEIGHT / 2.0;
         let bar_radius = 3.0;
 
         paint.set_color(self.colors.bar);
@@ -186,8 +283,8 @@ impl SpectrumRenderer {
             );
         }
 
-        // Render text below spectrum
-        self.render_text(text, 55.0);
+        // Render text below spectrum - centered at bottom
+        self.render_text(text, SPECTRUM_HEIGHT + 5.0);
     }
 
     fn render_processing(&mut self, _text: &str, animation_time: f32) {
@@ -279,9 +376,6 @@ impl SpectrumRenderer {
 
         let font_data = include_bytes!("/usr/share/fonts/google-carlito-fonts/Carlito-Regular.ttf");
         if let Ok(font) = Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()) {
-            let available_height = self.height as f32 - y_start - 10.0;
-
-            // Layout with CENTER alignment built-in
             let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
             layout.reset(&LayoutSettings {
                 x: 0.0,
@@ -293,28 +387,40 @@ impl SpectrumRenderer {
                 horizontal_align: HorizontalAlign::Center,
                 ..Default::default()
             });
-            layout.append(&[&font], &TextStyle::new(text, 18.0, 0));
+            layout.append(&[&font], &TextStyle::new(text, TEXT_FONT_SIZE, 0));
 
             let glyphs = layout.glyphs();
             if glyphs.is_empty() {
                 return;
             }
 
-            // Calculate scroll offset
-            let max_y =
-                glyphs.iter().map(|g| g.y).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0);
-            let total_text_height = max_y + 25.0;
-            let scroll_offset = if total_text_height > available_height {
-                total_text_height - available_height
+            let lines = get_lines(&glyphs);
+            
+            let visible_lines = if lines.len() > TEXT_MAX_LINES {
+                &lines[lines.len() - TEXT_MAX_LINES..]
+            } else {
+                &lines
+            };
+
+            let scroll_offset = if !visible_lines.is_empty() {
+                visible_lines[0].min_y
             } else {
                 0.0
             };
 
-            // Render glyphs (already centered by fontdue)
             for glyph in glyphs {
+                if !visible_lines.is_empty() {
+                    let in_visible_range = visible_lines.iter().any(|line| {
+                        (glyph.y - line.min_y).abs() <= 5.0
+                    });
+                    
+                    if !in_visible_range {
+                        continue;
+                    }
+                }
+
                 let (metrics, bitmap) = font.rasterize_config(glyph.key);
 
-                // Add left margin to center in window
                 let final_x = glyph.x + 20.0;
                 let final_y = glyph.y + y_start - scroll_offset;
 

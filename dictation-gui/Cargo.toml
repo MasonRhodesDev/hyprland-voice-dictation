@@ -11,21 +11,31 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# Iced GUI framework with layer-shell support
+iced = { version = "0.13", features = ["canvas", "tokio", "advanced"] }
+iced_layershell = "0.13.7"
+
 # Wayland layer-shell
 smithay-client-toolkit = "0.18"
 wayland-client = "0.31"
 wayland-protocols-wlr = "0.2"
 
-# Rendering
+# Legacy rendering (kept for compatibility)
 tiny-skia = "0.11"
 fontdue = "0.9"
-
-# Shared memory
-memmap2 = "0.9"
 tempfile = "3"
+memmap2 = "0.9"
 
 # FFT
 rustfft = "6"
+
+# Animation & Layout
+keyframe = "1.1"
+taffy = "0.5"
+cosmic-text = "0.12"
+lyon = "1.0"
+palette = "0.7"
+spin_sleep = "1.2"
 
 # Configuration
 toml = "0.8"
@@ -37,5 +47,5 @@ name = "dictation_gui"
 path = "src/lib.rs"
 
 [[bin]]
-name = "gui-test"
-path = "src/bin/gui-test.rs"
+name = "dictation-gui"
+path = "src/main.rs"
