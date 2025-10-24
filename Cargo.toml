@@ -1,3 +1,13 @@
+[package]
+name = "voice-dictation"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dictation-engine = { path = "dictation-engine" }
+dictation-gui = { path = "dictation-gui" }
+clap = { version = "4", features = ["derive"] }
+
 [workspace]
 members = [
     "dictation-engine",

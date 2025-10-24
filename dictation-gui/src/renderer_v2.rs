@@ -1,6 +1,6 @@
-use crate::animation::{CollapseAnimation, HeightAnimation, ease_spinner_rotation};
-use crate::{animations, GuiState};
+use crate::animation::{ease_spinner_rotation, CollapseAnimation, HeightAnimation};
 use crate::text_renderer::TextRenderer;
+use crate::{animations, GuiState};
 use anyhow::Result;
 use tiny_skia::*;
 
@@ -127,6 +127,7 @@ impl ModernRenderer {
         self.pixmap.fill(Color::TRANSPARENT);
 
         match state {
+            GuiState::PreListening => self.render_listening(band_values, text),
             GuiState::Listening => self.render_listening(band_values, text),
             GuiState::Processing => self.render_processing(total_time),
             GuiState::Closing => self.render_closing(state_time, total_time),
@@ -148,13 +149,20 @@ impl ModernRenderer {
             self.height as f32,
             CORNER_RADIUS,
         );
-        self.pixmap.fill_path(&content_path, &paint, FillRule::Winding, Transform::identity(), None);
+        self.pixmap.fill_path(
+            &content_path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
 
         // Spectrum bars
         let total_spacing = BAR_SPACING * (BAR_COUNT - 1) as f32;
         let available_width = self.width as f32 - 20.0;
         let bar_width = ((available_width - total_spacing) / BAR_COUNT as f32) * BAR_WIDTH_FACTOR;
-        let start_x = 10.0 + (available_width - (bar_width * BAR_COUNT as f32 + total_spacing)) / 2.0;
+        let start_x =
+            10.0 + (available_width - (bar_width * BAR_COUNT as f32 + total_spacing)) / 2.0;
         let center_y = SPECTRUM_HEIGHT / 2.0;
         let bar_radius = 3.0;
 
@@ -179,7 +187,7 @@ impl ModernRenderer {
         // Render text below spectrum
         let text_y = SPECTRUM_HEIGHT + 10.0;
         let text_height = self.height as f32 - text_y - 10.0;
-        
+
         self.text_renderer.render_text(
             &mut self.pixmap,
             text,

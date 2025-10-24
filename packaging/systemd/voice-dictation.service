@@ -4,8 +4,8 @@ After=pipewire.service
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/dictation-engine
-ExecStop=/usr/bin/pkill -TERM dictation-engine
+ExecStart=%h/.local/bin/voice-dictation daemon
+ExecStop=/usr/bin/pkill -TERM -f "voice-dictation daemon"
 Restart=no
 Environment="RUST_LOG=info"
 StandardOutput=journal

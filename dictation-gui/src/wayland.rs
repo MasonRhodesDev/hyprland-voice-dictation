@@ -64,16 +64,16 @@ impl AppState {
         let layer_surface = self.layer_shell.create_layer_surface(
             qh,
             wl_surface.clone(),
-            Layer::Overlay,  // OVERLAY layer draws above fullscreen apps
+            Layer::Overlay, // OVERLAY layer draws above fullscreen apps
             Some("voice-dictation-overlay"),
             None,
         );
 
         layer_surface.set_anchor(Anchor::BOTTOM);
-        layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);  // Never take focus
+        layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None); // Never take focus
         layer_surface.set_margin(0, 0, 50, 0);
         layer_surface.set_size(width, height);
-        layer_surface.set_exclusive_zone(-1);  // Don't reserve screen space
+        layer_surface.set_exclusive_zone(-1); // Don't reserve screen space
 
         wl_surface.commit();
 

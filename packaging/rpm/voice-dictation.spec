@@ -39,10 +39,9 @@ cargo build --release --jobs=%{_smp_build_ncpus}
 echo "Cargo build completed successfully"
 
 %install
-# Install binaries
+# Install binary
 mkdir -p %{buildroot}%{_bindir}
-install -m 755 target/release/dictation-engine %{buildroot}%{_bindir}/
-install -m 755 target/release/dictation-gui %{buildroot}%{_bindir}/
+install -m 755 target/release/voice-dictation %{buildroot}%{_bindir}/
 
 # Install scripts
 mkdir -p %{buildroot}%{_datadir}/%{name}/scripts
@@ -79,8 +78,7 @@ echo "  bind=\$Meh, V, exec, ~/scripts/dictation-control toggle"
 %files
 %license LICENSE-MIT LICENSE-APACHE
 %doc %{_docdir}/%{name}/README.md
-%{_bindir}/dictation-engine
-%{_bindir}/dictation-gui
+%{_bindir}/voice-dictation
 %{_datadir}/%{name}/scripts/dictation-control
 %{_datadir}/%{name}/scripts/send_confirm.py
 %{_datadir}/%{name}/models/

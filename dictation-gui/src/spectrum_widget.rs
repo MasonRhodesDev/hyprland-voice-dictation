@@ -3,7 +3,7 @@ use iced::advanced::renderer;
 use iced::advanced::widget::{self, Widget};
 use iced::advanced::{Clipboard, Shell};
 use iced::mouse;
-use iced::{Color, Element, Length, Rectangle, Size, Vector, event, Border};
+use iced::{event, Border, Color, Element, Length, Rectangle, Size, Vector};
 
 const MIN_BAR_HEIGHT: f32 = 5.0;
 const MAX_BAR_HEIGHT: f32 = 30.0;
@@ -19,11 +19,7 @@ pub struct SpectrumBars {
 
 impl SpectrumBars {
     pub fn new(values: Vec<f32>) -> Self {
-        Self {
-            values,
-            height: 50.0,
-            width: 400.0,
-        }
+        Self { values, height: 50.0, width: 400.0 }
     }
 
     pub fn height(mut self, height: f32) -> Self {
@@ -42,10 +38,7 @@ where
     Renderer: renderer::Renderer,
 {
     fn size(&self) -> Size<Length> {
-        Size {
-            width: Length::Fixed(self.width),
-            height: Length::Fixed(self.height),
-        }
+        Size { width: Length::Fixed(self.width), height: Length::Fixed(self.height) }
     }
 
     fn layout(
@@ -82,7 +75,9 @@ where
         let total_spacing = BAR_SPACING * (bar_count - 1) as f32;
         let available_width = bounds.width - 20.0;
         let bar_width = ((available_width - total_spacing) / bar_count as f32) * BAR_WIDTH_FACTOR;
-        let start_x = bounds.x + 10.0 + (available_width - (bar_width * bar_count as f32 + total_spacing)) / 2.0;
+        let start_x = bounds.x
+            + 10.0
+            + (available_width - (bar_width * bar_count as f32 + total_spacing)) / 2.0;
         let center_y = bounds.y + bounds.height / 2.0;
 
         for (i, &value) in self.values.iter().enumerate() {
@@ -90,12 +85,7 @@ where
             let x = start_x + i as f32 * (bar_width + BAR_SPACING);
             let y = center_y - bar_height / 2.0;
 
-            let bar_rect = Rectangle {
-                x,
-                y,
-                width: bar_width,
-                height: bar_height,
-            };
+            let bar_rect = Rectangle { x, y, width: bar_width, height: bar_height };
 
             renderer.fill_quad(
                 renderer::Quad {

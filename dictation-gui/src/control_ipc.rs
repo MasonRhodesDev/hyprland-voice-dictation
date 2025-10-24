@@ -45,7 +45,7 @@ impl ControlClient {
 
     pub async fn receive(&mut self) -> Result<ControlMessage> {
         if let Some(stream) = &mut self.stream {
-            let len = stream.read_u32_le().await?;
+            let len = stream.read_u32().await?;
             let mut buffer = vec![0u8; len as usize];
             stream.read_exact(&mut buffer).await?;
             let msg = serde_json::from_slice(&buffer)?;

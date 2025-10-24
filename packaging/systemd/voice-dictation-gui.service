@@ -4,8 +4,8 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/dictation-gui
-ExecStop=/usr/bin/pkill -TERM dictation-gui
+ExecStart=%h/.local/bin/voice-dictation gui
+ExecStop=/usr/bin/pkill -TERM -f "voice-dictation gui"
 Restart=no
 Environment="RUST_LOG=info"
 StandardOutput=journal

@@ -26,8 +26,7 @@ test-manual:  ## Run manual test with mic
 
 dev:  ## Quick rebuild and install for development
 	cargo build && \
-	cargo install --path dictation-engine --root ~/.local --force && \
-	cargo install --path dictation-gui --root ~/.local --force
+	cargo install --path . --root ~/.local --force
 
 fmt:  ## Format code
 	cargo fmt --all

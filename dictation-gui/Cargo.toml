@@ -45,7 +45,3 @@ dirs = "5"
 [lib]
 name = "dictation_gui"
 path = "src/lib.rs"
-
-[[bin]]
-name = "dictation-gui"
-path = "src/main.rs"

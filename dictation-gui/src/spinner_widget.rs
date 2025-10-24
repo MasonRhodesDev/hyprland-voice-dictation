@@ -29,21 +29,21 @@ impl<Message> canvas::Program<Message> for Spinner {
         _cursor: iced::mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
-        
+
         let center_x = bounds.width / 2.0;
         let center_y = bounds.height / 2.0;
-        
+
         let dot_color = Color::from_rgb(1.0, 1.0, 1.0);
-        
+
         for i in 0..DOT_COUNT {
             let angle = (self.time * ROTATION_SPEED) + (i as f32 * TAU / DOT_COUNT as f32);
             let x = center_x + ORBIT_RADIUS * angle.cos();
             let y = center_y + ORBIT_RADIUS * angle.sin();
-            
+
             let circle = Path::circle(Point::new(x, y), DOT_RADIUS);
             frame.fill(&circle, dot_color);
         }
-        
+
         vec![frame.into_geometry()]
     }
 }

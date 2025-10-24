@@ -5,20 +5,19 @@ echo ""
 
 # Kill ALL processes
 echo "1. Killing all dictation processes..."
-pkill -9 -f dictation-engine 2>/dev/null && echo "   - Killed dictation-engine processes" || echo "   - No dictation-engine processes"
-pkill -9 -f dictation-gui 2>/dev/null && echo "   - Killed dictation-gui processes" || echo "   - No dictation-gui processes"
+pkill -9 -f voice-dictation 2>/dev/null && echo "   - Killed voice-dictation processes" || echo "   - No voice-dictation processes"
 sleep 1
 
 # Show remaining processes
-REMAINING=$(ps aux | grep -E "dictation" | grep -v grep | wc -l)
+REMAINING=$(ps aux | grep -E "voice-dictation" | grep -v grep | wc -l)
 if [ "$REMAINING" -gt 0 ]; then
     echo "   WARNING: $REMAINING processes still running:"
-    ps aux | grep -E "dictation" | grep -v grep
+    ps aux | grep -E "voice-dictation" | grep -v grep
     echo ""
     read -p "   Force kill these? (y/N) " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        killall -9 dictation-engine dictation-gui 2>/dev/null
+        killall -9 voice-dictation 2>/dev/null
     fi
 fi
 
@@ -30,11 +29,10 @@ rm -f /tmp/voice-dictation*.sock
 rm -f /tmp/dictation*.log
 echo "   - Cleaned /tmp/"
 
-# Remove binaries
+# Remove binary
 echo ""
-echo "3. Removing binaries..."
-rm -f ~/.local/bin/dictation-engine
-rm -f ~/.local/bin/dictation-gui
+echo "3. Removing binary..."
+rm -f ~/.local/bin/voice-dictation
 echo "   - Removed from ~/.local/bin/"
 
 # Remove scripts

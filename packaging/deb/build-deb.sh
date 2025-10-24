@@ -21,11 +21,9 @@ cd "$SCRIPT_DIR/../.."
 cargo build --release
 
 echo ""
-echo "3. Copying binaries..."
-cp target/release/dictation-engine "$PKG_DIR/usr/bin/"
-cp target/release/dictation-gui "$PKG_DIR/usr/bin/"
-chmod +x "$PKG_DIR/usr/bin/dictation-engine"
-chmod +x "$PKG_DIR/usr/bin/dictation-gui"
+echo "3. Copying binary..."
+cp target/release/voice-dictation "$PKG_DIR/usr/bin/"
+chmod +x "$PKG_DIR/usr/bin/voice-dictation"
 
 echo ""
 echo "4. Copying scripts..."

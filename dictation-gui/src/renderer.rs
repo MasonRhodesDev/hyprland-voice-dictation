@@ -83,17 +83,17 @@ fn count_lines(glyphs: &[fontdue::layout::GlyphPosition]) -> usize {
     if glyphs.is_empty() {
         return 0;
     }
-    
+
     let mut lines = 1;
     let mut last_y = glyphs[0].y;
-    
+
     for glyph in glyphs.iter().skip(1) {
         if (glyph.y - last_y).abs() > 5.0 {
             lines += 1;
             last_y = glyph.y;
         }
     }
-    
+
     lines
 }
 
@@ -106,10 +106,10 @@ fn get_lines(glyphs: &[fontdue::layout::GlyphPosition]) -> Vec<LineInfo> {
     if glyphs.is_empty() {
         return vec![];
     }
-    
+
     let mut lines = vec![];
     let mut current_line = LineInfo { min_y: glyphs[0].y, max_y: glyphs[0].y };
-    
+
     for glyph in glyphs.iter().skip(1) {
         if (glyph.y - current_line.min_y).abs() > 5.0 {
             lines.push(current_line);
@@ -120,7 +120,7 @@ fn get_lines(glyphs: &[fontdue::layout::GlyphPosition]) -> Vec<LineInfo> {
         }
     }
     lines.push(current_line);
-    
+
     lines
 }
 
@@ -146,7 +146,7 @@ impl SpectrumRenderer {
             height_animation_start: None,
         })
     }
-    
+
     pub fn set_target_height(&mut self, target: f32) {
         if (target - self.target_height).abs() > 0.5 {
             self.target_height = target;
@@ -155,18 +155,18 @@ impl SpectrumRenderer {
             }
         }
     }
-    
+
     pub fn get_animated_height(&self) -> u32 {
         self.current_height.round() as u32
     }
-    
+
     fn update_height_animation(&mut self) {
         if let Some(_start_time) = self.height_animation_start {
             let eased_progress = ease_out_cubic(0.15);
-            
-            self.current_height = self.current_height + 
-                (self.target_height - self.current_height) * eased_progress;
-            
+
+            self.current_height =
+                self.current_height + (self.target_height - self.current_height) * eased_progress;
+
             if (self.current_height - self.target_height).abs() < 0.5 {
                 self.current_height = self.target_height;
                 self.height_animation_start = None;
@@ -234,6 +234,7 @@ impl SpectrumRenderer {
         self.pixmap.fill(Color::TRANSPARENT);
 
         match state {
+            GuiState::PreListening => self.render_listening(band_values, text),
             GuiState::Listening => self.render_listening(band_values, text),
             GuiState::Processing => self.render_processing(text, total_time),
             GuiState::Closing => self.render_closing(text, state_time, total_time),
@@ -255,13 +256,20 @@ impl SpectrumRenderer {
             self.height as f32,
             CORNER_RADIUS,
         );
-        self.pixmap.fill_path(&content_path, &paint, FillRule::Winding, Transform::identity(), None);
+        self.pixmap.fill_path(
+            &content_path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
 
         // Spectrum bars (top section)
         let total_spacing = BAR_SPACING * (BAR_COUNT - 1) as f32;
-        let available_width = self.width as f32 - 20.0;  // Reduced padding
+        let available_width = self.width as f32 - 20.0; // Reduced padding
         let bar_width = ((available_width - total_spacing) / BAR_COUNT as f32) * BAR_WIDTH_FACTOR;
-        let start_x = 10.0 + (available_width - (bar_width * BAR_COUNT as f32 + total_spacing)) / 2.0;
+        let start_x =
+            10.0 + (available_width - (bar_width * BAR_COUNT as f32 + total_spacing)) / 2.0;
         let center_y = SPECTRUM_HEIGHT / 2.0;
         let bar_radius = 3.0;
 
@@ -395,25 +403,21 @@ impl SpectrumRenderer {
             }
 
             let lines = get_lines(&glyphs);
-            
+
             let visible_lines = if lines.len() > TEXT_MAX_LINES {
                 &lines[lines.len() - TEXT_MAX_LINES..]
             } else {
                 &lines
             };
 
-            let scroll_offset = if !visible_lines.is_empty() {
-                visible_lines[0].min_y
-            } else {
-                0.0
-            };
+            let scroll_offset =
+                if !visible_lines.is_empty() { visible_lines[0].min_y } else { 0.0 };
 
             for glyph in glyphs {
                 if !visible_lines.is_empty() {
-                    let in_visible_range = visible_lines.iter().any(|line| {
-                        (glyph.y - line.min_y).abs() <= 5.0
-                    });
-                    
+                    let in_visible_range =
+                        visible_lines.iter().any(|line| (glyph.y - line.min_y).abs() <= 5.0);
+
                     if !in_visible_range {
                         continue;
                     }
