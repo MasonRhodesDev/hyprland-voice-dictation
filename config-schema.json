@@ -1,0 +1,210 @@
+{
+  "version": "1.0",
+  "title": "Voice Dictation Configuration",
+  "description": "Configuration for voice dictation system",
+  "sections": [
+    {
+      "id": "daemon",
+      "title": "Daemon",
+      "description": "Daemon engine settings",
+      "fields": [
+        {
+          "id": "audio_device",
+          "label": "Audio Device",
+          "description": "Audio input device to use for recording",
+          "type": "enum",
+          "options_source": {
+            "type": "script",
+            "command": "bash scripts/list-audio-devices.sh"
+          },
+          "default": "default",
+          "ui_widget": "dropdown"
+        },
+        {
+          "id": "sample_rate",
+          "label": "Sample Rate",
+          "description": "Audio sample rate in Hz",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["8000", "16000", "22050", "44100", "48000"]
+          },
+          "default": "16000",
+          "ui_widget": "dropdown"
+        },
+        {
+          "id": "vad_threshold",
+          "label": "VAD Threshold",
+          "description": "Voice activity detection threshold (0.0-1.0)",
+          "type": "float",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "ui_widget": "number_input"
+        },
+        {
+          "id": "language",
+          "label": "Language",
+          "description": "Language for speech recognition",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["en", "es", "fr", "de", "ar", "cn", "ja", "ru", "pt", "it", "nl", "hi"]
+          },
+          "default": "en",
+          "ui_widget": "dropdown"
+        },
+        {
+          "id": "preview_model",
+          "label": "Preview Model (Fast)",
+          "description": "Model for real-time GUI feedback during recording",
+          "type": "enum",
+          "options_source": {
+            "type": "script",
+            "command": "bash scripts/list-vosk-models.sh ${daemon.language}",
+            "depends_on": ["daemon.language"],
+            "cache_duration": 3600
+          },
+          "default": "vosk-model-en-us-daanzu-20200905-lgraph",
+          "ui_widget": "dropdown_searchable"
+        },
+        {
+          "id": "preview_model_custom_path",
+          "label": "Custom Preview Model Path",
+          "description": "Path to custom preview model directory",
+          "type": "path",
+          "default": "$HOME/.config/voice-dictation/models/",
+          "ui_widget": "file_picker",
+          "visible_when": "daemon.preview_model == 'custom'"
+        },
+        {
+          "id": "final_model",
+          "label": "Final Model (Accurate)",
+          "description": "Model for final accurate transcription processing",
+          "type": "enum",
+          "options_source": {
+            "type": "script",
+            "command": "bash scripts/list-vosk-models.sh ${daemon.language}",
+            "depends_on": ["daemon.language"],
+            "cache_duration": 3600
+          },
+          "default": "vosk-model-en-us-0.22",
+          "ui_widget": "dropdown_searchable"
+        },
+        {
+          "id": "final_model_custom_path",
+          "label": "Custom Final Model Path",
+          "description": "Path to custom final model directory",
+          "type": "path",
+          "default": "$HOME/.config/voice-dictation/models/",
+          "ui_widget": "file_picker",
+          "visible_when": "daemon.final_model == 'custom'"
+        }
+      ]
+    },
+    {
+      "id": "gui_general",
+      "title": "GUI General",
+      "description": "General GUI settings",
+      "fields": [
+        {
+          "id": "window_width",
+          "label": "Window Width",
+          "description": "Width of the overlay window in pixels",
+          "type": "number",
+          "default": 400,
+          "min": 200,
+          "max": 1920,
+          "ui_widget": "number_input"
+        },
+        {
+          "id": "window_height",
+          "label": "Window Height",
+          "description": "Height of the overlay window in pixels",
+          "type": "number",
+          "default": 200,
+          "min": 100,
+          "max": 1080,
+          "ui_widget": "number_input"
+        },
+        {
+          "id": "position",
+          "label": "Position",
+          "description": "Position of the overlay on screen",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["top", "center", "bottom"]
+          },
+          "default": "center",
+          "ui_widget": "dropdown"
+        },
+        {
+          "id": "opacity",
+          "label": "Opacity",
+          "description": "Window opacity (0.0-1.0)",
+          "type": "float",
+          "default": 0.95,
+          "min": 0.1,
+          "max": 1.0,
+          "ui_widget": "number_input"
+        },
+        {
+          "id": "show_spectrum",
+          "label": "Show Spectrum",
+          "description": "Display audio spectrum visualization",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle"
+        }
+      ]
+    },
+    {
+      "id": "animations",
+      "title": "Animations",
+      "description": "Animation settings",
+      "fields": [
+        {
+          "id": "enable_animations",
+          "label": "Enable Animations",
+          "description": "Enable/disable all animations",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle"
+        },
+        {
+          "id": "animation_speed",
+          "label": "Animation Speed",
+          "description": "Animation speed multiplier",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.5,
+          "max": 3.0,
+          "ui_widget": "number_input"
+        },
+        {
+          "id": "fade_duration",
+          "label": "Fade Duration",
+          "description": "Duration of fade animations in milliseconds",
+          "type": "number",
+          "default": 200,
+          "min": 50,
+          "max": 1000,
+          "ui_widget": "number_input"
+        },
+        {
+          "id": "easing",
+          "label": "Easing",
+          "description": "Animation easing function",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["linear", "ease-in", "ease-out", "ease-in-out"]
+          },
+          "default": "ease-out",
+          "ui_widget": "dropdown"
+        }
+      ]
+    }
+  ]
+}

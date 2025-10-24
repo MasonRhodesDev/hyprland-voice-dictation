@@ -22,9 +22,40 @@ cp scripts/send_confirm.py ~/scripts/
 chmod +x ~/scripts/dictation-control
 chmod +x ~/scripts/send_confirm.py
 
+# Setup config directory and download default models
+echo ""
+echo "4. Setting up configuration and models..."
+mkdir -p "$HOME/.config/voice-dictation/models"
+
+cd "$HOME/.config/voice-dictation/models"
+
+# Download default preview model (fast)
+if [ ! -d "vosk-model-en-us-daanzu-20200905-lgraph" ]; then
+    echo "  Downloading preview model (fast, ~130MB)..."
+    curl -L -O https://alphacephei.com/vosk/models/vosk-model-en-us-daanzu-20200905-lgraph.zip
+    unzip -q vosk-model-en-us-daanzu-20200905-lgraph.zip
+    rm vosk-model-en-us-daanzu-20200905-lgraph.zip
+    echo "  ✓ Preview model installed"
+else
+    echo "  ✓ Preview model already exists"
+fi
+
+# Download default final model (accurate)
+if [ ! -d "vosk-model-en-us-0.22" ]; then
+    echo "  Downloading final model (accurate, ~1.8GB)..."
+    curl -L -O https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip
+    unzip -q vosk-model-en-us-0.22.zip
+    rm vosk-model-en-us-0.22.zip
+    echo "  ✓ Final model installed"
+else
+    echo "  ✓ Final model already exists"
+fi
+
+cd - > /dev/null
+
 # Cleanup old state
 echo ""
-echo "4. Cleaning up old state files..."
+echo "5. Cleaning up old state files..."
 pkill -9 -f voice-dictation 2>/dev/null || true
 rm -f /tmp/voice-dictation-active /tmp/voice-dictation-state
 rm -f /tmp/voice-dictation*.sock
@@ -36,6 +67,7 @@ echo "Usage:"
 echo "  - Direct:           voice-dictation toggle"
 echo "  - Via script:       ~/scripts/dictation-control toggle"
 echo "  - Check status:     voice-dictation status"
+echo "  - Configure:        voice-dictation config"
 echo ""
 echo "Note: Make sure your Hyprland keybind points to:"
 echo "  bind=\$Meh, V, exec, voice-dictation toggle"
@@ -46,3 +78,4 @@ echo "  voice-dictation start    - Start recording session"
 echo "  voice-dictation stop     - Stop recording session"
 echo "  voice-dictation confirm  - Confirm and finalize transcription"
 echo "  voice-dictation status   - Show current status"
+echo "  voice-dictation config   - Open configuration TUI"

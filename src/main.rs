@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
+use schema_tui::SchemaTUIBuilder;
 
 const STATE_FILE: &str = "/tmp/voice-dictation-state";
 const MEDIA_STATE_FILE: &str = "/tmp/voice-dictation-media-state";
@@ -33,6 +34,8 @@ enum Commands {
     Toggle,
     #[command(about = "Show current status")]
     Status,
+    #[command(about = "Open configuration TUI")]
+    Config,
 }
 
 fn get_state() -> String {
@@ -221,6 +224,31 @@ fn show_status() {
     }
 }
 
+fn open_config() -> Result<(), Box<dyn std::error::Error>> {
+    let home = std::env::var("HOME")?;
+    let config_dir = PathBuf::from(&home).join(".config/voice-dictation");
+    let config_path = config_dir.join("config.toml");
+    let schema_path = PathBuf::from(&home)
+        .join("repos/voice-dictation-rust/config-schema.json");
+
+    if !config_dir.exists() {
+        fs::create_dir_all(&config_dir)?;
+    }
+
+    if !config_path.exists() {
+        fs::write(&config_path, "")?;
+    }
+
+    let mut tui = SchemaTUIBuilder::new()
+        .schema_file(&schema_path)?
+        .config_file(&config_path)?
+        .build()?;
+
+    tui.run()?;
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -245,6 +273,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Status => {
             show_status();
+        }
+        Commands::Config => {
+            open_config()?;
         }
     }
 
