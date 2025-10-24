@@ -1,5 +1,5 @@
 use iced::widget::{canvas, column, container, scrollable, text};
-use iced::{Alignment, Color, Element, Length, Task, time};
+use iced::{alignment, Alignment, Color, Element, Length, Task, time};
 use iced_layershell::build_pattern::application;
 use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
 use iced_layershell::settings::LayerShellSettings;
@@ -25,6 +25,23 @@ const SAMPLE_RATE: u32 = 16000;
 const FFT_SIZE: usize = 512;
 const SOCKET_PATH: &str = "/tmp/voice-dictation.sock";
 const CONTROL_SOCKET_PATH: &str = "/tmp/voice-dictation-control.sock";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextAlign {
+    Left,
+    Center,
+    Right,
+}
+
+impl TextAlign {
+    fn to_horizontal(&self) -> alignment::Horizontal {
+        match self {
+            TextAlign::Left => alignment::Horizontal::Left,
+            TextAlign::Center => alignment::Horizontal::Center,
+            TextAlign::Right => alignment::Horizontal::Right,
+        }
+    }
+}
 
 pub fn main() -> Result<(), iced_layershell::Error> {
     let log_level = std::env::var("GUI_LOG")
@@ -80,9 +97,13 @@ const SPECTRUM_WIDTH: f32 = 400.0;
 const SPINNER_SIZE: f32 = 100.0;
 const CONTAINER_PADDING: f32 = 10.0;
 const CONTENT_SPACING: f32 = 5.0;
-const TEXT_LINE_HEIGHT: f32 = 24.0;
+const TEXT_LINE_HEIGHT: f32 = 22.0;
 const TEXT_SIZE: f32 = 18.0;
-const MAX_TEXT_LINES: usize = 4;
+const MAX_TEXT_LINES: usize = 2;
+
+const CHAR_WIDTH: f32 = TEXT_SIZE * 0.6;
+const CHARS_PER_LINE: usize = ((SPECTRUM_WIDTH - CONTAINER_PADDING * 2.0) / CHAR_WIDTH) as usize;
+const TEXT_ALIGNMENT: TextAlign = TextAlign::Center;
 
 const LISTENING_WIDTH: f32 = SPECTRUM_WIDTH;
 const PROCESSING_SIZE: (f32, f32) = (SPINNER_SIZE + CONTAINER_PADDING * 2.0, SPINNER_SIZE + CONTAINER_PADDING * 2.0);
@@ -159,9 +180,11 @@ fn calculate_listening_size(transcription: &str) -> (f32, f32) {
         return (LISTENING_WIDTH, base_height);
     }
     
-    let line_count = transcription.lines().count().max(1);
-    let clamped_lines = line_count.min(MAX_TEXT_LINES);
-    let text_height = clamped_lines as f32 * TEXT_LINE_HEIGHT;
+    let char_count = transcription.len();
+    let line_count = ((char_count as f32 / CHARS_PER_LINE as f32).ceil() as usize)
+        .max(1)
+        .min(MAX_TEXT_LINES);
+    let text_height = line_count as f32 * TEXT_LINE_HEIGHT;
     
     let total_height = base_height + CONTENT_SPACING + text_height;
     (LISTENING_WIDTH, total_height)
@@ -352,15 +375,15 @@ fn view_transition_prelistening_to_listening<'a>(overlay: &'a DictationOverlay) 
 }
 
 fn view_transition_listening_to_processing<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
-    use iced::widget::stack;
+    let progress = overlay.transition_progress;
     
-    let listening_alpha = 1.0 - overlay.transition_progress;
-    let processing_alpha = overlay.transition_progress;
-    
-    let listening_layer = view_listening_with_alpha(overlay, listening_alpha);
-    let processing_layer = view_processing_with_alpha(overlay, processing_alpha);
-    
-    stack![listening_layer, processing_layer].into()
+    if progress < 0.5 {
+        let listening_alpha = 1.0 - (progress * 2.0);
+        view_listening_with_alpha(overlay, listening_alpha)
+    } else {
+        let processing_alpha = (progress - 0.5) * 2.0;
+        view_processing_with_alpha(overlay, processing_alpha)
+    }
 }
 
 fn view_listening<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
@@ -388,13 +411,26 @@ fn view_listening_with_alpha<'a>(overlay: &'a DictationOverlay, alpha: f32) -> E
     
     if !overlay.transcription.is_empty() {
         let text_color = Color::from_rgba(1.0, 1.0, 1.0, alpha);
-        let text_content = text(&overlay.transcription).size(TEXT_SIZE).color(text_color);
+        let text_widget = text(&overlay.transcription)
+            .size(TEXT_SIZE)
+            .color(text_color);
+        
+        let text_content = container(text_widget)
+            .width(Length::Fill)
+            .align_x(match TEXT_ALIGNMENT {
+                TextAlign::Left => Alignment::Start,
+                TextAlign::Center => Alignment::Center,
+                TextAlign::Right => Alignment::End,
+            });
         
         let text_height = height - SPECTRUM_HEIGHT - (CONTAINER_PADDING * 2.0) - CONTENT_SPACING;
         
         let scrollable_text = scrollable(text_content)
             .width(Length::Fill)
             .height(Length::Fixed(text_height))
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::default().anchor(scrollable::Anchor::End)
+            ))
             .style(|_theme: &iced::Theme, _status| scrollable::Style {
                 container: container::Style::default(),
                 vertical_rail: scrollable::Rail {
