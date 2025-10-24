@@ -10,8 +10,8 @@ pub struct SpectrumAnalyzer {
 }
 
 impl SpectrumAnalyzer {
-    pub fn new(fft_size: usize, sample_rate: u32) -> Self {
-        Self { fft_size, sample_rate, smoothed_bands: vec![0.0; 8], smoothing_factor: 0.6 }
+    pub fn new(fft_size: usize, sample_rate: u32, smoothing_factor: f32) -> Self {
+        Self { fft_size, sample_rate, smoothed_bands: vec![0.0; 8], smoothing_factor }
     }
 
     pub fn process(&mut self, samples: &[f32]) -> Vec<f32> {

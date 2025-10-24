@@ -3,23 +3,33 @@ use iced::advanced::renderer;
 use iced::advanced::widget::{self, Widget};
 use iced::advanced::{Clipboard, Shell};
 use iced::mouse;
-use iced::{event, Border, Color, Element, Length, Rectangle, Size, Vector};
-
-const MIN_BAR_HEIGHT: f32 = 5.0;
-const MAX_BAR_HEIGHT: f32 = 30.0;
-const BAR_WIDTH_FACTOR: f32 = 0.6;
-const BAR_SPACING: f32 = 8.0;
-const BAR_RADIUS: f32 = 3.0;
+use iced::{event, Border, Color, Element, Length, Rectangle, Size};
 
 pub struct SpectrumBars {
     values: Vec<f32>,
     height: f32,
     width: f32,
+    min_bar_height: f32,
+    max_bar_height: f32,
+    bar_width_factor: f32,
+    bar_spacing: f32,
+    bar_radius: f32,
+    opacity: f32,
 }
 
 impl SpectrumBars {
-    pub fn new(values: Vec<f32>) -> Self {
-        Self { values, height: 50.0, width: 400.0 }
+    pub fn new(values: Vec<f32>, min_bar_height: f32, max_bar_height: f32, bar_width_factor: f32, bar_spacing: f32, bar_radius: f32, opacity: f32) -> Self {
+        Self { 
+            values, 
+            height: 50.0, 
+            width: 400.0,
+            min_bar_height,
+            max_bar_height,
+            bar_width_factor,
+            bar_spacing,
+            bar_radius,
+            opacity,
+        }
     }
 
     pub fn height(mut self, height: f32) -> Self {
@@ -72,32 +82,34 @@ where
             return;
         }
 
-        let total_spacing = BAR_SPACING * (bar_count - 1) as f32;
+        let total_spacing = self.bar_spacing * (bar_count - 1) as f32;
         let available_width = bounds.width - 20.0;
-        let bar_width = ((available_width - total_spacing) / bar_count as f32) * BAR_WIDTH_FACTOR;
+        let bar_width = ((available_width - total_spacing) / bar_count as f32) * self.bar_width_factor;
         let start_x = bounds.x
             + 10.0
             + (available_width - (bar_width * bar_count as f32 + total_spacing)) / 2.0;
         let center_y = bounds.y + bounds.height / 2.0;
 
         for (i, &value) in self.values.iter().enumerate() {
-            let bar_height = MIN_BAR_HEIGHT + value * (MAX_BAR_HEIGHT - MIN_BAR_HEIGHT);
-            let x = start_x + i as f32 * (bar_width + BAR_SPACING);
+            let bar_height = self.min_bar_height + value * (self.max_bar_height - self.min_bar_height);
+            let x = start_x + i as f32 * (bar_width + self.bar_spacing);
             let y = center_y - bar_height / 2.0;
 
             let bar_rect = Rectangle { x, y, width: bar_width, height: bar_height };
+
+            let color = Color { r: 1.0, g: 1.0, b: 1.0, a: self.opacity };
 
             renderer.fill_quad(
                 renderer::Quad {
                     bounds: bar_rect,
                     border: Border {
-                        radius: BAR_RADIUS.into(),
+                        radius: self.bar_radius.into(),
                         width: 0.0,
                         color: Color::TRANSPARENT,
                     },
                     shadow: Default::default(),
                 },
-                Color::WHITE,
+                color,
             );
         }
     }

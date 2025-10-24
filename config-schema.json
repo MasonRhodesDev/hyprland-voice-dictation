@@ -11,7 +11,7 @@
         {
           "id": "audio_device",
           "label": "Audio Device",
-          "description": "Audio input device to use for recording",
+          "description": "ALSA audio input device name (e.g., 'default', 'pipewire', 'sysdefault:CARD=Pro'). Run 'arecord -L' to see all available devices.",
           "type": "enum",
           "options_source": {
             "type": "script",
@@ -136,7 +136,7 @@
             "type": "static",
             "values": ["top", "center", "bottom"]
           },
-          "default": "center",
+          "default": "bottom",
           "ui_widget": "dropdown"
         },
         {
@@ -162,20 +162,20 @@
     {
       "id": "animations",
       "title": "Animations",
-      "description": "Animation settings",
+      "description": "State transition animations (element animations are in Elements section)",
       "fields": [
         {
           "id": "enable_animations",
           "label": "Enable Animations",
-          "description": "Enable/disable all animations",
+          "description": "Master toggle for all animations",
           "type": "boolean",
           "default": true,
           "ui_widget": "toggle"
         },
         {
           "id": "animation_speed",
-          "label": "Animation Speed",
-          "description": "Animation speed multiplier",
+          "label": "Global Animation Speed",
+          "description": "Global animation speed multiplier",
           "type": "float",
           "default": 1.0,
           "min": 0.5,
@@ -183,26 +183,443 @@
           "ui_widget": "number_input"
         },
         {
-          "id": "fade_duration",
-          "label": "Fade Duration",
-          "description": "Duration of fade animations in milliseconds",
+          "id": "startup_fade_duration",
+          "label": "Startup Fade Duration",
+          "description": "Duration of initial fade-in when app starts (milliseconds)",
+          "type": "number",
+          "default": 300,
+          "min": 50,
+          "max": 1000,
+          "ui_widget": "number_input",
+          "subsection": "startup"
+        },
+        {
+          "id": "startup_fade_easing",
+          "label": "Startup Fade Easing",
+          "description": "Easing function for startup fade-in",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["ease-in", "ease-in-out-quad", "linear"]
+          },
+          "default": "ease-in-out-quad",
+          "ui_widget": "dropdown",
+          "subsection": "startup"
+        },
+        {
+          "id": "transition_to_listening_duration",
+          "label": "Transition to Listening Duration",
+          "description": "Duration of PreListening → Listening transition (milliseconds)",
+          "type": "number",
+          "default": 500,
+          "min": 100,
+          "max": 1500,
+          "ui_widget": "number_input",
+          "subsection": "transition_to_listening"
+        },
+        {
+          "id": "transition_to_listening_easing",
+          "label": "Transition to Listening Easing",
+          "description": "Easing function for PreListening → Listening morph",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["ease-in-out-cubic", "ease-in-out-quad", "ease-out", "linear"]
+          },
+          "default": "ease-in-out-cubic",
+          "ui_widget": "dropdown",
+          "subsection": "transition_to_listening"
+        },
+        {
+          "id": "listening_content_out_fade_duration",
+          "label": "Listening Content Fade Out Duration",
+          "description": "Duration for Listening content (spectrum+text) to fade out (milliseconds)",
           "type": "number",
           "default": 200,
           "min": 50,
           "max": 1000,
-          "ui_widget": "number_input"
+          "ui_widget": "number_input",
+          "subsection": "transition_listening_content_out"
         },
         {
-          "id": "easing",
-          "label": "Easing",
-          "description": "Animation easing function",
+          "id": "listening_content_out_fade_easing",
+          "label": "Listening Content Fade Out Easing",
+          "description": "Easing function for Listening content fade out",
           "type": "enum",
           "options_source": {
             "type": "static",
-            "values": ["linear", "ease-in", "ease-out", "ease-in-out"]
+            "values": ["ease-out", "ease-in-out-quad", "linear"]
           },
           "default": "ease-out",
-          "ui_widget": "dropdown"
+          "ui_widget": "dropdown",
+          "subsection": "transition_listening_content_out"
+        },
+        {
+          "id": "processing_content_in_fade_duration",
+          "label": "Processing Content Fade In Duration",
+          "description": "Duration for Processing content (spinner) to fade in (milliseconds)",
+          "type": "number",
+          "default": 200,
+          "min": 50,
+          "max": 1000,
+          "ui_widget": "number_input",
+          "subsection": "transition_processing_content_in"
+        },
+        {
+          "id": "processing_content_in_fade_easing",
+          "label": "Processing Content Fade In Easing",
+          "description": "Easing function for Processing content fade in",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["ease-in", "ease-in-out-quad", "linear"]
+          },
+          "default": "ease-in",
+          "ui_widget": "dropdown",
+          "subsection": "transition_processing_content_in"
+        },
+        {
+          "id": "closing_background_duration",
+          "label": "Closing Background Duration",
+          "description": "Duration of background collapse when closing (milliseconds)",
+          "type": "number",
+          "default": 500,
+          "min": 100,
+          "max": 2000,
+          "ui_widget": "number_input",
+          "subsection": "closing_background"
+        },
+        {
+          "id": "closing_background_easing",
+          "label": "Closing Background Easing",
+          "description": "Easing function for background collapse animation",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["ease-in-cubic", "ease-in", "linear"]
+          },
+          "default": "ease-in-cubic",
+          "ui_widget": "dropdown",
+          "subsection": "closing_background"
+        }
+      ]
+    },
+    {
+      "id": "elements",
+      "title": "Elements",
+      "description": "Visual element settings",
+      "fields": [
+        {
+          "id": "spectrum_enabled",
+          "label": "Spectrum Visualization",
+          "description": "Enable audio spectrum visualization",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle",
+          "subsection": "spectrum"
+        },
+        {
+          "id": "spectrum_min_bar_height",
+          "label": "Minimum Bar Height",
+          "description": "Minimum height of spectrum bars in pixels",
+          "type": "float",
+          "default": 5.0,
+          "min": 1.0,
+          "max": 20.0,
+          "ui_widget": "number_input",
+          "subsection": "spectrum",
+          "visible_when": "elements.spectrum_enabled == true"
+        },
+        {
+          "id": "spectrum_max_bar_height",
+          "label": "Maximum Bar Height",
+          "description": "Maximum height of spectrum bars in pixels",
+          "type": "float",
+          "default": 30.0,
+          "min": 10.0,
+          "max": 100.0,
+          "ui_widget": "number_input",
+          "subsection": "spectrum",
+          "visible_when": "elements.spectrum_enabled == true"
+        },
+        {
+          "id": "spectrum_bar_width_factor",
+          "label": "Bar Width Factor",
+          "description": "Bar width multiplier (0.1 = thin, 1.0 = full)",
+          "type": "float",
+          "default": 0.6,
+          "min": 0.1,
+          "max": 1.0,
+          "ui_widget": "number_input",
+          "subsection": "spectrum",
+          "visible_when": "elements.spectrum_enabled == true"
+        },
+        {
+          "id": "spectrum_bar_spacing",
+          "label": "Bar Spacing",
+          "description": "Spacing between bars in pixels",
+          "type": "float",
+          "default": 8.0,
+          "min": 0.0,
+          "max": 20.0,
+          "ui_widget": "number_input",
+          "subsection": "spectrum",
+          "visible_when": "elements.spectrum_enabled == true"
+        },
+        {
+          "id": "spectrum_bar_radius",
+          "label": "Bar Corner Radius",
+          "description": "Corner radius of spectrum bars in pixels",
+          "type": "float",
+          "default": 3.0,
+          "min": 0.0,
+          "max": 10.0,
+          "ui_widget": "number_input",
+          "subsection": "spectrum",
+          "visible_when": "elements.spectrum_enabled == true"
+        },
+        {
+          "id": "spectrum_opacity",
+          "label": "Spectrum Opacity",
+          "description": "Opacity of spectrum bars (0.0 = transparent, 1.0 = opaque)",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "ui_widget": "number_input",
+          "subsection": "spectrum",
+          "visible_when": "elements.spectrum_enabled == true"
+        },
+        {
+          "id": "spectrum_smoothing_factor",
+          "label": "Spectrum Smoothing",
+          "description": "Temporal smoothing between audio frames (0.0 = no smoothing, 1.0 = maximum smoothing)",
+          "type": "float",
+          "default": 0.6,
+          "min": 0.0,
+          "max": 1.0,
+          "ui_widget": "number_input",
+          "subsection": "spectrum",
+          "visible_when": "elements.spectrum_enabled == true"
+        },
+        {
+          "id": "spectrum_update_rate",
+          "label": "Spectrum Update Rate",
+          "description": "Updates per second for spectrum bars (higher = smoother but more CPU)",
+          "type": "number",
+          "default": 60,
+          "min": 15,
+          "max": 120,
+          "ui_widget": "number_input",
+          "subsection": "spectrum",
+          "visible_when": "elements.spectrum_enabled == true"
+        },
+        {
+          "id": "spinner_enabled",
+          "label": "Spinner",
+          "description": "Enable spinner animation during processing",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle",
+          "subsection": "spinner"
+        },
+        {
+          "id": "spinner_dot_count",
+          "label": "Dot Count",
+          "description": "Number of dots in spinner",
+          "type": "number",
+          "default": 3,
+          "min": 2,
+          "max": 8,
+          "ui_widget": "number_input",
+          "subsection": "spinner",
+          "visible_when": "elements.spinner_enabled == true"
+        },
+        {
+          "id": "spinner_dot_radius",
+          "label": "Dot Radius",
+          "description": "Radius of each spinner dot in pixels",
+          "type": "float",
+          "default": 6.0,
+          "min": 2.0,
+          "max": 15.0,
+          "ui_widget": "number_input",
+          "subsection": "spinner",
+          "visible_when": "elements.spinner_enabled == true"
+        },
+        {
+          "id": "spinner_orbit_radius",
+          "label": "Orbit Radius",
+          "description": "Radius of spinner orbit in pixels",
+          "type": "float",
+          "default": 20.0,
+          "min": 10.0,
+          "max": 50.0,
+          "ui_widget": "number_input",
+          "subsection": "spinner",
+          "visible_when": "elements.spinner_enabled == true"
+        },
+        {
+          "id": "spinner_rotation_speed",
+          "label": "Rotation Speed",
+          "description": "Spinner rotation speed multiplier",
+          "type": "float",
+          "default": 2.0,
+          "min": 0.5,
+          "max": 5.0,
+          "ui_widget": "number_input",
+          "subsection": "spinner",
+          "visible_when": "elements.spinner_enabled == true"
+        },
+        {
+          "id": "spinner_opacity",
+          "label": "Spinner Opacity",
+          "description": "Opacity of spinner dots (0.0 = transparent, 1.0 = opaque)",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "ui_widget": "number_input",
+          "subsection": "spinner",
+          "visible_when": "elements.spinner_enabled == true"
+        },
+        {
+          "id": "text_enabled",
+          "label": "Text Display",
+          "description": "Enable transcription text display",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle",
+          "subsection": "text"
+        },
+        {
+          "id": "text_font_size",
+          "label": "Font Size",
+          "description": "Text font size in pixels",
+          "type": "number",
+          "default": 24,
+          "min": 12,
+          "max": 48,
+          "ui_widget": "number_input",
+          "subsection": "text",
+          "visible_when": "elements.text_enabled == true"
+        },
+        {
+          "id": "text_opacity",
+          "label": "Text Opacity",
+          "description": "Opacity of text (0.0 = transparent, 1.0 = opaque)",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "ui_widget": "number_input",
+          "subsection": "text",
+          "visible_when": "elements.text_enabled == true"
+        },
+        {
+          "id": "text_alignment",
+          "label": "Text Alignment",
+          "description": "Horizontal text alignment",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["left", "center", "right"]
+          },
+          "default": "center",
+          "ui_widget": "dropdown",
+          "subsection": "text",
+          "visible_when": "elements.text_enabled == true"
+        },
+        {
+          "id": "text_line_height",
+          "label": "Line Height",
+          "description": "Line height multiplier for multi-line text",
+          "type": "float",
+          "default": 1.2,
+          "min": 1.0,
+          "max": 2.0,
+          "ui_widget": "number_input",
+          "subsection": "text",
+          "visible_when": "elements.text_enabled == true"
+        },
+        {
+          "id": "text_appear_duration",
+          "label": "Text Appear Duration",
+          "description": "Fade-in duration when new transcription text appears (milliseconds)",
+          "type": "number",
+          "default": 150,
+          "min": 0,
+          "max": 500,
+          "ui_widget": "number_input",
+          "subsection": "text",
+          "visible_when": "elements.text_enabled == true"
+        },
+        {
+          "id": "text_scroll_speed",
+          "label": "Text Scroll Speed",
+          "description": "Scrolling speed multiplier for text area (1.0 = normal)",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.1,
+          "max": 3.0,
+          "ui_widget": "number_input",
+          "subsection": "text",
+          "visible_when": "elements.text_enabled == true"
+        },
+        {
+          "id": "background_corner_radius",
+          "label": "Corner Radius",
+          "description": "Corner radius of background window in pixels",
+          "type": "float",
+          "default": 25.0,
+          "min": 0.0,
+          "max": 50.0,
+          "ui_widget": "number_input",
+          "subsection": "background"
+        },
+        {
+          "id": "background_corner_radius_processing",
+          "label": "Corner Radius (Processing)",
+          "description": "Corner radius during processing state in pixels",
+          "type": "float",
+          "default": 50.0,
+          "min": 0.0,
+          "max": 100.0,
+          "ui_widget": "number_input",
+          "subsection": "background"
+        },
+        {
+          "id": "background_opacity",
+          "label": "Background Opacity",
+          "description": "Opacity of background (0.0 = transparent, 1.0 = opaque)",
+          "type": "float",
+          "default": 0.95,
+          "min": 0.1,
+          "max": 1.0,
+          "ui_widget": "number_input",
+          "subsection": "background"
+        },
+        {
+          "id": "background_blur",
+          "label": "Background Blur",
+          "description": "Background blur amount (if supported)",
+          "type": "number",
+          "default": 10,
+          "min": 0,
+          "max": 30,
+          "ui_widget": "number_input",
+          "subsection": "background"
+        },
+        {
+          "id": "background_padding",
+          "label": "Internal Padding",
+          "description": "Internal padding around content in pixels",
+          "type": "number",
+          "default": 20,
+          "min": 0,
+          "max": 50,
+          "ui_widget": "number_input",
+          "subsection": "background"
         }
       ]
     }

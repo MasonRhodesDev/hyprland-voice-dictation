@@ -2,18 +2,18 @@ use iced::widget::canvas::{self, Geometry, Path};
 use iced::{Color, Point, Rectangle, Renderer, Theme};
 use std::f32::consts::TAU;
 
-const DOT_COUNT: usize = 3;
-const DOT_RADIUS: f32 = 6.0;
-const ORBIT_RADIUS: f32 = 20.0;
-const ROTATION_SPEED: f32 = 2.0;
-
 pub struct Spinner {
     time: f32,
+    dot_count: u32,
+    dot_radius: f32,
+    orbit_radius: f32,
+    rotation_speed: f32,
+    opacity: f32,
 }
 
 impl Spinner {
-    pub fn new(time: f32) -> Self {
-        Self { time }
+    pub fn new(time: f32, dot_count: u32, dot_radius: f32, orbit_radius: f32, rotation_speed: f32, opacity: f32) -> Self {
+        Self { time, dot_count, dot_radius, orbit_radius, rotation_speed, opacity }
     }
 }
 
@@ -33,14 +33,14 @@ impl<Message> canvas::Program<Message> for Spinner {
         let center_x = bounds.width / 2.0;
         let center_y = bounds.height / 2.0;
 
-        let dot_color = Color::from_rgb(1.0, 1.0, 1.0);
+        let dot_color = Color { r: 1.0, g: 1.0, b: 1.0, a: self.opacity };
 
-        for i in 0..DOT_COUNT {
-            let angle = (self.time * ROTATION_SPEED) + (i as f32 * TAU / DOT_COUNT as f32);
-            let x = center_x + ORBIT_RADIUS * angle.cos();
-            let y = center_y + ORBIT_RADIUS * angle.sin();
+        for i in 0..self.dot_count {
+            let angle = (self.time * self.rotation_speed) + (i as f32 * TAU / self.dot_count as f32);
+            let x = center_x + self.orbit_radius * angle.cos();
+            let y = center_y + self.orbit_radius * angle.sin();
 
-            let circle = Path::circle(Point::new(x, y), DOT_RADIUS);
+            let circle = Path::circle(Point::new(x, y), self.dot_radius);
             frame.fill(&circle, dot_color);
         }
 

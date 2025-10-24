@@ -11,7 +11,7 @@ pub enum IpcSubscriptionKind {
     Control,
 }
 
-pub fn audio_subscription() -> Subscription<Message> {
+pub(crate) fn audio_subscription() -> Subscription<Message> {
     #[derive(Hash)]
     struct AudioIpc;
 
@@ -21,9 +21,10 @@ pub fn audio_subscription() -> Subscription<Message> {
         std::any::TypeId::of::<AudioIpc>(),
         stream::channel(100, move |mut output| async move {
             info!("Audio subscription stream starting");
+            let config = crate::config::load_config();
             let mut ipc_client = ipc::IpcClient::new(crate::SOCKET_PATH.to_string());
             let mut spectrum_analyzer =
-                fft::SpectrumAnalyzer::new(crate::FFT_SIZE, crate::SAMPLE_RATE);
+                fft::SpectrumAnalyzer::new(crate::FFT_SIZE, crate::SAMPLE_RATE, config.elements.spectrum_smoothing_factor);
 
             loop {
                 debug!("Attempting to connect to audio socket...");
@@ -56,7 +57,7 @@ pub fn audio_subscription() -> Subscription<Message> {
     )
 }
 
-pub fn control_subscription() -> Subscription<Message> {
+pub(crate) fn control_subscription() -> Subscription<Message> {
     #[derive(Hash)]
     struct ControlIpc;
 
