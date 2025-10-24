@@ -1,18 +1,19 @@
 # Voice Dictation System
 
-Offline voice dictation for Linux (Hyprland/Wayland) using Vosk speech recognition.
+Offline voice dictation for Linux with Wayland overlay using Vosk speech recognition.
 
 ## Features
 
 - **Two-model approach**: Fast model for live preview, accurate model for final text
 - **Preview-then-type**: See transcription in overlay before it's typed
 - **Wayland overlay**: Shows audio spectrum and live transcription text
-- **Toggle interface**: MEH+v to start, MEH+v again to confirm and type
+- **Compositor-agnostic**: Works with any Wayland compositor (Hyprland, Sway, KDE, GNOME, etc.)
+- **Toggle interface**: Keybind to start, keybind again to confirm and type
 
 ## Prerequisites
 
 - **Linux** (Fedora/Arch tested)
-- **Wayland compositor** (Hyprland, Sway, etc.) - X11 not supported
+- **Wayland compositor** - X11 not supported
 - **Rust 1.70+**
 - **System packages**: wtype, pipewire, alsa-lib-devel, fontconfig-devel, freetype-devel
 - **2GB disk space** for Vosk models
@@ -25,10 +26,10 @@ make check
 Install missing packages:
 ```bash
 # Fedora
-sudo dnf install rust cargo wtype pipewire alsa-lib-devel fontconfig-devel freetype-devel python3
+sudo dnf install rust cargo wtype pipewire alsa-lib-devel fontconfig-devel freetype-devel
 
 # Arch
-sudo pacman -S rust cargo wtype pipewire alsa-lib fontconfig freetype2 python
+sudo pacman -S rust cargo wtype pipewire alsa-lib fontconfig freetype2
 ```
 
 ## Quick Start
@@ -46,15 +47,32 @@ make test
 
 ## Usage
 
-Add to Hyprland config:
+### Keybind Setup
+
+Add to your compositor config:
+
+**Hyprland:**
 ```
 bind=$Meh, V, exec, ~/scripts/dictation-control toggle
 ```
 
+**Sway:**
+```
+bindsym Mod4+Shift+Alt+v exec ~/scripts/dictation-control toggle
+```
+
+**KDE Plasma (Wayland):**
+- System Settings → Shortcuts → Custom Shortcuts
+- Add new command: `~/scripts/dictation-control toggle`
+
+**GNOME (Wayland):**
+- Settings → Keyboard → Custom Shortcuts
+- Add new command: `~/scripts/dictation-control toggle`
+
 Then:
-1. **Press MEH+v** to start recording
+1. **Press your keybind** to start recording
 2. **Speak clearly** into microphone
-3. **Press MEH+v again** to confirm and type
+3. **Press keybind again** to confirm and type
 
 ### Command Line
 
@@ -153,8 +171,7 @@ voice-dictation-rust/
 │       ├── main.rs         # Main loop, model management
 │       ├── control_ipc.rs  # Control socket server
 │       ├── ipc.rs          # Audio socket server
-│       ├── keyboard.rs     # wtype injection
-│       └── vad.rs          # Voice activity detection
+│       └── keyboard.rs     # wtype injection
 ├── dictation-gui/          # Wayland overlay
 │   ├── Cargo.toml
 │   └── src/
@@ -168,8 +185,7 @@ voice-dictation-rust/
 │   ├── vosk-model-small-en-us-0.15/
 │   └── vosk-model-en-us-0.22/
 └── scripts/
-    ├── dictation-control   # Toggle script
-    └── send_confirm.py     # Confirm helper
+    └── dictation-control   # Toggle script
 ```
 
 ## Dependencies
@@ -178,7 +194,7 @@ voice-dictation-rust/
 - Vosk models (included in `models/`)
 - `wtype` - Wayland keyboard injection
 - `pactl` / PipeWire - Audio
-- Hyprland - Wayland compositor
+- Wayland compositor (Hyprland, Sway, KDE, GNOME, etc.)
 
 ## Known Issues
 

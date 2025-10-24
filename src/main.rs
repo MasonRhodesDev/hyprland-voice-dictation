@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -224,6 +225,125 @@ fn show_status() {
     }
 }
 
+fn check_model_exists(model_name: &str, models_dir: &PathBuf) -> bool {
+    if model_name == "custom" {
+        return true;
+    }
+    models_dir.join(model_name).exists()
+}
+
+fn get_model_url(model_name: &str) -> String {
+    format!("https://alphacephei.com/vosk/models/{}.zip", model_name)
+}
+
+fn download_model(model_name: &str, models_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let url = get_model_url(model_name);
+    let zip_path = models_dir.join(format!("{}.zip", model_name));
+    
+    println!("Downloading {} ({})...", model_name, url);
+    println!("This may take several minutes depending on model size...");
+    
+    let status = Command::new("curl")
+        .arg("-L")
+        .arg("-o")
+        .arg(&zip_path)
+        .arg(&url)
+        .status()?;
+    
+    if !status.success() {
+        return Err("Download failed".into());
+    }
+    
+    println!("Extracting model...");
+    let status = Command::new("unzip")
+        .arg("-q")
+        .arg(&zip_path)
+        .arg("-d")
+        .arg(models_dir)
+        .status()?;
+    
+    if !status.success() {
+        return Err("Extraction failed".into());
+    }
+    
+    fs::remove_file(&zip_path)?;
+    println!("✓ Model installed successfully");
+    
+    Ok(())
+}
+
+fn validate_and_prompt_models(config_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let config_content = fs::read_to_string(config_path)?;
+    
+    let home = std::env::var("HOME")?;
+    let models_dir = PathBuf::from(&home).join(".config/voice-dictation/models");
+    
+    if !models_dir.exists() {
+        fs::create_dir_all(&models_dir)?;
+    }
+    
+    let preview_model = config_content
+        .lines()
+        .find(|line| line.starts_with("preview_model"))
+        .and_then(|line| line.split('=').nth(1))
+        .map(|s| s.trim().trim_matches('"').to_string());
+    
+    let final_model = config_content
+        .lines()
+        .find(|line| line.starts_with("final_model"))
+        .and_then(|line| line.split('=').nth(1))
+        .map(|s| s.trim().trim_matches('"').to_string());
+    
+    let mut missing_models = Vec::new();
+    
+    if let Some(model) = &preview_model {
+        if !check_model_exists(model, &models_dir) {
+            missing_models.push(("Preview", model.clone()));
+        }
+    }
+    
+    if let Some(model) = &final_model {
+        if !check_model_exists(model, &models_dir) {
+            missing_models.push(("Final", model.clone()));
+        }
+    }
+    
+    if missing_models.is_empty() {
+        return Ok(());
+    }
+    
+    println!("\n⚠️  Missing models detected:");
+    for (model_type, model_name) in &missing_models {
+        println!("  - {} model: {}", model_type, model_name);
+        println!("    URL: {}", get_model_url(model_name));
+    }
+    
+    print!("\nWould you like to download missing models now? [y/N]: ");
+    io::stdout().flush()?;
+    
+    let mut response = String::new();
+    io::stdin().read_line(&mut response)?;
+    
+    if response.trim().to_lowercase() == "y" {
+        for (model_type, model_name) in &missing_models {
+            println!("\nDownloading {} model: {}", model_type, model_name);
+            if let Err(e) = download_model(model_name, &models_dir) {
+                eprintln!("✗ Failed to download {}: {}", model_name, e);
+                eprintln!("  Please download manually from: {}", get_model_url(model_name));
+            }
+        }
+    } else {
+        println!("\nSkipping download. You can download models manually with:");
+        println!("  cd ~/.config/voice-dictation/models");
+        for (_, model_name) in &missing_models {
+            println!("  curl -L -O {}", get_model_url(model_name));
+            println!("  unzip {}.zip", model_name);
+        }
+    }
+    
+    Ok(())
+}
+
 fn open_config() -> Result<(), Box<dyn std::error::Error>> {
     let home = std::env::var("HOME")?;
     let config_dir = PathBuf::from(&home).join(".config/voice-dictation");
@@ -245,6 +365,8 @@ fn open_config() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     tui.run()?;
+    
+    validate_and_prompt_models(&config_path)?;
 
     Ok(())
 }

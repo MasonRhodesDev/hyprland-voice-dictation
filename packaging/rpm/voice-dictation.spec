@@ -16,12 +16,12 @@ BuildRequires:  fontconfig-devel
 Requires:       wtype
 Requires:       pipewire
 Requires:       pipewire-pulseaudio
-Requires:       python3
 
 %description
 Offline voice dictation system for Linux using Vosk speech recognition.
 Features a two-model approach with live preview and Wayland overlay showing
 audio spectrum and transcription.
+Works with any Wayland compositor (Hyprland, Sway, KDE, GNOME, etc.)
 
 %prep
 %setup -q
@@ -46,7 +46,6 @@ install -m 755 target/release/voice-dictation %{buildroot}%{_bindir}/
 # Install scripts
 mkdir -p %{buildroot}%{_datadir}/%{name}/scripts
 install -m 755 scripts/dictation-control %{buildroot}%{_datadir}/%{name}/scripts/
-install -m 755 scripts/send_confirm.py %{buildroot}%{_datadir}/%{name}/scripts/
 
 # Install models (if they exist)
 mkdir -p %{buildroot}%{_datadir}/%{name}/models
@@ -70,17 +69,18 @@ echo "Voice Dictation installed!"
 echo "To enable keybind, copy control script to ~/scripts/:"
 echo "  mkdir -p ~/scripts"
 echo "  cp %{_datadir}/%{name}/scripts/dictation-control ~/scripts/"
-echo "  cp %{_datadir}/%{name}/scripts/send_confirm.py ~/scripts/"
 echo ""
-echo "Then add to Hyprland config:"
-echo "  bind=\$Meh, V, exec, ~/scripts/dictation-control toggle"
+echo "Add keybind to your compositor config:"
+echo ""
+echo "  Hyprland:  bind=\$Meh, V, exec, voice-dictation toggle"
+echo "  Sway:      bindsym Mod4+Shift+Alt+v exec voice-dictation toggle"
+echo "  KDE/GNOME: Use Settings → Keyboard → Custom Shortcuts"
 
 %files
 %license LICENSE-MIT LICENSE-APACHE
 %doc %{_docdir}/%{name}/README.md
 %{_bindir}/voice-dictation
 %{_datadir}/%{name}/scripts/dictation-control
-%{_datadir}/%{name}/scripts/send_confirm.py
 %{_datadir}/%{name}/models/
 
 %changelog

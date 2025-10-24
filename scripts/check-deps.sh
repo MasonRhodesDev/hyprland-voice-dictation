@@ -8,7 +8,7 @@ echo ""
 
 command -v cargo &> /dev/null || MISSING+=("cargo")
 
-for cmd in wtype pactl pkg-config python3; do
+for cmd in wtype pactl pkg-config; do
     command -v $cmd &> /dev/null || MISSING+=("$cmd")
 done
 
@@ -36,8 +36,8 @@ if [ ${#MISSING[@]} -eq 0 ]; then
 else
     echo "✗ Missing required dependencies: ${MISSING[*]}"
     echo ""
-    echo "Fedora: sudo dnf install rust cargo wtype pipewire alsa-lib-devel fontconfig-devel freetype-devel python3"
-    echo "Arch:   sudo pacman -S rust cargo wtype pipewire alsa-lib fontconfig freetype2 python"
+    echo "Fedora: sudo dnf install rust cargo wtype pipewire alsa-lib-devel fontconfig-devel freetype-devel"
+    echo "Arch:   sudo pacman -S rust cargo wtype pipewire alsa-lib fontconfig freetype2"
     echo ""
     echo "For RPM packaging, also install: rpm-build"
     exit 1

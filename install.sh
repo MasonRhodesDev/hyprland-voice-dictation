@@ -18,9 +18,7 @@ echo ""
 echo "3. Installing control scripts to ~/scripts..."
 mkdir -p ~/scripts
 cp scripts/dictation-control ~/scripts/
-cp scripts/send_confirm.py ~/scripts/
 chmod +x ~/scripts/dictation-control
-chmod +x ~/scripts/send_confirm.py
 
 # Setup config directory and download default models
 echo ""
@@ -69,8 +67,11 @@ echo "  - Via script:       ~/scripts/dictation-control toggle"
 echo "  - Check status:     voice-dictation status"
 echo "  - Configure:        voice-dictation config"
 echo ""
-echo "Note: Make sure your Hyprland keybind points to:"
-echo "  bind=\$Meh, V, exec, voice-dictation toggle"
+echo "Add a keybind in your compositor config:"
+echo ""
+echo "  Hyprland:  bind=\$Meh, V, exec, voice-dictation toggle"
+echo "  Sway:      bindsym Mod4+Shift+Alt+v exec voice-dictation toggle"
+echo "  KDE/GNOME: Use Settings → Keyboard → Custom Shortcuts"
 echo ""
 echo "Available commands:"
 echo "  voice-dictation toggle   - Start recording or confirm transcription"

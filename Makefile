@@ -52,7 +52,7 @@ rpm:  ## Build RPM package (requires rpm-build, takes 5-10 minutes)
 	./packaging/rpm/build-rpm.sh
 
 status:  ## Check if dictation is running
-	@~/scripts/dictation-control status 2>/dev/null || echo "Not running or not installed"
+	@pgrep -f dictation-engine >/dev/null && echo "Running" || echo "Not running"
 
 logs:  ## Tail live logs
 	tail -f /tmp/dictation-engine.log /tmp/dictation-gui.log

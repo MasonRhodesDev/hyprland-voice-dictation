@@ -28,7 +28,6 @@ chmod +x "$PKG_DIR/usr/bin/voice-dictation"
 echo ""
 echo "4. Copying scripts..."
 cp scripts/dictation-control "$PKG_DIR/usr/share/${NAME}/scripts/"
-cp scripts/send_confirm.py "$PKG_DIR/usr/share/${NAME}/scripts/"
 chmod +x "$PKG_DIR/usr/share/${NAME}/scripts/"*
 
 echo ""
@@ -45,7 +44,7 @@ Version: $VERSION
 Section: utils
 Priority: optional
 Architecture: $ARCH
-Depends: pipewire, python3
+Depends: pipewire
 Recommends: wtype
 Maintainer: Voice Dictation Contributors <noreply@example.com>
 Description: Offline voice dictation for Linux with Wayland overlay
@@ -53,6 +52,7 @@ Description: Offline voice dictation for Linux with Wayland overlay
  Features a two-model approach with live preview and Wayland overlay showing
  audio spectrum and transcription.
  .
+ Works with any Wayland compositor (Hyprland, Sway, KDE, GNOME, etc.)
  This package requires Vosk models to be downloaded separately.
 EOF
 
@@ -63,13 +63,15 @@ cat > "$PKG_DIR/DEBIAN/postinst" << 'EOF'
 echo ""
 echo "Voice Dictation installed!"
 echo ""
-echo "To enable keybind, copy control scripts to ~/scripts/:"
+echo "To enable keybind, copy control script to ~/scripts/:"
 echo "  mkdir -p ~/scripts"
 echo "  cp /usr/share/voice-dictation/scripts/dictation-control ~/scripts/"
-echo "  cp /usr/share/voice-dictation/scripts/send_confirm.py ~/scripts/"
 echo ""
-echo "Then add to Hyprland config:"
-echo "  bind=\$Meh, V, exec, ~/scripts/dictation-control toggle"
+echo "Add keybind to your compositor config:"
+echo ""
+echo "  Hyprland:  bind=\$Meh, V, exec, voice-dictation toggle"
+echo "  Sway:      bindsym Mod4+Shift+Alt+v exec voice-dictation toggle"
+echo "  KDE/GNOME: Use Settings → Keyboard → Custom Shortcuts"
 echo ""
 echo "Note: You need to download Vosk models separately (2GB):"
 echo "  https://alphacephei.com/vosk/models"
