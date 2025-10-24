@@ -79,7 +79,6 @@ pub fn control_subscription() -> Subscription<Message> {
                 
                 loop {
                     trace!("Waiting for control message...");
-                    eprintln!("Waiting for control message...");
                     
                     let receive_result = tokio::time::timeout(
                         tokio::time::Duration::from_secs(5),
@@ -98,18 +97,14 @@ pub fn control_subscription() -> Subscription<Message> {
                         }
                         Ok(Ok(control_ipc::ControlMessage::ProcessingStarted)) => {
                             info!("SUBSCRIPTION: ProcessingStarted received");
-                            eprintln!("SUBSCRIPTION: ProcessingStarted received");
                             debug!("SUBSCRIPTION: Sending StateChange(Processing) to app");
                             let send_result = output.send(Message::StateChange(GuiState::Processing)).await;
-                            eprintln!("SUBSCRIPTION: Send result: {:?}", send_result);
                             trace!("SUBSCRIPTION: Send result: {:?}", send_result);
                         }
                         Ok(Ok(control_ipc::ControlMessage::Complete)) => {
                             info!("SUBSCRIPTION: Complete received");
-                            eprintln!("SUBSCRIPTION: Complete received");
                             debug!("SUBSCRIPTION: Sending StateChange(Closing) to app");
                             let send_result = output.send(Message::StateChange(GuiState::Closing)).await;
-                            eprintln!("SUBSCRIPTION: Send result: {:?}", send_result);
                             trace!("SUBSCRIPTION: Send result: {:?}", send_result);
                         }
                         Ok(Ok(control_ipc::ControlMessage::Confirm)) => {
@@ -117,13 +112,11 @@ pub fn control_subscription() -> Subscription<Message> {
                         }
                         Ok(Err(e)) => {
                             error!("SUBSCRIPTION: Control receive error: {}", e);
-                            eprintln!("SUBSCRIPTION: Control receive error: {}", e);
                             let _ = output.send(Message::IpcError(format!("Control: {}", e))).await;
                             break;
                         }
                         Err(_) => {
                             error!("SUBSCRIPTION: Timeout waiting for control message");
-                            eprintln!("SUBSCRIPTION: Timeout waiting for control message");
                         }
                     }
                 }

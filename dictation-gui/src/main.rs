@@ -1,4 +1,4 @@
-use iced::widget::{canvas, column, container, scrollable, text, Space};
+use iced::widget::{canvas, column, container, scrollable, text};
 use iced::{Alignment, Color, Element, Length, Task, time};
 use iced_layershell::build_pattern::application;
 use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
@@ -63,14 +63,38 @@ pub fn main() -> Result<(), iced_layershell::Error> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GuiState {
+    PreListening,
     Listening,
     Processing,
     Closing,
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransitionPhase {
+    Idle,
+    Transitioning,
+}
+
+const SPECTRUM_HEIGHT: f32 = 50.0;
+const SPECTRUM_WIDTH: f32 = 400.0;
+const SPINNER_SIZE: f32 = 100.0;
+const CONTAINER_PADDING: f32 = 10.0;
+const CONTENT_SPACING: f32 = 5.0;
+const TEXT_LINE_HEIGHT: f32 = 24.0;
+const TEXT_SIZE: f32 = 18.0;
+const MAX_TEXT_LINES: usize = 4;
+
+const LISTENING_WIDTH: f32 = SPECTRUM_WIDTH;
+const PROCESSING_SIZE: (f32, f32) = (SPINNER_SIZE + CONTAINER_PADDING * 2.0, SPINNER_SIZE + CONTAINER_PADDING * 2.0);
+const TRANSITION_DURATION: f32 = 0.5;
+
 struct DictationOverlay {
     state: GuiState,
+    transition_phase: TransitionPhase,
+    transition_progress: f32,
+    previous_state: Option<GuiState>,
+    current_size: (f32, f32),
+    target_size: (f32, f32),
     transcription: String,
     band_values: Vec<f32>,
     animation_time: f32,
@@ -78,10 +102,73 @@ struct DictationOverlay {
     closing_animation_time: f32,
 }
 
+impl Default for DictationOverlay {
+    fn default() -> Self {
+        Self {
+            state: GuiState::PreListening,
+            transition_phase: TransitionPhase::Transitioning,
+            transition_progress: 0.0,
+            previous_state: None,
+            current_size: (0.0, 0.0),
+            target_size: calculate_prelistening_size(),
+            transcription: String::new(),
+            band_values: Vec::new(),
+            animation_time: 0.0,
+            analyzer: None,
+            closing_animation_time: 0.0,
+        }
+    }
+}
+
 impl Default for GuiState {
     fn default() -> Self {
-        GuiState::Listening
+        GuiState::PreListening
     }
+}
+
+impl Default for TransitionPhase {
+    fn default() -> Self {
+        TransitionPhase::Idle
+    }
+}
+
+fn ease_out_cubic(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
+}
+
+fn ease_in_out_cubic(t: f32) -> f32 {
+    if t < 0.5 {
+        4.0 * t.powi(3)
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
+}
+
+fn interpolate_size(from: (f32, f32), to: (f32, f32), progress: f32) -> (f32, f32) {
+    let eased = ease_in_out_cubic(progress);
+    (
+        from.0 + (to.0 - from.0) * eased,
+        from.1 + (to.1 - from.1) * eased,
+    )
+}
+
+fn calculate_listening_size(transcription: &str) -> (f32, f32) {
+    let base_height = SPECTRUM_HEIGHT + CONTAINER_PADDING * 2.0;
+    
+    if transcription.is_empty() {
+        return (LISTENING_WIDTH, base_height);
+    }
+    
+    let line_count = transcription.lines().count().max(1);
+    let clamped_lines = line_count.min(MAX_TEXT_LINES);
+    let text_height = clamped_lines as f32 * TEXT_LINE_HEIGHT;
+    
+    let total_height = base_height + CONTENT_SPACING + text_height;
+    (LISTENING_WIDTH, total_height)
+}
+
+fn calculate_prelistening_size() -> (f32, f32) {
+    (SPECTRUM_HEIGHT * 2.4, SPECTRUM_HEIGHT + CONTAINER_PADDING * 2.0)
 }
 
 #[to_layer_message]
@@ -113,6 +200,29 @@ fn update(overlay: &mut DictationOverlay, message: Message) -> Task<Message> {
             trace!("UPDATE: Tick (animation_time: {:.3})", overlay.animation_time);
             overlay.animation_time += 0.016;
             
+            if overlay.transition_phase == TransitionPhase::Transitioning {
+                overlay.transition_progress += 0.016 / TRANSITION_DURATION;
+                
+                if overlay.transition_progress >= 1.0 {
+                    overlay.transition_progress = 1.0;
+                    overlay.current_size = overlay.target_size;
+                    overlay.transition_phase = TransitionPhase::Idle;
+                    let completed_state = overlay.state;
+                    overlay.previous_state = None;
+                    debug!("Transition complete to {:?}", completed_state);
+                    
+                    if completed_state == GuiState::PreListening {
+                        return Task::perform(async {}, |_| Message::StateChange(GuiState::Listening));
+                    }
+                } else {
+                    overlay.current_size = interpolate_size(
+                        overlay.current_size,
+                        overlay.target_size,
+                        overlay.transition_progress
+                    );
+                }
+            }
+            
             if overlay.state == GuiState::Closing {
                 overlay.closing_animation_time += 0.016;
                 if overlay.closing_animation_time >= 0.5 {
@@ -140,17 +250,36 @@ fn update(overlay: &mut DictationOverlay, message: Message) -> Task<Message> {
                 trace!("UPDATE: Transcription (empty)");
             }
             overlay.transcription = text;
+            
+            if overlay.state == GuiState::Listening {
+                let new_size = calculate_listening_size(&overlay.transcription);
+                if new_size != overlay.target_size {
+                    overlay.target_size = new_size;
+                    overlay.transition_phase = TransitionPhase::Transitioning;
+                    overlay.transition_progress = 0.0;
+                }
+            }
+            
             Task::none()
         }
 
         Message::StateChange(state) => {
             info!("UPDATE: State change {:?} -> {:?}", overlay.state, state);
-            eprintln!("STATE CHANGE: {:?} -> {:?}", overlay.state, state);
-            overlay.state = state;
             
-            if state == GuiState::Closing {
-                overlay.closing_animation_time = 0.0;
-            }
+            overlay.previous_state = Some(overlay.state);
+            overlay.state = state;
+            overlay.transition_phase = TransitionPhase::Transitioning;
+            overlay.transition_progress = 0.0;
+            
+            overlay.target_size = match state {
+                GuiState::PreListening => calculate_prelistening_size(),
+                GuiState::Listening => calculate_listening_size(&overlay.transcription),
+                GuiState::Processing => PROCESSING_SIZE,
+                GuiState::Closing => {
+                    overlay.closing_animation_time = 0.0;
+                    (0.0, 0.0)
+                },
+            };
             
             Task::none()
         }
@@ -173,14 +302,74 @@ fn update(overlay: &mut DictationOverlay, message: Message) -> Task<Message> {
 }
 
 fn view<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
-    match overlay.state {
-        GuiState::Listening => view_listening(overlay),
-        GuiState::Processing => view_processing(overlay),
-        GuiState::Closing => view_closing(overlay),
+    match (overlay.transition_phase, overlay.state, overlay.previous_state) {
+        (TransitionPhase::Transitioning, GuiState::Listening, Some(GuiState::PreListening)) => {
+            view_transition_prelistening_to_listening(overlay)
+        },
+        (TransitionPhase::Transitioning, GuiState::Processing, Some(GuiState::Listening)) => {
+            view_transition_listening_to_processing(overlay)
+        },
+        (_, GuiState::PreListening, _) => view_prelistening(overlay),
+        (_, GuiState::Listening, _) => view_listening(overlay),
+        (_, GuiState::Processing, _) => view_processing(overlay),
+        (_, GuiState::Closing, _) => view_closing(overlay),
     }
 }
 
+fn view_prelistening<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
+    let (width, height) = overlay.current_size;
+    let alpha = overlay.transition_progress;
+    
+    let text_content = text("Starting...").size(16).color(Color::from_rgba(1.0, 1.0, 1.0, alpha));
+    
+    let content = column![text_content]
+        .align_x(Alignment::Center)
+        .padding(10);
+    
+    let inner = container(content)
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(height))
+        .padding(10)
+        .style(move |_theme: &iced::Theme| {
+            container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.9 * alpha))),
+                border: iced::Border {
+                    radius: 15.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        });
+    
+    container(inner)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+}
+
+fn view_transition_prelistening_to_listening<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
+    view_listening(overlay)
+}
+
+fn view_transition_listening_to_processing<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
+    use iced::widget::stack;
+    
+    let listening_alpha = 1.0 - overlay.transition_progress;
+    let processing_alpha = overlay.transition_progress;
+    
+    let listening_layer = view_listening_with_alpha(overlay, listening_alpha);
+    let processing_layer = view_processing_with_alpha(overlay, processing_alpha);
+    
+    stack![listening_layer, processing_layer].into()
+}
+
 fn view_listening<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
+    view_listening_with_alpha(overlay, 1.0)
+}
+
+fn view_listening_with_alpha<'a>(overlay: &'a DictationOverlay, alpha: f32) -> Element<'a, Message> {
+    let (width, height) = overlay.current_size;
+    
     let band_values = if overlay.band_values.is_empty() {
         vec![0.0; 8]
     } else {
@@ -188,72 +377,106 @@ fn view_listening<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
     };
 
     let spectrum = SpectrumBars::new(band_values)
-        .height(50.0)
-        .width(WIDTH as f32);
-
-    let text_content = if overlay.transcription.is_empty() {
-        text("Listening...").size(18).color(Color::WHITE)
-    } else {
-        text(&overlay.transcription).size(18).color(Color::WHITE)
-    };
-
-    let scrollable_text = scrollable(
-        container(text_content)
-            .width(Length::Fill)
-            .padding(10)
-    )
-    .height(Length::Fixed(90.0));
-
-    let content = column![
-        spectrum,
-        scrollable_text,
-    ]
-    .spacing(5)
-    .padding(10)
-    .width(Length::Fill);
-
-    container(content)
+        .height(SPECTRUM_HEIGHT)
+        .width(SPECTRUM_WIDTH);
+    
+    let spectrum_container = container(spectrum)
         .width(Length::Fill)
-        .padding(5)
-        .style(|_theme: &iced::Theme| {
+        .center_x(Length::Fill);
+
+    let mut content_items = vec![spectrum_container.into()];
+    
+    if !overlay.transcription.is_empty() {
+        let text_color = Color::from_rgba(1.0, 1.0, 1.0, alpha);
+        let text_content = text(&overlay.transcription).size(TEXT_SIZE).color(text_color);
+        
+        let text_height = height - SPECTRUM_HEIGHT - (CONTAINER_PADDING * 2.0) - CONTENT_SPACING;
+        
+        let scrollable_text = scrollable(text_content)
+            .width(Length::Fill)
+            .height(Length::Fixed(text_height))
+            .style(|_theme: &iced::Theme, _status| scrollable::Style {
+                container: container::Style::default(),
+                vertical_rail: scrollable::Rail {
+                    background: None,
+                    border: iced::Border::default(),
+                    scroller: scrollable::Scroller {
+                        color: Color::TRANSPARENT,
+                        border: iced::Border::default(),
+                    },
+                },
+                horizontal_rail: scrollable::Rail {
+                    background: None,
+                    border: iced::Border::default(),
+                    scroller: scrollable::Scroller {
+                        color: Color::TRANSPARENT,
+                        border: iced::Border::default(),
+                    },
+                },
+                gap: None,
+            });
+        
+        content_items.push(scrollable_text.into());
+    }
+
+    let content = column(content_items).spacing(CONTENT_SPACING);
+
+    let inner = container(content)
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(height))
+        .padding(CONTAINER_PADDING)
+        .style(move |_theme: &iced::Theme| {
             container::Style {
-                background: Some(iced::Background::Color(Color::from_rgba8(0, 0, 0, 0.9))),
+                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.9 * alpha))),
                 border: iced::Border {
                     radius: 15.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
             }
-        })
+        });
+    
+    container(inner)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
         .into()
 }
 
 fn view_processing<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
+    view_processing_with_alpha(overlay, 1.0)
+}
+
+fn view_processing_with_alpha<'a>(overlay: &'a DictationOverlay, alpha: f32) -> Element<'a, Message> {
+    let (width, height) = overlay.current_size;
+    
     let spinner = canvas(Spinner::new(overlay.animation_time))
-        .width(Length::Fixed(100.0))
-        .height(Length::Fixed(100.0));
+        .width(Length::Fixed(SPINNER_SIZE))
+        .height(Length::Fixed(SPINNER_SIZE));
 
-    let content = column![
-        Space::with_height(Length::Fixed(10.0)),
-        spinner,
-        Space::with_height(Length::Fixed(10.0)),
-    ]
-    .align_x(Alignment::Center)
-    .width(Length::Fill);
-
-    container(content)
+    let content = container(spinner)
         .width(Length::Fill)
-        .padding(5)
-        .style(|_theme: &iced::Theme| {
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill);
+
+    let inner = container(content)
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(height))
+        .padding(CONTAINER_PADDING)
+        .style(move |_theme: &iced::Theme| {
             container::Style {
-                background: Some(iced::Background::Color(Color::from_rgba8(0, 0, 0, 0.9))),
+                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.9 * alpha))),
                 border: iced::Border {
                     radius: 50.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
             }
-        })
+        });
+    
+    container(inner)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
         .into()
 }
 
@@ -261,31 +484,40 @@ fn view_closing<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
     let progress = (overlay.closing_animation_time / 0.5).min(1.0);
     let alpha = 0.9 * (1.0 - progress);
     
-    let collapse = canvas(CollapsingDots::new(progress))
-        .width(Length::Fixed(100.0))
-        .height(Length::Fixed(100.0));
+    let collapse = CollapsingDots::new(progress, overlay.animation_time);
     
-    let content = column![
-        Space::with_height(Length::Fixed(10.0)),
-        collapse,
-        Space::with_height(Length::Fixed(10.0)),
-    ]
-    .align_x(Alignment::Center)
-    .width(Length::Fill);
+    let collapse_canvas = canvas(collapse)
+        .width(Length::Fixed(SPINNER_SIZE))
+        .height(Length::Fixed(SPINNER_SIZE));
     
-    container(content)
+    let (width, height) = overlay.current_size;
+    let shrink_width = width * (1.0 - progress);
+    let shrink_height = height * (1.0 - progress);
+    
+    let content = container(collapse_canvas)
         .width(Length::Fill)
-        .padding(5)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill);
+    
+    let inner = container(content)
+        .width(Length::Fixed(shrink_width.max(1.0)))
+        .height(Length::Fixed(shrink_height.max(1.0)))
+        .padding(CONTAINER_PADDING)
         .style(move |_theme: &iced::Theme| {
             container::Style {
-                background: Some(iced::Background::Color(Color::from_rgba8(0, 0, 0, alpha))),
+                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, alpha))),
                 border: iced::Border {
                     radius: 50.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
             }
-        })
+        });
+    
+    container(inner)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
         .into()
 }
 

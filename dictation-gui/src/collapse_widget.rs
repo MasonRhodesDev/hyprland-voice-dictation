@@ -8,11 +8,15 @@ const INITIAL_ORBIT_RADIUS: f32 = 20.0;
 
 pub struct CollapsingDots {
     progress: f32,
+    time: f32,
 }
 
 impl CollapsingDots {
-    pub fn new(progress: f32) -> Self {
-        Self { progress }
+    pub fn new(progress: f32, time: f32) -> Self {
+        Self { 
+            progress,
+            time,
+        }
     }
 }
 
@@ -36,8 +40,10 @@ impl<Message> canvas::Program<Message> for CollapsingDots {
         let alpha = 1.0 - self.progress;
         let dot_color = Color::from_rgba(1.0, 1.0, 1.0, alpha);
         
+        const ROTATION_SPEED: f32 = 2.0;
+        
         for i in 0..DOT_COUNT {
-            let angle = i as f32 * TAU / DOT_COUNT as f32;
+            let angle = (self.time * ROTATION_SPEED) + (i as f32 * TAU / DOT_COUNT as f32);
             let x = center_x + orbit_radius * angle.cos();
             let y = center_y + orbit_radius * angle.sin();
             
