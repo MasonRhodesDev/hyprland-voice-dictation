@@ -3,17 +3,27 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
 use serde::Deserialize;
 use std::fs;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
-use vosk::{Model, Recognizer};
+use vosk::Model;
 
 pub mod control_ipc;
 pub mod ipc;
+mod engine;
 mod keyboard;
+mod model_manager;
+mod post_processing;
+mod vosk_engine;
+mod whisper_engine;
 
 use control_ipc::{ControlMessage, ControlServer};
+use engine::TranscriptionEngine;
 use keyboard::KeyboardInjector;
+use post_processing::Pipeline;
+use vosk_engine::VoskEngine;
+use whisper_engine::WhisperEngine;
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 const CONTROL_SOCKET_PATH: &str = "/tmp/voice-dictation-control.sock";
 const AUDIO_SOCKET_PATH: &str = "/tmp/voice-dictation.sock";
@@ -29,6 +39,12 @@ struct DaemonConfig {
     sample_rate: String,
     #[serde(default = "default_language")]
     language: String,
+
+    // Engine selection
+    #[serde(default = "default_transcription_engine")]
+    transcription_engine: String,
+
+    // Vosk models
     #[serde(default = "default_preview_model")]
     preview_model: String,
     #[serde(default = "default_preview_model_custom_path")]
@@ -37,6 +53,22 @@ struct DaemonConfig {
     final_model: String,
     #[serde(default = "default_final_model_custom_path")]
     final_model_custom_path: String,
+
+    // Whisper models
+    #[serde(default = "default_whisper_preview_model")]
+    whisper_preview_model: String,
+    #[serde(default = "default_whisper_final_model")]
+    whisper_final_model: String,
+    #[serde(default = "default_whisper_model_path")]
+    whisper_model_path: String,
+
+    // Post-processing
+    #[serde(default = "default_enable_acronyms")]
+    enable_acronyms: bool,
+    #[serde(default = "default_enable_punctuation")]
+    enable_punctuation: bool,
+    #[serde(default = "default_enable_grammar")]
+    enable_grammar: bool,
 }
 
 fn default_language() -> String { "en".to_string() }
@@ -47,11 +79,22 @@ fn default_preview_model_custom_path() -> String {
         .unwrap_or_else(|_| "./models/".to_string())
 }
 fn default_final_model() -> String { "vosk-model-en-us-0.22".to_string() }
-fn default_final_model_custom_path() -> String { 
+fn default_final_model_custom_path() -> String {
     std::env::var("HOME")
         .map(|h| format!("{}/.config/voice-dictation/models/", h))
         .unwrap_or_else(|_| "./models/".to_string())
 }
+fn default_transcription_engine() -> String { "whisper".to_string() }
+fn default_whisper_preview_model() -> String { "ggml-base.en.bin".to_string() }
+fn default_whisper_final_model() -> String { "ggml-small.en.bin".to_string() }
+fn default_whisper_model_path() -> String {
+    std::env::var("HOME")
+        .map(|h| format!("{}/.config/voice-dictation/models/whisper/", h))
+        .unwrap_or_else(|_| "./models/whisper/".to_string())
+}
+fn default_enable_acronyms() -> bool { true }
+fn default_enable_punctuation() -> bool { true }
+fn default_enable_grammar() -> bool { true }
 
 fn load_config() -> Result<Config> {
     let home = std::env::var("HOME")?;
@@ -66,135 +109,26 @@ fn load_config() -> Result<Config> {
     Ok(config)
 }
 
-struct VoskEngine {
-    recognizer: Arc<Mutex<Recognizer>>,
-    accumulated_text: Arc<Mutex<String>>,
-    audio_buffer: Arc<Mutex<Vec<i16>>>,
+/// Runtime engine selection wrapper.
+enum Engine {
+    Vosk(Arc<VoskEngine>),
+    Whisper(Arc<WhisperEngine>),
 }
 
-pub fn remove_duplicate_suffix(accumulated: &str, new_chunk: &str) -> String {
-    let acc_words: Vec<&str> = accumulated.split_whitespace().collect();
-    let new_words: Vec<&str> = new_chunk.split_whitespace().collect();
-
-    if acc_words.is_empty() || new_words.is_empty() {
-        return new_chunk.to_string();
-    }
-
-    for overlap_len in (1..=acc_words.len().min(new_words.len())).rev() {
-        let acc_suffix = &acc_words[acc_words.len() - overlap_len..];
-        let new_prefix = &new_words[..overlap_len];
-
-        if acc_suffix == new_prefix {
-            return new_words[overlap_len..].join(" ");
+impl Engine {
+    /// Get a reference to the underlying engine as a TranscriptionEngine trait object.
+    fn as_trait(&self) -> &dyn TranscriptionEngine {
+        match self {
+            Engine::Vosk(e) => e.as_ref(),
+            Engine::Whisper(e) => e.as_ref(),
         }
     }
-
-    new_chunk.to_string()
 }
 
-impl VoskEngine {
-    fn new(model_path: &str, sample_rate: u32) -> Result<Self> {
-        info!("Loading Vosk model from {}", model_path);
-        let model =
-            Model::new(model_path).ok_or_else(|| anyhow::anyhow!("Failed to load model"))?;
-        let mut recognizer = Recognizer::new(&model, sample_rate as f32)
-            .ok_or_else(|| anyhow::anyhow!("Failed to create recognizer"))?;
-
-        let silence = vec![0i16; sample_rate as usize / 10];
-        let _ = recognizer.accept_waveform(&silence);
-
-        Ok(Self {
-            recognizer: Arc::new(Mutex::new(recognizer)),
-            accumulated_text: Arc::new(Mutex::new(String::new())),
-            audio_buffer: Arc::new(Mutex::new(Vec::new())),
-        })
-    }
-
-    fn process_audio(&self, samples: &[i16]) -> Result<()> {
-        let mut audio_buffer = self.audio_buffer.lock().unwrap();
-        audio_buffer.extend_from_slice(samples);
-        drop(audio_buffer);
-
-        let mut recognizer = self.recognizer.lock().unwrap();
-        let state = recognizer.accept_waveform(samples)?;
-
-        if state == vosk::DecodingState::Finalized {
-            let result = recognizer.result();
-            if let Some(finalized) = result.single() {
-                let text = finalized.text.to_string().trim().to_string();
-                if !text.is_empty() {
-                    let mut accumulated = self.accumulated_text.lock().unwrap();
-
-                    let deduplicated = remove_duplicate_suffix(&accumulated, &text);
-
-                    if !deduplicated.is_empty() {
-                        if !accumulated.is_empty() {
-                            accumulated.push(' ');
-                        }
-                        accumulated.push_str(&deduplicated);
-                        info!("Accumulated chunk: '{}'", deduplicated);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn run_correction_pass(&self, accurate_model: &Model, sample_rate: u32) -> Result<String> {
-        info!("Running correction pass with accurate model...");
-
-        let mut accurate_recognizer = Recognizer::new(accurate_model, sample_rate as f32)
-            .ok_or_else(|| anyhow::anyhow!("Failed to create accurate recognizer"))?;
-
-        let audio_buffer = self.audio_buffer.lock().unwrap();
-
-        const CHUNK_SIZE: usize = 8000;
-        for chunk in audio_buffer.chunks(CHUNK_SIZE) {
-            accurate_recognizer.accept_waveform(chunk)?;
-        }
-
-        let result = accurate_recognizer.final_result();
-        if let Some(text) = result.single().map(|r| r.text.to_string()) {
-            Ok(text.trim().to_string())
-        } else {
-            Ok(String::new())
-        }
-    }
-
-    fn get_current_full_text(&self) -> Result<String> {
-        let mut recognizer = self.recognizer.lock().unwrap();
-        let accumulated = self.accumulated_text.lock().unwrap();
-
-        let partial_result = recognizer.partial_result();
-        let partial = partial_result.partial.to_string().trim().to_string();
-
-        if partial.is_empty() {
-            Ok(accumulated.clone())
-        } else if accumulated.is_empty() {
-            Ok(partial)
-        } else {
-            Ok(format!("{} {}", accumulated, partial))
-        }
-    }
-
-    fn get_final_result(&self) -> Result<String> {
-        let mut recognizer = self.recognizer.lock().unwrap();
-        let mut accumulated = self.accumulated_text.lock().unwrap();
-
-        let result = recognizer.final_result();
-        if let Some(final_chunk) = result.single() {
-            let text = final_chunk.text.to_string().trim().to_string();
-            if !text.is_empty() {
-                if !accumulated.is_empty() {
-                    accumulated.push(' ');
-                }
-                accumulated.push_str(&text);
-            }
-        }
-
-        Ok(accumulated.clone())
-    }
+/// Accurate model wrapper for correction pass.
+enum AccurateModel {
+    Vosk(Model),
+    Whisper(WhisperContext),
 }
 
 struct AudioCapture {
@@ -293,10 +227,17 @@ pub async fn run() -> Result<()> {
                 audio_device: "default".to_string(),
                 sample_rate: "16000".to_string(),
                 language: default_language(),
+                transcription_engine: default_transcription_engine(),
                 preview_model: default_preview_model(),
                 preview_model_custom_path: default_preview_model_custom_path(),
                 final_model: default_final_model(),
                 final_model_custom_path: default_final_model_custom_path(),
+                whisper_preview_model: default_whisper_preview_model(),
+                whisper_final_model: default_whisper_final_model(),
+                whisper_model_path: default_whisper_model_path(),
+                enable_acronyms: default_enable_acronyms(),
+                enable_punctuation: default_enable_punctuation(),
+                enable_grammar: default_enable_grammar(),
             }
         }
     });
@@ -313,14 +254,18 @@ pub async fn run() -> Result<()> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     
     let preview_model_path = if config.daemon.preview_model == "custom" {
-        config.daemon.preview_model_custom_path.replace("$HOME", &home)
+        shellexpand::full(&config.daemon.preview_model_custom_path)
+            .map_err(|e| anyhow::anyhow!("Failed to expand preview model path: {}", e))?
+            .to_string()
     } else {
         let base_path = format!("{}/.config/voice-dictation/models", home);
         format!("{}/{}", base_path, config.daemon.preview_model)
     };
-    
+
     let final_model_path = if config.daemon.final_model == "custom" {
-        config.daemon.final_model_custom_path.replace("$HOME", &home)
+        shellexpand::full(&config.daemon.final_model_custom_path)
+            .map_err(|e| anyhow::anyhow!("Failed to expand final model path: {}", e))?
+            .to_string()
     } else {
         let base_path = format!("{}/.config/voice-dictation/models", home);
         format!("{}/{}", base_path, config.daemon.final_model)
@@ -348,8 +293,60 @@ pub async fn run() -> Result<()> {
     let engine = Arc::new(VoskEngine::new(&preview_model_path, sample_rate)?);
     let keyboard = Arc::new(KeyboardInjector::new(10, 50));
 
-    info!("Preloading accurate model in background from: {}", final_model_path);
-    let accurate_model_handle = tokio::spawn(async move { Model::new(&final_model_path) });
+    // Load accurate model based on configuration
+    let accurate_model_handle = {
+        let engine_type = config.daemon.transcription_engine.clone();
+        let vosk_final_path = final_model_path.clone();
+        let whisper_model_name = config.daemon.whisper_final_model.clone();
+        let whisper_model_dir = config.daemon.whisper_model_path.clone();
+
+        tokio::spawn(async move {
+            match engine_type.as_str() {
+                "vosk" => {
+                    info!("Preloading Vosk accurate model from: {}", vosk_final_path);
+                    Model::new(&vosk_final_path).map(AccurateModel::Vosk)
+                }
+                "whisper" => {
+                    info!("Ensuring Whisper model available: {}", whisper_model_name);
+
+                    tokio::task::spawn_blocking(move || {
+                        // Ensure model exists, download if necessary
+                        let model_path = match model_manager::ensure_whisper_model(
+                            &whisper_model_name,
+                            &whisper_model_dir,
+                        ) {
+                            Ok(path) => path,
+                            Err(e) => {
+                                error!("Failed to obtain Whisper model: {}", e);
+                                error!("Try running: ./scripts/download-whisper-models.sh");
+                                return None;
+                            }
+                        };
+
+                        info!("Loading Whisper model from: {}", model_path.display());
+
+                        WhisperContext::new_with_params(
+                            model_path.to_str().unwrap(),
+                            WhisperContextParameters::default(),
+                        )
+                        .map(AccurateModel::Whisper)
+                        .map_err(|e| {
+                            error!("Whisper model load failed: {:?}", e);
+                            e
+                        })
+                        .ok()
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                }
+                other => {
+                    error!("Unknown transcription_engine '{}'. Valid: 'vosk' or 'whisper'", other);
+                    None
+                }
+            }
+        })
+    };
 
     let audio_ipc = Arc::new(ipc::IpcServer::new(AUDIO_SOCKET_PATH.to_string()));
     audio_ipc.start_server();
@@ -400,8 +397,12 @@ pub async fn run() -> Result<()> {
     let engine_clone = Arc::clone(&engine);
     let control_server_shared = Arc::new(tokio::sync::Mutex::new(control_server));
     let control_clone_for_preview = Arc::clone(&control_server_shared);
+    let enable_acronyms = config.daemon.enable_acronyms;
+    let enable_punctuation = config.daemon.enable_punctuation;
+    let enable_grammar = config.daemon.enable_grammar;
     let preview_task = tokio::spawn(async move {
         let mut check_interval = tokio::time::interval(std::time::Duration::from_millis(200));
+        let pipeline = Pipeline::from_config(enable_acronyms, enable_punctuation, enable_grammar);
 
         loop {
             check_interval.tick().await;
@@ -410,12 +411,26 @@ pub async fn run() -> Result<()> {
             server.try_accept().await;
             drop(server);
 
-            match engine_clone.get_current_full_text() {
-                Ok(text_curr) => {
+            match engine_clone.get_current_text() {
+                Ok(text_raw) => {
+                    // Apply post-processing to preview text
+                    let text_processed = match pipeline.process(&text_raw) {
+                        Ok(processed) => processed,
+                        Err(e) => {
+                            error!("Preview post-processing error: {}", e);
+                            text_raw.clone()
+                        }
+                    };
+
+                    if !pipeline.is_empty() && text_raw != text_processed {
+                        info!("[Preview] Raw: '{}'", text_raw);
+                        info!("[Preview] Processed: '{}'", text_processed);
+                    }
+
                     let mut server = control_clone_for_preview.lock().await;
                     let _ = server
                         .broadcast(&ControlMessage::TranscriptionUpdate {
-                            text: text_curr,
+                            text: text_processed,
                             is_final: false,
                         })
                         .await;
@@ -467,11 +482,75 @@ pub async fn run() -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("Failed to load accurate model"))?;
 
         info!("Running correction pass...");
-        let accurate_result = engine.run_correction_pass(&accurate_model, sample_rate)?;
-        info!("Accurate model result: '{}'", accurate_result);
+        let accurate_result = match &accurate_model {
+            AccurateModel::Vosk(vosk_model) => {
+                // Preview engine is always Vosk, call its correction method
+                engine.run_correction_pass(vosk_model, sample_rate)?
+            }
+            AccurateModel::Whisper(whisper_context) => {
+                // Get audio buffer from the preview engine (Vosk)
+                let audio_buffer = engine.as_ref().get_audio_buffer();
+
+                // Convert i16 → f32 for Whisper
+                info!("Converting {} audio samples to float...", audio_buffer.len());
+                let mut float_samples = vec![0.0f32; audio_buffer.len()];
+                whisper_rs::convert_integer_to_float_audio(&audio_buffer, &mut float_samples)
+                    .map_err(|e| anyhow::anyhow!("Audio conversion failed: {:?}", e))?;
+
+                // Create transcription state
+                let mut state = whisper_context
+                    .create_state()
+                    .map_err(|e| anyhow::anyhow!("Failed to create Whisper state: {:?}", e))?;
+
+                // Configure parameters
+                let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+                params.set_language(Some("en"));
+                params.set_print_special(false);
+                params.set_print_progress(false);
+                params.set_print_realtime(false);
+                params.set_print_timestamps(false);
+
+                info!(
+                    "Running Whisper transcription on {:.2}s of audio...",
+                    float_samples.len() as f32 / sample_rate as f32
+                );
+
+                // Run transcription
+                state
+                    .full(params, &float_samples[..])
+                    .map_err(|e| anyhow::anyhow!("Whisper transcription failed: {:?}", e))?;
+
+                // Extract text from all segments using iterator
+                let result: Vec<String> = state
+                    .as_iter()
+                    .filter_map(|segment| {
+                        segment
+                            .to_str_lossy()
+                            .ok()
+                            .map(|text| text.trim().to_string())
+                    })
+                    .filter(|text| !text.is_empty())
+                    .collect();
+
+                result.join(" ")
+            }
+        };
+        info!("[Accurate] Raw: '{}'", accurate_result);
+
+        // Apply post-processing pipeline
+        let pipeline = Pipeline::from_config(
+            config.daemon.enable_acronyms,
+            config.daemon.enable_punctuation,
+            config.daemon.enable_grammar,
+        );
+        let processed_result = pipeline.process(&accurate_result)?;
+
+        if !pipeline.is_empty() && accurate_result != processed_result {
+            info!("[Accurate] Processed: '{}'", processed_result);
+        }
 
         info!("Typing final text...");
-        keyboard.type_text(&accurate_result).await?;
+        keyboard.type_text(&processed_result).await?;
         info!("✓ Typed!");
 
         let mut server = control_server_shared.lock().await;
@@ -490,69 +569,4 @@ pub async fn run() -> Result<()> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_remove_duplicate_suffix_no_overlap() {
-        let result = remove_duplicate_suffix("hello world", "foo bar");
-        assert_eq!(result, "foo bar");
-    }
-
-    #[test]
-    fn test_remove_duplicate_suffix_full_overlap() {
-        let result = remove_duplicate_suffix("hello world", "hello world");
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn test_remove_duplicate_suffix_partial_overlap() {
-        let result = remove_duplicate_suffix("hello world", "world this is new");
-        assert_eq!(result, "this is new");
-    }
-
-    #[test]
-    fn test_remove_duplicate_suffix_multi_word_overlap() {
-        let result = remove_duplicate_suffix("the quick brown", "quick brown fox");
-        assert_eq!(result, "fox");
-    }
-
-    #[test]
-    fn test_remove_duplicate_suffix_empty_accumulated() {
-        let result = remove_duplicate_suffix("", "hello world");
-        assert_eq!(result, "hello world");
-    }
-
-    #[test]
-    fn test_remove_duplicate_suffix_empty_new() {
-        let result = remove_duplicate_suffix("hello world", "");
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn test_remove_duplicate_suffix_both_empty() {
-        let result = remove_duplicate_suffix("", "");
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn test_remove_duplicate_suffix_single_word_overlap() {
-        let result = remove_duplicate_suffix("test", "test again");
-        assert_eq!(result, "again");
-    }
-
-    #[test]
-    fn test_remove_duplicate_suffix_no_match_similar() {
-        let result = remove_duplicate_suffix("hello world", "hello universe");
-        assert_eq!(result, "hello universe");
-    }
-
-    #[test]
-    fn test_remove_duplicate_suffix_longer_overlap() {
-        let result = remove_duplicate_suffix("one two three four", "two three four five six");
-        assert_eq!(result, "five six");
-    }
 }

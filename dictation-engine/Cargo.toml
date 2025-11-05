@@ -15,6 +15,10 @@ shellexpand = "3"
 vosk = "0.3.1"
 cpal = "0.15"
 toml = "0.8"
+harper-core = "0.68"
+whisper-rs = "0.15"
+reqwest = { version = "0.12", features = ["blocking"] }
+indicatif = "0.17"
 
 [lib]
 name = "dictation_engine"

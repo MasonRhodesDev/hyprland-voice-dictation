@@ -26,3 +26,4 @@ config.toml
 # Models (too large for git)
 models/*.zip
 models/vosk-model-*/
+.plans/

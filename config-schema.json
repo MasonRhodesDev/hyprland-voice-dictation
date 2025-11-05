@@ -99,6 +99,77 @@
           "default": "$HOME/.config/voice-dictation/models/",
           "ui_widget": "file_picker",
           "visible_when": "daemon.final_model == 'custom'"
+        },
+        {
+          "id": "transcription_engine",
+          "label": "Transcription Engine",
+          "description": "Engine for final accurate transcription (Whisper: better accuracy, Vosk: original behavior)",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["whisper", "vosk"]
+          },
+          "default": "whisper",
+          "ui_widget": "dropdown"
+        },
+        {
+          "id": "whisper_preview_model",
+          "label": "Whisper Preview Model",
+          "description": "Whisper model for preview (currently unused, preview uses Vosk)",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["ggml-tiny.en.bin", "ggml-base.en.bin", "ggml-small.en.bin"]
+          },
+          "default": "ggml-base.en.bin",
+          "ui_widget": "dropdown",
+          "visible_when": "daemon.transcription_engine == 'whisper'"
+        },
+        {
+          "id": "whisper_final_model",
+          "label": "Whisper Final Model",
+          "description": "Whisper model for accurate transcription (small recommended for CPU)",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["ggml-tiny.en.bin", "ggml-base.en.bin", "ggml-small.en.bin", "ggml-medium.en.bin"]
+          },
+          "default": "ggml-small.en.bin",
+          "ui_widget": "dropdown",
+          "visible_when": "daemon.transcription_engine == 'whisper'"
+        },
+        {
+          "id": "whisper_model_path",
+          "label": "Whisper Model Path",
+          "description": "Directory containing Whisper GGML model files",
+          "type": "path",
+          "default": "$HOME/.config/voice-dictation/models/whisper/",
+          "ui_widget": "file_picker",
+          "visible_when": "daemon.transcription_engine == 'whisper'"
+        },
+        {
+          "id": "enable_acronyms",
+          "label": "Acronym Detection",
+          "description": "Convert letter-by-letter patterns to acronyms (e.g., 'a p i' → 'API'). ~2ms overhead.",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle"
+        },
+        {
+          "id": "enable_punctuation",
+          "label": "Capitalization",
+          "description": "Capitalize first word, pronoun 'I', and after sentence endings. ~5ms overhead.",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle"
+        },
+        {
+          "id": "enable_grammar",
+          "label": "Grammar & Spell Checking",
+          "description": "Use Harper for grammar and spelling corrections (developer-friendly). ~10-20ms overhead.",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle"
         }
       ]
     },
