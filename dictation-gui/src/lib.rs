@@ -1,14 +1,12 @@
 use iced::widget::{canvas, column, container, scrollable, text};
 use iced::{time, Alignment, Color, Element, Length, Task};
-use iced_layershell::build_pattern::application;
-use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
-use iced_layershell::settings::LayerShellSettings;
 use iced_layershell::to_layer_message;
 use std::time::Duration;
 use tracing::{debug, info, trace};
 
 pub mod animation;
 pub mod animations;
+pub mod background_tasks;
 pub mod collapse_widget;
 pub mod config;
 pub mod control_ipc;
@@ -16,8 +14,11 @@ pub mod fft;
 pub mod ipc;
 pub mod ipc_subscription;
 pub mod layout;
+pub mod monitor_detection;
+pub mod per_monitor_window;
 pub mod renderer;
 pub mod renderer_v2;
+pub mod shared_state;
 pub mod spectrum_widget;
 pub mod spinner_widget;
 pub mod text_renderer;
@@ -48,36 +49,70 @@ pub fn run() -> Result<(), iced_layershell::Error> {
 
     tracing_subscriber::fmt().with_max_level(filter).init();
 
-    info!("Starting dictation-gui with iced_layershell");
+    info!("Starting dictation-gui with multi-monitor support");
 
-    let config = config::load_config();
-    
-    let anchor = match config.gui_general.position.as_str() {
-        "top" => Anchor::Top | Anchor::Left | Anchor::Right,
-        "center" => Anchor::Left | Anchor::Right,
-        "bottom" => Anchor::Bottom | Anchor::Left | Anchor::Right,
-        _ => Anchor::Bottom | Anchor::Left | Anchor::Right,
-    };
-    
-    let margin = match config.gui_general.position.as_str() {
-        "top" => (10, 0, 0, 0),
-        "center" => (0, 0, 0, 0),
-        "bottom" => (0, 0, 10, 0),
-        _ => (0, 0, 10, 0),
+    // Create shared state
+    let shared_state = shared_state::SharedState::new();
+
+    // Spawn background tasks for IPC
+    info!("Spawning background IPC tasks");
+    background_tasks::spawn_audio_task(shared_state.clone());
+    background_tasks::spawn_control_task(shared_state.clone());
+
+    // Spawn Hyprland event listener
+    info!("Spawning Hyprland event listener");
+    monitor_detection::spawn_active_monitor_listener(shared_state.clone());
+
+    // Enumerate monitors
+    info!("Enumerating monitors...");
+    let monitors = match monitor_detection::enumerate_monitors() {
+        Ok(monitors) => {
+            if monitors.is_empty() {
+                tracing::error!("No monitors detected! Exiting.");
+                std::process::exit(1);
+            }
+            monitors
+        }
+        Err(e) => {
+            tracing::error!("Failed to enumerate monitors: {}. Exiting.", e);
+            std::process::exit(1);
+        }
     };
 
-    application(namespace, update, view)
-        .layer_settings(LayerShellSettings {
-            size: Some((config.gui_general.window_width, 160)),
-            anchor,
-            layer: Layer::Overlay,
-            keyboard_interactivity: KeyboardInteractivity::None,
-            margin,
-            ..Default::default()
-        })
-        .subscription(subscription)
-        .style(style)
-        .run()
+    info!("Detected {} monitor(s): {:?}", monitors.len(), monitors);
+
+    // Spawn a window thread for each monitor
+    let monitor_count = monitors.len();
+    let mut handles = Vec::new();
+
+    for (idx, monitor_name) in monitors.into_iter().enumerate() {
+        let state_clone = shared_state.clone();
+        let monitor_clone = monitor_name.clone();
+
+        info!("Spawning window thread for monitor: {}", monitor_name);
+
+        let handle = std::thread::spawn(move || {
+            if let Err(e) = per_monitor_window::run_monitor_window(monitor_clone.clone(), state_clone) {
+                tracing::error!("Window thread for monitor {} failed: {}", monitor_clone, e);
+            }
+        });
+
+        handles.push(handle);
+
+        // Brief delay between spawns to avoid race conditions
+        if idx < monitor_count - 1 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
+    info!("All monitor windows spawned, waiting for threads...");
+
+    // Wait for all threads (they run indefinitely until exit)
+    for handle in handles {
+        let _ = handle.join();
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
