@@ -26,7 +26,7 @@ pub struct SharedState {
 impl Default for SharedState {
     fn default() -> Self {
         Self {
-            gui_state: GuiState::PreListening,
+            gui_state: GuiState::Hidden,
             transcription: String::new(),
             spectrum_values: vec![0.0; 10], // Default 10 bands
             active_monitor: String::new(),

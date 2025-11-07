@@ -2,17 +2,14 @@ use iced::widget::{canvas, column, container, scrollable, text};
 use iced::{time, Alignment, Color, Element, Length, Task};
 use iced_layershell::to_layer_message;
 use std::time::Duration;
-use tracing::{debug, info, trace};
+use tracing::{debug, error, info, trace};
 
 pub mod animation;
 pub mod animations;
-pub mod background_tasks;
+pub mod channel_listener;
 pub mod collapse_widget;
 pub mod config;
-pub mod control_ipc;
 pub mod fft;
-pub mod ipc;
-pub mod ipc_subscription;
 pub mod layout;
 pub mod monitor_detection;
 pub mod per_monitor_window;
@@ -29,9 +26,6 @@ use spectrum_widget::SpectrumBars;
 use spinner_widget::Spinner;
 
 const FFT_SIZE: usize = 512;
-const SOCKET_PATH: &str = "/tmp/voice-dictation.sock";
-const CONTROL_SOCKET_PATH: &str = "/tmp/voice-dictation-control.sock";
-
 pub const SAMPLE_RATE: u32 = 16000;
 
 pub fn run() -> Result<(), iced_layershell::Error> {
@@ -53,11 +47,6 @@ pub fn run() -> Result<(), iced_layershell::Error> {
 
     // Create shared state
     let shared_state = shared_state::SharedState::new();
-
-    // Spawn background tasks for IPC
-    info!("Spawning background IPC tasks");
-    background_tasks::spawn_audio_task(shared_state.clone());
-    background_tasks::spawn_control_task(shared_state.clone());
 
     // Spawn Hyprland event listener
     info!("Spawning Hyprland event listener");
@@ -115,8 +104,103 @@ pub fn run() -> Result<(), iced_layershell::Error> {
     Ok(())
 }
 
+/// Run GUI integrated with daemon (channel-based communication)
+pub fn run_integrated(
+    gui_control_rx: tokio::sync::broadcast::Receiver<dictation_types::GuiControl>,
+    spectrum_rx: tokio::sync::broadcast::Receiver<Vec<f32>>,
+    gui_status_tx: tokio::sync::mpsc::Sender<dictation_types::GuiStatus>,
+) -> Result<(), iced_layershell::Error> {
+    // Note: tracing subscriber is already initialized by the daemon in integrated mode
+    // No need to initialize it again here
+
+    info!("Starting dictation-gui (integrated mode) with multi-monitor support");
+
+    // Create shared state
+    let shared_state = shared_state::SharedState::new();
+
+    // Spawn channel listeners (replaces background_tasks)
+    info!("Spawning channel listeners");
+    channel_listener::spawn_channel_listener(
+        gui_control_rx,
+        spectrum_rx,
+        shared_state.clone(),
+        gui_status_tx.clone(),
+    );
+
+    // Spawn Hyprland event listener
+    info!("Spawning Hyprland event listener");
+    monitor_detection::spawn_active_monitor_listener(shared_state.clone());
+
+    // Enumerate monitors
+    info!("Enumerating monitors...");
+    let monitors = match monitor_detection::enumerate_monitors() {
+        Ok(monitors) => {
+            if monitors.is_empty() {
+                tracing::error!("No monitors detected! Exiting.");
+                let _ = gui_status_tx.blocking_send(dictation_types::GuiStatus::Error(
+                    "No monitors detected".to_string(),
+                ));
+                std::process::exit(1);
+            }
+            monitors
+        }
+        Err(e) => {
+            tracing::error!("Failed to enumerate monitors: {}. Exiting.", e);
+            let _ = gui_status_tx.blocking_send(dictation_types::GuiStatus::Error(
+                format!("Failed to enumerate monitors: {}", e),
+            ));
+            std::process::exit(1);
+        }
+    };
+
+    info!("Detected {} monitor(s): {:?}", monitors.len(), monitors);
+
+    // Spawn a window thread for each monitor
+    let monitor_count = monitors.len();
+    let mut handles = Vec::new();
+
+    for (idx, monitor_name) in monitors.into_iter().enumerate() {
+        let state_clone = shared_state.clone();
+        let monitor_clone = monitor_name.clone();
+
+        info!("Spawning window thread for monitor: {}", monitor_name);
+
+        let handle = std::thread::spawn(move || {
+            if let Err(e) = per_monitor_window::run_monitor_window(monitor_clone.clone(), state_clone) {
+                tracing::error!("Window thread for monitor {} failed: {}", monitor_clone, e);
+            }
+        });
+
+        handles.push(handle);
+
+        // Brief delay between spawns to avoid race conditions
+        if idx < monitor_count - 1 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
+    info!("All monitor windows spawned");
+
+    // Send ready signal to daemon
+    if let Err(e) = gui_status_tx.blocking_send(dictation_types::GuiStatus::Ready) {
+        error!("Failed to send ready status: {}", e);
+    } else {
+        info!("Sent Ready status to daemon");
+    }
+
+    info!("Waiting for threads...");
+
+    // Wait for all threads (they run indefinitely until exit)
+    for handle in handles {
+        let _ = handle.join();
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuiState {
+    Hidden,
     PreListening,
     Listening,
     Processing,
@@ -250,11 +334,7 @@ fn namespace(_overlay: &DictationOverlay) -> String {
 
 fn subscription(overlay: &DictationOverlay) -> iced::Subscription<Message> {
     let update_interval_ms = 1000 / overlay.config.elements.spectrum_update_rate as u64;
-    iced::Subscription::batch([
-        time::every(Duration::from_millis(update_interval_ms)).map(|_| Message::Tick),
-        ipc_subscription::audio_subscription(),
-        ipc_subscription::control_subscription(),
-    ])
+    time::every(Duration::from_millis(update_interval_ms)).map(|_| Message::Tick)
 }
 
 fn update(overlay: &mut DictationOverlay, message: Message) -> Task<Message> {
@@ -340,6 +420,7 @@ fn update(overlay: &mut DictationOverlay, message: Message) -> Task<Message> {
             overlay.transition_progress = 0.0;
 
             overlay.target_size = match state {
+                GuiState::Hidden => (0.0, 0.0),
                 GuiState::PreListening => calculate_prelistening_size(&overlay.config),
                 GuiState::Listening => calculate_listening_size(&overlay.transcription, &overlay.config),
                 GuiState::Processing => {
@@ -377,6 +458,13 @@ fn update(overlay: &mut DictationOverlay, message: Message) -> Task<Message> {
 
 fn view<'a>(overlay: &'a DictationOverlay) -> Element<'a, Message> {
     match (overlay.transition_phase, overlay.state, overlay.previous_state) {
+        (_, GuiState::Hidden, _) => {
+            // Hidden state: return empty/invisible element
+            container(text(""))
+                .width(Length::Fixed(0.0))
+                .height(Length::Fixed(0.0))
+                .into()
+        }
         (TransitionPhase::Transitioning, GuiState::Listening, Some(GuiState::PreListening)) => {
             view_transition_prelistening_to_listening(overlay)
         }

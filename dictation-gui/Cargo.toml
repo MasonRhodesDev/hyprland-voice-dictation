@@ -11,6 +11,8 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+dictation-types = { path = "../dictation-types" }
+
 # Iced GUI framework with layer-shell support
 iced = { version = "0.13", features = ["canvas", "tokio", "advanced"] }
 iced_layershell = "0.13.7"

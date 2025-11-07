@@ -7,11 +7,22 @@ use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ControlMessage {
+    // Legacy messages (keep for compatibility)
     Ready,
     TranscriptionUpdate { text: String, is_final: bool },
     Confirm,
     ProcessingStarted,
     Complete,
+
+    // Session control messages (CLI → Daemon)
+    StartRecording,
+    StopRecording,
+    StatusQuery,
+    StatusResponse {
+        state: String,
+        session_active: bool
+    },
+    Shutdown,
 }
 
 pub struct ControlServer {

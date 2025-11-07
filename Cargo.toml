@@ -8,11 +8,14 @@ dictation-engine = { path = "dictation-engine" }
 dictation-gui = { path = "dictation-gui" }
 schema-tui = { path = "../schema-tui" }
 clap = { version = "4", features = ["derive"] }
+zbus = "4.1"
+tokio = { workspace = true }
 
 [workspace]
 members = [
     "dictation-engine",
     "dictation-gui",
+    "dictation-types",
     "monitor-label-poc",
 ]
 resolver = "2"

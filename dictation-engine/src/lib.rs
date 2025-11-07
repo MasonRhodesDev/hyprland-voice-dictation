@@ -4,12 +4,13 @@ use cpal::{Stream, StreamConfig};
 use serde::Deserialize;
 use std::fs;
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, mpsc};
+use tracing::{debug, error, info, warn};
 use vosk::Model;
 
 pub mod control_ipc;
-pub mod ipc;
+pub mod dbus_control;
 mod engine;
 mod keyboard;
 mod model_manager;
@@ -17,7 +18,9 @@ mod post_processing;
 mod vosk_engine;
 mod whisper_engine;
 
-use control_ipc::{ControlMessage, ControlServer};
+pub use dictation_types::{GuiControl, GuiState, GuiStatus};
+
+use dbus_control::DaemonCommand;
 use engine::TranscriptionEngine;
 use keyboard::KeyboardInjector;
 use post_processing::Pipeline;
@@ -25,8 +28,29 @@ use vosk_engine::VoskEngine;
 use whisper_engine::WhisperEngine;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-const CONTROL_SOCKET_PATH: &str = "/tmp/voice-dictation-control.sock";
-const AUDIO_SOCKET_PATH: &str = "/tmp/voice-dictation.sock";
+// Daemon state machine
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DaemonState {
+    Idle,        // Waiting for StartRecording command, GUI hidden
+    Recording,   // Actively recording audio and transcribing, GUI visible
+    Processing,  // Running accurate model and typing, GUI visible with spinner
+}
+
+impl std::fmt::Display for DaemonState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DaemonState::Idle => write!(f, "idle"),
+            DaemonState::Recording => write!(f, "recording"),
+            DaemonState::Processing => write!(f, "processing"),
+        }
+    }
+}
+
+// Recording session context
+struct RecordingSession {
+    start_time: Instant,
+    engine: Arc<VoskEngine>,
+}
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -271,7 +295,13 @@ pub async fn run() -> Result<()> {
         format!("{}/{}", base_path, config.daemon.final_model)
     };
 
-    let (audio_tx, mut audio_rx) = mpsc::unbounded_channel();
+    let (audio_tx, audio_rx) = mpsc::unbounded_channel();
+    let audio_rx_shared = Arc::new(tokio::sync::Mutex::new(audio_rx));
+
+    // Create GUI channels for integrated communication
+    let (gui_control_tx, _) = broadcast::channel::<GuiControl>(100);
+    let (spectrum_tx, _) = broadcast::channel::<Vec<f32>>(50);
+    let (gui_status_tx, mut gui_status_rx) = mpsc::channel::<GuiStatus>(10);
 
     let audio_device = if config.daemon.audio_device.is_empty() {
         None
@@ -286,287 +316,396 @@ pub async fn run() -> Result<()> {
     };
 
     let capture = AudioCapture::new(audio_tx, audio_device, sample_rate)?;
-    capture.start()?;
-    info!("Audio capture started - buffering...");
+    // Don't start audio capture yet - will be started when StartRecording received
+    info!("Audio capture initialized (paused)");
 
     info!("Loading fast model for live preview from: {}", preview_model_path);
     let engine = Arc::new(VoskEngine::new(&preview_model_path, sample_rate)?);
     let keyboard = Arc::new(KeyboardInjector::new(10, 50));
 
-    // Load accurate model based on configuration
-    let accurate_model_handle = {
+    // Spawn integrated GUI
+    info!("Spawning integrated GUI...");
+    let gui_control_rx = gui_control_tx.subscribe();
+    let spectrum_rx = spectrum_tx.subscribe();
+    let _gui_handle = tokio::task::spawn_blocking(move || {
+        dictation_gui::run_integrated(
+            gui_control_rx,
+            spectrum_rx,
+            gui_status_tx,
+        )
+    });
+
+    // Wait for GUI to initialize
+    info!("Waiting for GUI to initialize...");
+    match tokio::time::timeout(
+        Duration::from_secs(5),
+        gui_status_rx.recv()
+    ).await {
+        Ok(Some(GuiStatus::Ready)) => info!("GUI ready"),
+        Ok(Some(GuiStatus::Error(e))) => {
+            return Err(anyhow::anyhow!("GUI initialization failed: {}", e));
+        }
+        Ok(Some(GuiStatus::TransitionComplete { .. })) => {
+            warn!("Unexpected TransitionComplete during init, continuing");
+        }
+        Ok(Some(GuiStatus::ShuttingDown)) => {
+            return Err(anyhow::anyhow!("GUI is shutting down during init"));
+        }
+        Ok(None) => {
+            return Err(anyhow::anyhow!("GUI status channel closed"));
+        }
+        Err(_) => {
+            return Err(anyhow::anyhow!("GUI failed to start within 5 seconds"));
+        }
+    }
+
+    // Load accurate model based on configuration (eagerly)
+    info!("Loading accurate model in background...");
+    let accurate_model_opt = {
         let engine_type = config.daemon.transcription_engine.clone();
         let vosk_final_path = final_model_path.clone();
         let whisper_model_name = config.daemon.whisper_final_model.clone();
         let whisper_model_dir = config.daemon.whisper_model_path.clone();
 
-        tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || {
             match engine_type.as_str() {
                 "vosk" => {
-                    info!("Preloading Vosk accurate model from: {}", vosk_final_path);
+                    info!("Loading Vosk accurate model from: {}", vosk_final_path);
                     Model::new(&vosk_final_path).map(AccurateModel::Vosk)
                 }
                 "whisper" => {
                     info!("Ensuring Whisper model available: {}", whisper_model_name);
 
-                    tokio::task::spawn_blocking(move || {
-                        // Ensure model exists, download if necessary
-                        let model_path = match model_manager::ensure_whisper_model(
-                            &whisper_model_name,
-                            &whisper_model_dir,
-                        ) {
-                            Ok(path) => path,
-                            Err(e) => {
-                                error!("Failed to obtain Whisper model: {}", e);
-                                error!("Try running: ./scripts/download-whisper-models.sh");
-                                return None;
-                            }
-                        };
+                    // Ensure model exists, download if necessary
+                    let model_path = match model_manager::ensure_whisper_model(
+                        &whisper_model_name,
+                        &whisper_model_dir,
+                    ) {
+                        Ok(path) => path,
+                        Err(e) => {
+                            error!("Failed to obtain Whisper model: {}", e);
+                            error!("Try running: ./scripts/download-whisper-models.sh");
+                            return None;
+                        }
+                    };
 
-                        info!("Loading Whisper model from: {}", model_path.display());
+                    info!("Loading Whisper model from: {}", model_path.display());
 
-                        WhisperContext::new_with_params(
-                            model_path.to_str().unwrap(),
-                            WhisperContextParameters::default(),
-                        )
-                        .map(AccurateModel::Whisper)
-                        .map_err(|e| {
-                            error!("Whisper model load failed: {:?}", e);
-                            e
-                        })
-                        .ok()
+                    WhisperContext::new_with_params(
+                        model_path.to_str().unwrap(),
+                        WhisperContextParameters::default(),
+                    )
+                    .map(AccurateModel::Whisper)
+                    .map_err(|e| {
+                        error!("Whisper model load failed: {:?}", e);
+                        e
                     })
-                    .await
                     .ok()
-                    .flatten()
                 }
                 other => {
                     error!("Unknown transcription_engine '{}'. Valid: 'vosk' or 'whisper'", other);
                     None
                 }
             }
-        })
+        }).await.ok().flatten()
     };
 
-    let audio_ipc = Arc::new(ipc::IpcServer::new(AUDIO_SOCKET_PATH.to_string()));
-    audio_ipc.start_server();
+    let accurate_model = Arc::new(accurate_model_opt);
 
-    let mut control_server = ControlServer::new(CONTROL_SOCKET_PATH).await?;
+    // Create D-Bus service for control commands
+    // IMPORTANT: Must keep connection alive for D-Bus service to remain registered
+    let (dbus_conn, _command_sender, mut command_rx) = dbus_control::create_dbus_service().await?;
+    let _dbus_conn = dbus_conn; // Keep alive but mark unused
 
-    info!("Ready - waiting for GUI to connect");
+    info!("Daemon initialized - entering idle state (GUI hidden)");
 
-    control_server.broadcast(&ControlMessage::Ready).await?;
+    // State machine variables
+    let mut daemon_state = DaemonState::Idle;
+    let mut session: Option<RecordingSession> = None;
+    let mut audio_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut preview_task: Option<tokio::task::JoinHandle<()>> = None;
 
-    info!("Recording... (waiting for Confirm command)");
+    // ===== PERSISTENT STATE MACHINE LOOP =====
+    loop {
+        match daemon_state {
+            DaemonState::Idle => {
+                // Wait for D-Bus commands with timeout
+                match tokio::time::timeout(Duration::from_millis(100), command_rx.recv()).await {
+                    Ok(Some(cmd)) => match cmd {
+                        DaemonCommand::StartRecording => {
+                            info!("Received StartRecording command");
 
-    let mut startup_buffer = Vec::new();
-    while let Ok(samples) = audio_rx.try_recv() {
-        startup_buffer.push(samples);
-    }
+                            // Start new recording session
+                            info!("Starting audio capture...");
+                            capture.start()?;
 
-    if !startup_buffer.is_empty() {
-        info!("Processing {} buffered audio chunks from startup", startup_buffer.len());
-        for samples in startup_buffer {
-            if let Err(e) = engine.process_audio(&samples) {
-                error!("Processing buffered audio error: {}", e);
+                            // Create new engine for new session (Vosk doesn't have reset)
+                            let session_engine = Arc::new(VoskEngine::new(&preview_model_path, sample_rate)?);
+
+                            // Show GUI
+                            gui_control_tx.send(GuiControl::SetListening)
+                                .map_err(|e| anyhow::anyhow!("Failed to send SetListening: {}", e))?;
+
+                            // Create session
+                            session = Some(RecordingSession {
+                                start_time: Instant::now(),
+                                engine: Arc::clone(&session_engine),
+                            });
+
+                            // Start audio processing task
+                            let engine_clone = Arc::clone(&session_engine);
+                            let spectrum_tx_clone = spectrum_tx.clone();
+                            let audio_rx_clone = Arc::clone(&audio_rx_shared);
+                            audio_task = Some(tokio::spawn(async move {
+                                let mut buffer = Vec::new();
+                                loop {
+                                    let samples = {
+                                        let mut rx = audio_rx_clone.lock().await;
+                                        rx.recv().await
+                                    };
+
+                                    match samples {
+                                        Some(samples) => {
+                                            let samples_f32: Vec<f32> = samples.iter().map(|&s| s as f32 / 32768.0).collect();
+                                            buffer.extend_from_slice(&samples_f32);
+
+                                            while buffer.len() >= 512 {
+                                                let chunk: Vec<f32> = buffer.drain(..512).collect();
+                                                let _ = spectrum_tx_clone.send(chunk);
+                                            }
+
+                                            if let Err(e) = engine_clone.process_audio(&samples) {
+                                                error!("Processing error: {}", e);
+                                            }
+                                        }
+                                        None => break,
+                                    }
+                                }
+                            }));
+
+                            // Start preview task
+                            let engine_clone = Arc::clone(&session_engine);
+                            let gui_control_tx_preview = gui_control_tx.clone();
+                            let enable_acronyms = config.daemon.enable_acronyms;
+                            let enable_punctuation = config.daemon.enable_punctuation;
+                            let enable_grammar = config.daemon.enable_grammar;
+                            preview_task = Some(tokio::spawn(async move {
+                                let mut check_interval = tokio::time::interval(std::time::Duration::from_millis(200));
+                                let pipeline = Pipeline::from_config(enable_acronyms, enable_punctuation, enable_grammar);
+
+                                loop {
+                                    check_interval.tick().await;
+
+                                    match engine_clone.get_current_text() {
+                                        Ok(text_raw) => {
+                                            let text_processed = match pipeline.process(&text_raw) {
+                                                Ok(processed) => processed,
+                                                Err(e) => {
+                                                    error!("Preview post-processing error: {}", e);
+                                                    text_raw.clone()
+                                                }
+                                            };
+
+                                            if !pipeline.is_empty() && text_raw != text_processed {
+                                                debug!("[Preview] Raw: '{}' -> Processed: '{}'", text_raw, text_processed);
+                                            }
+
+                                            let _ = gui_control_tx_preview.send(GuiControl::UpdateTranscription {
+                                                text: text_processed,
+                                                is_final: false,
+                                            });
+                                        }
+                                        Err(e) => error!("Failed to get text: {}", e),
+                                    }
+                                }
+                            }));
+
+                            daemon_state = DaemonState::Recording;
+                            info!("Entered Recording state");
+                        }
+                        DaemonCommand::Shutdown => {
+                            info!("Received Shutdown command");
+                            // Send GUI exit
+                            let _ = gui_control_tx.send(GuiControl::Exit);
+                            break;
+                        }
+                        _ => {
+                            warn!("Ignoring unexpected command in Idle state");
+                        }
+                    }
+                    Ok(None) => {
+                        // Channel closed
+                        error!("D-Bus command channel closed");
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout - continue loop
+                    }
+                }
             }
-        }
-    }
 
-    let engine_clone = Arc::clone(&engine);
-    let audio_ipc_clone = Arc::clone(&audio_ipc);
-    let audio_task = tokio::spawn(async move {
-        let mut buffer = Vec::new();
+            DaemonState::Recording => {
+                // Check for D-Bus commands while recording (non-blocking)
+                match tokio::time::timeout(Duration::from_millis(100), command_rx.recv()).await {
+                    Ok(Some(cmd)) => match cmd {
+                        DaemonCommand::Confirm => {
+                            info!("Received Confirm command");
+                            daemon_state = DaemonState::Processing;
+                        }
+                        DaemonCommand::StopRecording => {
+                            info!("Received StopRecording (cancel)");
 
-        while let Some(samples) = audio_rx.recv().await {
-            let samples_f32: Vec<f32> = samples.iter().map(|&s| s as f32 / 32768.0).collect();
+                            // Abort tasks
+                            if let Some(task) = audio_task.take() {
+                                task.abort();
+                            }
+                            if let Some(task) = preview_task.take() {
+                                task.abort();
+                            }
 
-            buffer.extend_from_slice(&samples_f32);
+                            // Hide GUI
+                            let _ = gui_control_tx.send(GuiControl::SetHidden);
 
-            while buffer.len() >= 512 {
-                let chunk: Vec<f32> = buffer.drain(..512).collect();
-                audio_ipc_clone.broadcast_samples(&chunk).await;
+                            session = None;
+                            daemon_state = DaemonState::Idle;
+                            info!("Returned to Idle state");
+                        }
+                        DaemonCommand::Shutdown => {
+                            info!("Shutdown during recording");
+                            // Abort tasks
+                            if let Some(task) = audio_task.take() {
+                                task.abort();
+                            }
+                            if let Some(task) = preview_task.take() {
+                                task.abort();
+                            }
+                            let _ = gui_control_tx.send(GuiControl::Exit);
+                            break;
+                        }
+                        _ => {
+                            warn!("Ignoring unexpected command in Recording state");
+                        }
+                    }
+                    Ok(None) => {
+                        error!("D-Bus command channel closed");
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout - continue recording
+                    }
+                }
             }
 
-            if let Err(e) = engine_clone.process_audio(&samples) {
-                error!("Processing error: {}", e);
-            }
-        }
-    });
+            DaemonState::Processing => {
+                info!("Entering Processing state");
 
-    let engine_clone = Arc::clone(&engine);
-    let control_server_shared = Arc::new(tokio::sync::Mutex::new(control_server));
-    let control_clone_for_preview = Arc::clone(&control_server_shared);
-    let enable_acronyms = config.daemon.enable_acronyms;
-    let enable_punctuation = config.daemon.enable_punctuation;
-    let enable_grammar = config.daemon.enable_grammar;
-    let preview_task = tokio::spawn(async move {
-        let mut check_interval = tokio::time::interval(std::time::Duration::from_millis(200));
-        let pipeline = Pipeline::from_config(enable_acronyms, enable_punctuation, enable_grammar);
+                // Stop recording tasks
+                if let Some(task) = audio_task.take() {
+                    task.abort();
+                }
+                if let Some(task) = preview_task.take() {
+                    task.abort();
+                }
 
-        loop {
-            check_interval.tick().await;
+                // Get engine from session
+                let session_engine = session.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("No active session in Processing state"))?
+                    .engine.clone();
 
-            let mut server = control_clone_for_preview.lock().await;
-            server.try_accept().await;
-            drop(server);
+                let fast_result = session_engine.get_final_result()?;
+                info!("Fast model result: '{}'", fast_result);
 
-            match engine_clone.get_current_text() {
-                Ok(text_raw) => {
-                    // Apply post-processing to preview text
-                    let text_processed = match pipeline.process(&text_raw) {
-                        Ok(processed) => processed,
-                        Err(e) => {
-                            error!("Preview post-processing error: {}", e);
-                            text_raw.clone()
+                if !fast_result.is_empty() {
+                    // Send processing state to GUI
+                    gui_control_tx.send(GuiControl::SetProcessing)
+                        .map_err(|e| anyhow::anyhow!("Failed to send SetProcessing: {}", e))?;
+
+                    // Check if accurate model is loaded
+                    let model_ref = accurate_model.as_ref()
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("Accurate model not loaded"))?;
+
+                    info!("Running correction pass...");
+                    let accurate_result = match model_ref {
+                        AccurateModel::Vosk(vosk_model) => {
+                            session_engine.run_correction_pass(vosk_model, sample_rate)?
+                        }
+                        AccurateModel::Whisper(whisper_context) => {
+                            let audio_buffer = session_engine.as_ref().get_audio_buffer();
+                            info!("Converting {} audio samples to float...", audio_buffer.len());
+                            let mut float_samples = vec![0.0f32; audio_buffer.len()];
+                            whisper_rs::convert_integer_to_float_audio(&audio_buffer, &mut float_samples)
+                                .map_err(|e| anyhow::anyhow!("Audio conversion failed: {:?}", e))?;
+
+                            let mut state = whisper_context
+                                .create_state()
+                                .map_err(|e| anyhow::anyhow!("Failed to create Whisper state: {:?}", e))?;
+
+                            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+                            params.set_language(Some("en"));
+                            params.set_print_special(false);
+                            params.set_print_progress(false);
+                            params.set_print_realtime(false);
+                            params.set_print_timestamps(false);
+
+                            info!("Running Whisper transcription on {:.2}s of audio...",
+                                float_samples.len() as f32 / sample_rate as f32);
+
+                            state.full(params, &float_samples[..])
+                                .map_err(|e| anyhow::anyhow!("Whisper transcription failed: {:?}", e))?;
+
+                            let result: Vec<String> = state
+                                .as_iter()
+                                .filter_map(|segment| {
+                                    segment.to_str_lossy().ok().map(|text| text.trim().to_string())
+                                })
+                                .filter(|text| !text.is_empty())
+                                .collect();
+
+                            result.join(" ")
                         }
                     };
+                    info!("[Accurate] Raw: '{}'", accurate_result);
 
-                    if !pipeline.is_empty() && text_raw != text_processed {
-                        info!("[Preview] Raw: '{}'", text_raw);
-                        info!("[Preview] Processed: '{}'", text_processed);
+                    // Apply post-processing pipeline
+                    let pipeline = Pipeline::from_config(
+                        config.daemon.enable_acronyms,
+                        config.daemon.enable_punctuation,
+                        config.daemon.enable_grammar,
+                    );
+                    let processed_result = pipeline.process(&accurate_result)?;
+
+                    if !pipeline.is_empty() && accurate_result != processed_result {
+                        info!("[Accurate] Processed: '{}'", processed_result);
                     }
 
-                    let mut server = control_clone_for_preview.lock().await;
-                    let _ = server
-                        .broadcast(&ControlMessage::TranscriptionUpdate {
-                            text: text_processed,
-                            is_final: false,
-                        })
-                        .await;
+                    info!("Typing final text...");
+                    keyboard.type_text(&processed_result).await?;
+                    info!("✓ Typed!");
+
+                    // Send to GUI via channel
+                    gui_control_tx.send(GuiControl::SetClosing)
+                        .map_err(|e| anyhow::anyhow!("Failed to send SetClosing: {}", e))?;
+
+                    tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
+                } else {
+                    info!("No text to type");
+                    gui_control_tx.send(GuiControl::SetClosing)
+                        .map_err(|e| anyhow::anyhow!("Failed to send SetClosing: {}", e))?;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
                 }
-                Err(e) => error!("Failed to get text: {}", e),
+
+                // Hide GUI and return to Idle
+                gui_control_tx.send(GuiControl::SetHidden)
+                    .map_err(|e| anyhow::anyhow!("Failed to send SetHidden: {}", e))?;
+
+                session = None;
+                daemon_state = DaemonState::Idle;
+                info!("Processing complete - returned to Idle state");
             }
         }
-    });
-
-    loop {
-        let mut server = control_server_shared.lock().await;
-        server.try_accept().await;
-
-        if let Some(ControlMessage::Confirm) = server.receive_from_any().await {
-            info!("Received Confirm command");
-            drop(server);
-            break;
-        }
-        drop(server);
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
 
-    info!("Stopping recording...");
-
-    audio_task.abort();
-    preview_task.abort();
-
-    let fast_result = engine.get_final_result()?;
-    info!("Fast model result: '{}'", fast_result);
-
-    let mut server = control_server_shared.lock().await;
-    server
-        .broadcast(&ControlMessage::TranscriptionUpdate {
-            text: fast_result.clone(),
-            is_final: true,
-        })
-        .await?;
-    drop(server);
-
-    if !fast_result.is_empty() {
-        let mut server = control_server_shared.lock().await;
-        server.broadcast(&ControlMessage::ProcessingStarted).await?;
-        drop(server);
-
-        info!("Waiting for accurate model to finish loading...");
-        let accurate_model = accurate_model_handle
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Failed to load accurate model"))?;
-
-        info!("Running correction pass...");
-        let accurate_result = match &accurate_model {
-            AccurateModel::Vosk(vosk_model) => {
-                // Preview engine is always Vosk, call its correction method
-                engine.run_correction_pass(vosk_model, sample_rate)?
-            }
-            AccurateModel::Whisper(whisper_context) => {
-                // Get audio buffer from the preview engine (Vosk)
-                let audio_buffer = engine.as_ref().get_audio_buffer();
-
-                // Convert i16 → f32 for Whisper
-                info!("Converting {} audio samples to float...", audio_buffer.len());
-                let mut float_samples = vec![0.0f32; audio_buffer.len()];
-                whisper_rs::convert_integer_to_float_audio(&audio_buffer, &mut float_samples)
-                    .map_err(|e| anyhow::anyhow!("Audio conversion failed: {:?}", e))?;
-
-                // Create transcription state
-                let mut state = whisper_context
-                    .create_state()
-                    .map_err(|e| anyhow::anyhow!("Failed to create Whisper state: {:?}", e))?;
-
-                // Configure parameters
-                let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-                params.set_language(Some("en"));
-                params.set_print_special(false);
-                params.set_print_progress(false);
-                params.set_print_realtime(false);
-                params.set_print_timestamps(false);
-
-                info!(
-                    "Running Whisper transcription on {:.2}s of audio...",
-                    float_samples.len() as f32 / sample_rate as f32
-                );
-
-                // Run transcription
-                state
-                    .full(params, &float_samples[..])
-                    .map_err(|e| anyhow::anyhow!("Whisper transcription failed: {:?}", e))?;
-
-                // Extract text from all segments using iterator
-                let result: Vec<String> = state
-                    .as_iter()
-                    .filter_map(|segment| {
-                        segment
-                            .to_str_lossy()
-                            .ok()
-                            .map(|text| text.trim().to_string())
-                    })
-                    .filter(|text| !text.is_empty())
-                    .collect();
-
-                result.join(" ")
-            }
-        };
-        info!("[Accurate] Raw: '{}'", accurate_result);
-
-        // Apply post-processing pipeline
-        let pipeline = Pipeline::from_config(
-            config.daemon.enable_acronyms,
-            config.daemon.enable_punctuation,
-            config.daemon.enable_grammar,
-        );
-        let processed_result = pipeline.process(&accurate_result)?;
-
-        if !pipeline.is_empty() && accurate_result != processed_result {
-            info!("[Accurate] Processed: '{}'", processed_result);
-        }
-
-        info!("Typing final text...");
-        keyboard.type_text(&processed_result).await?;
-        info!("✓ Typed!");
-
-        let mut server = control_server_shared.lock().await;
-        server.broadcast(&ControlMessage::Complete).await?;
-        drop(server);
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
-    } else {
-        info!("No text to type");
-
-        let mut server = control_server_shared.lock().await;
-        server.broadcast(&ControlMessage::Complete).await?;
-        drop(server);
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
-    }
-
+    info!("Daemon shutting down");
     Ok(())
 }

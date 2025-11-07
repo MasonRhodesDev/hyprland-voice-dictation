@@ -51,9 +51,17 @@ fi
 
 cd - > /dev/null
 
+# Install systemd service
+echo ""
+echo "5. Installing systemd service..."
+mkdir -p "$HOME/.config/systemd/user"
+cp packaging/systemd/voice-dictation.service "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
+echo "  ✓ Service installed"
+
 # Cleanup old state
 echo ""
-echo "5. Cleaning up old state files..."
+echo "6. Cleaning up old state files..."
 pkill -9 -f voice-dictation 2>/dev/null || true
 rm -f /tmp/voice-dictation-active /tmp/voice-dictation-state
 rm -f /tmp/voice-dictation*.sock
@@ -61,11 +69,24 @@ rm -f /tmp/voice-dictation*.sock
 echo ""
 echo "✓ Installation complete!"
 echo ""
-echo "Usage:"
-echo "  - Direct:           voice-dictation toggle"
-echo "  - Via script:       ~/scripts/dictation-control toggle"
-echo "  - Check status:     voice-dictation status"
-echo "  - Configure:        voice-dictation config"
+echo "=== Starting the Service ==="
+echo ""
+echo "Enable and start the daemon service:"
+echo "  systemctl --user enable voice-dictation"
+echo "  systemctl --user start voice-dictation"
+echo ""
+echo "Or run manually for testing:"
+echo "  voice-dictation daemon"
+echo ""
+echo "=== Usage ==="
+echo ""
+echo "Commands:"
+echo "  voice-dictation toggle   - Start recording or confirm transcription"
+echo "  voice-dictation start    - Start recording session"
+echo "  voice-dictation stop     - Stop recording session (cancel)"
+echo "  voice-dictation confirm  - Confirm and finalize transcription"
+echo "  voice-dictation status   - Show current status"
+echo "  voice-dictation config   - Open configuration TUI"
 echo ""
 echo "Add a keybind in your compositor config:"
 echo ""

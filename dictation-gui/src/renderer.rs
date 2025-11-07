@@ -234,6 +234,7 @@ impl SpectrumRenderer {
         self.pixmap.fill(Color::TRANSPARENT);
 
         match state {
+            GuiState::Hidden => {}, // Don't render anything when hidden
             GuiState::PreListening => self.render_listening(band_values, text),
             GuiState::Listening => self.render_listening(band_values, text),
             GuiState::Processing => self.render_processing(text, total_time),

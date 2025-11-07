@@ -6,10 +6,13 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 use schema_tui::SchemaTUIBuilder;
+use zbus::Connection;
 
 const STATE_FILE: &str = "/tmp/voice-dictation-state";
 const MEDIA_STATE_FILE: &str = "/tmp/voice-dictation-media-state";
-const CONTROL_SOCKET: &str = "/tmp/voice-dictation-control.sock";
+const DBUS_SERVICE_NAME: &str = "com.voicedictation.Daemon";
+const DBUS_OBJECT_PATH: &str = "/com/voicedictation/Control";
+const DBUS_INTERFACE_NAME: &str = "com.voicedictation.Control";
 
 #[derive(Parser)]
 #[command(name = "voice-dictation")]
@@ -23,8 +26,6 @@ struct Cli {
 enum Commands {
     #[command(about = "Start the dictation engine daemon")]
     Daemon,
-    #[command(about = "Start the GUI overlay")]
-    Gui,
     #[command(about = "Start recording session")]
     Start,
     #[command(about = "Stop recording session")]
@@ -56,28 +57,73 @@ fn is_process_running(pattern: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn send_confirm() -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::Write;
-    use std::os::unix::net::UnixStream;
+async fn call_dbus_method(method: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let connection = Connection::session().await?;
+    let proxy = zbus::Proxy::new(
+        &connection,
+        DBUS_SERVICE_NAME,
+        DBUS_OBJECT_PATH,
+        DBUS_INTERFACE_NAME,
+    ).await?;
 
-    let mut stream = UnixStream::connect(CONTROL_SOCKET)?;
-    let msg = r#"{"Confirm":null}"#;
-    let length = (msg.len() as u32).to_be_bytes();
-
-    stream.write_all(&length)?;
-    stream.write_all(msg.as_bytes())?;
-    stream.flush()?;
-
+    proxy.call::<_, _, ()>(method, &()).await?;
     Ok(())
 }
 
+fn send_start_recording() -> Result<(), Box<dyn std::error::Error>> {
+    tokio::runtime::Runtime::new()?.block_on(call_dbus_method("StartRecording"))
+}
+
+fn send_stop_recording() -> Result<(), Box<dyn std::error::Error>> {
+    tokio::runtime::Runtime::new()?.block_on(call_dbus_method("StopRecording"))
+}
+
+fn send_confirm() -> Result<(), Box<dyn std::error::Error>> {
+    tokio::runtime::Runtime::new()?.block_on(call_dbus_method("Confirm"))
+}
+
+fn is_daemon_running() -> bool {
+    // Check if D-Bus service name is registered
+    if let Ok(rt) = tokio::runtime::Runtime::new() {
+        rt.block_on(async {
+            if let Ok(conn) = Connection::session().await {
+                if let Ok(proxy) = zbus::Proxy::new(
+                    &conn,
+                    DBUS_SERVICE_NAME,
+                    DBUS_OBJECT_PATH,
+                    DBUS_INTERFACE_NAME,
+                ).await {
+                    // Try to introspect to verify service is alive
+                    proxy.introspect().await.is_ok()
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        })
+    } else {
+        false
+    }
+}
+
 fn start_recording() -> Result<(), Box<dyn std::error::Error>> {
+    // Check if daemon is running
+    if !is_daemon_running() {
+        eprintln!("Error: Daemon not running");
+        eprintln!("Start the daemon with: systemctl --user start voice-dictation");
+        eprintln!("Or run manually: voice-dictation daemon");
+        return Err("Daemon not running".into());
+    }
+
+    // Check current state
     let state = get_state();
-    if state != "stopped" {
-        println!("Voice dictation already running (state: {})", state);
+    if state == "recording" {
+        println!("Already recording");
         return Ok(());
     }
 
+    // Pause media
     let media_playing = Command::new("playerctl")
         .arg("status")
         .output()
@@ -88,46 +134,13 @@ fn start_recording() -> Result<(), Box<dyn std::error::Error>> {
 
     if media_playing {
         fs::write(MEDIA_STATE_FILE, "playing")?;
+        let _ = Command::new("playerctl").arg("pause").output();
     } else {
         fs::write(MEDIA_STATE_FILE, "stopped")?;
     }
 
-    let current_exe = std::env::current_exe()?;
-    let work_dir = PathBuf::from(std::env::var("HOME")?).join("repos/voice-dictation-rust");
-    
-    let daemon_log = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open("/tmp/dictation-engine.log")?;
-    let daemon_log_stderr = daemon_log.try_clone()?;
-    
-    Command::new(&current_exe)
-        .arg("daemon")
-        .current_dir(&work_dir)
-        .env("RUST_LOG", "info")
-        .stdout(Stdio::from(daemon_log))
-        .stderr(Stdio::from(daemon_log_stderr))
-        .spawn()?;
-    
-    thread::sleep(Duration::from_millis(300));
-    
-    let gui_log = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open("/tmp/dictation-gui.log")?;
-    let gui_log_stderr = gui_log.try_clone()?;
-    
-    Command::new(&current_exe)
-        .arg("gui")
-        .current_dir(&work_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(gui_log))
-        .stderr(Stdio::from(gui_log_stderr))
-        .spawn()?;
-
-    let _ = Command::new("playerctl").arg("pause").output();
+    // Send StartRecording command to daemon via D-Bus
+    send_start_recording()?;
 
     set_state("recording")?;
     println!("Voice dictation started - recording");
@@ -138,14 +151,20 @@ fn start_recording() -> Result<(), Box<dyn std::error::Error>> {
 fn stop_recording() -> Result<(), Box<dyn std::error::Error>> {
     let state = get_state();
     if state == "stopped" {
-        println!("Voice dictation not running");
+        println!("Not recording");
         return Ok(());
     }
 
-    let _ = Command::new("pkill").arg("-TERM").arg("-f").arg("voice-dictation daemon").output();
+    if !is_daemon_running() {
+        eprintln!("Daemon not running");
+        set_state("stopped")?;
+        return Ok(());
+    }
 
-    let _ = Command::new("pkill").arg("-TERM").arg("-f").arg("voice-dictation gui").output();
+    // Send StopRecording command to daemon via D-Bus
+    send_stop_recording()?;
 
+    // Resume media if it was playing
     if let Ok(media_state) = fs::read_to_string(MEDIA_STATE_FILE) {
         if media_state.trim() == "playing" {
             let _ = Command::new("playerctl").arg("play").output();
@@ -154,8 +173,7 @@ fn stop_recording() -> Result<(), Box<dyn std::error::Error>> {
     let _ = fs::remove_file(MEDIA_STATE_FILE);
 
     set_state("stopped")?;
-    let _ = fs::remove_file(CONTROL_SOCKET);
-    println!("Voice dictation stopped");
+    println!("Recording canceled");
 
     Ok(())
 }
@@ -167,18 +185,18 @@ fn confirm_recording() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Invalid state".into());
     }
 
-    println!("Sending confirm command...");
-    send_confirm()?;
-
-    for _ in 0..60 {
-        if !is_process_running("voice-dictation daemon") {
-            break;
-        }
-        thread::sleep(Duration::from_millis(500));
+    if !is_daemon_running() {
+        eprintln!("Daemon not running");
+        return Err("Daemon not running".into());
     }
 
-    let _ = Command::new("pkill").arg("-TERM").arg("-f").arg("voice-dictation gui").output();
+    println!("Confirming transcription...");
+    send_confirm()?;
 
+    // Wait a moment for processing to complete
+    thread::sleep(Duration::from_millis(500));
+
+    // Resume media if it was playing
     if let Ok(media_state) = fs::read_to_string(MEDIA_STATE_FILE) {
         if media_state.trim() == "playing" {
             let _ = Command::new("playerctl").arg("play").output();
@@ -187,8 +205,7 @@ fn confirm_recording() -> Result<(), Box<dyn std::error::Error>> {
     let _ = fs::remove_file(MEDIA_STATE_FILE);
 
     set_state("stopped")?;
-    let _ = fs::remove_file(CONTROL_SOCKET);
-    println!("Transcription confirmed - typed successfully");
+    println!("Transcription confirmed");
 
     Ok(())
 }
@@ -212,15 +229,9 @@ fn show_status() {
 
     if state != "stopped" {
         if is_process_running("voice-dictation daemon") {
-            println!("  Engine: running");
+            println!("  Daemon: running");
         } else {
-            println!("  Engine: NOT running");
-        }
-
-        if is_process_running("voice-dictation gui") {
-            println!("  GUI: running");
-        } else {
-            println!("  GUI: NOT running");
+            println!("  Daemon: NOT running");
         }
     }
 }
@@ -377,9 +388,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Daemon => {
             dictation_engine::run()?;
-        }
-        Commands::Gui => {
-            dictation_gui::run()?;
         }
         Commands::Start => {
             start_recording()?;

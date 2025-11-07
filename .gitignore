@@ -27,3 +27,6 @@ config.toml
 models/*.zip
 models/vosk-model-*/
 .plans/
+
+# Plan skill files
+CURRENT_PLAN.md

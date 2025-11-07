@@ -49,7 +49,6 @@ enum TransitionPhase {
 #[derive(Debug, Clone)]
 enum Message {
     Tick,
-    StateUpdate,
 }
 
 impl MonitorWindow {
@@ -61,16 +60,16 @@ impl MonitorWindow {
             monitor_name,
             shared_state,
             config,
-            cached_state: GuiState::PreListening,
+            cached_state: GuiState::Hidden,
             cached_transcription: String::new(),
             cached_spectrum: Vec::new(),
             cached_animation_time: 0.0,
             cached_closing_time: 0.0,
-            transition_phase: TransitionPhase::Transitioning,
+            transition_phase: TransitionPhase::Idle,
             transition_progress: 0.0,
             previous_state: None,
             current_size: (0.0, 0.0),
-            target_size,
+            target_size: (0.0, 0.0),
         }
     }
 }
@@ -80,10 +79,8 @@ fn namespace(window: &MonitorWindow) -> String {
 }
 
 fn subscription(_window: &MonitorWindow) -> iced::Subscription<Message> {
-    iced::Subscription::batch([
-        time::every(Duration::from_millis(16)).map(|_| Message::Tick),
-        time::every(Duration::from_millis(50)).map(|_| Message::StateUpdate),
-    ])
+    // Only tick for animations, state updates via SharedState from channel listener
+    time::every(Duration::from_millis(16)).map(|_| Message::Tick)
 }
 
 fn update(window: &mut MonitorWindow, message: Message) -> Task<Message> {
@@ -91,11 +88,56 @@ fn update(window: &mut MonitorWindow, message: Message) -> Task<Message> {
         Message::Tick => {
             let delta_time = 0.016; // ~60fps
 
-            // Update local animation timers
+            // Read from shared state and update local cache
             if let Ok(mut state) = window.shared_state.write() {
                 state.tick(delta_time);
                 window.cached_animation_time = state.animation_time;
                 window.cached_closing_time = state.closing_animation_time;
+
+                let new_state = state.gui_state;
+                let new_transcription = state.transcription.clone();
+                let new_spectrum = state.spectrum_values.clone();
+
+                // Detect state change
+                if new_state != window.cached_state {
+                    debug!("[{}] State change: {:?} -> {:?}", window.monitor_name, window.cached_state, new_state);
+                    window.previous_state = Some(window.cached_state);
+                    window.cached_state = new_state;
+                    window.transition_phase = TransitionPhase::Transitioning;
+                    window.transition_progress = 0.0;
+
+                    window.target_size = match new_state {
+                        GuiState::Hidden => (0.0, 0.0),
+                        GuiState::PreListening => calculate_prelistening_size(&window.config),
+                        GuiState::Listening => calculate_listening_size(&new_transcription, &window.config),
+                        GuiState::Processing => {
+                            let cfg = &window.config.elements;
+                            let padding = cfg.background_padding as f32;
+                            let spinner_size = (cfg.spinner_orbit_radius * 2.0 + cfg.spinner_dot_radius * 2.0) * 1.5;
+                            let size = spinner_size + padding * 2.0;
+                            (size, size)
+                        },
+                        GuiState::Closing => (0.0, 0.0),
+                    };
+                }
+
+                // Update transcription
+                if new_transcription != window.cached_transcription {
+                    window.cached_transcription = new_transcription.clone();
+
+                    // Recalculate size if listening
+                    if window.cached_state == GuiState::Listening {
+                        let new_size = calculate_listening_size(&window.cached_transcription, &window.config);
+                        if new_size != window.target_size {
+                            window.target_size = new_size;
+                            window.transition_phase = TransitionPhase::Transitioning;
+                            window.transition_progress = 0.0;
+                        }
+                    }
+                }
+
+                // Update spectrum
+                window.cached_spectrum = new_spectrum;
             }
 
             // Handle transitions
@@ -136,59 +178,7 @@ fn update(window: &mut MonitorWindow, message: Message) -> Task<Message> {
 
             Task::none()
         }
-
-        Message::StateUpdate => {
-            // Read from shared state and update local cache
-            if let Ok(state) = window.shared_state.read() {
-                let new_state = state.gui_state;
-                let new_transcription = state.transcription.clone();
-                let new_spectrum = state.spectrum_values.clone();
-
-                // Detect state change
-                if new_state != window.cached_state {
-                    debug!("[{}] State change: {:?} -> {:?}", window.monitor_name, window.cached_state, new_state);
-                    window.previous_state = Some(window.cached_state);
-                    window.cached_state = new_state;
-                    window.transition_phase = TransitionPhase::Transitioning;
-                    window.transition_progress = 0.0;
-
-                    window.target_size = match new_state {
-                        GuiState::PreListening => calculate_prelistening_size(&window.config),
-                        GuiState::Listening => calculate_listening_size(&new_transcription, &window.config),
-                        GuiState::Processing => {
-                            let cfg = &window.config.elements;
-                            let padding = cfg.background_padding as f32;
-                            let spinner_size = (cfg.spinner_orbit_radius * 2.0 + cfg.spinner_dot_radius * 2.0) * 1.5;
-                            let size = spinner_size + padding * 2.0;
-                            (size, size)
-                        },
-                        GuiState::Closing => (0.0, 0.0),
-                    };
-                }
-
-                // Update transcription
-                if new_transcription != window.cached_transcription {
-                    window.cached_transcription = new_transcription.clone();
-
-                    // Recalculate size if listening
-                    if window.cached_state == GuiState::Listening {
-                        let new_size = calculate_listening_size(&window.cached_transcription, &window.config);
-                        if new_size != window.target_size {
-                            window.target_size = new_size;
-                            window.transition_phase = TransitionPhase::Transitioning;
-                            window.transition_progress = 0.0;
-                        }
-                    }
-                }
-
-                // Update spectrum
-                window.cached_spectrum = new_spectrum;
-            }
-
-            Task::none()
-        }
-
-        _ => Task::none()
+        _ => Task::none(), // Handle layer-shell messages
     }
 }
 
@@ -200,7 +190,7 @@ fn view(window: &MonitorWindow) -> Element<'_, Message> {
         false
     };
 
-    // Daemon state check: only show in certain states
+    // Daemon state check: only show in certain states (Hidden is always invisible)
     let should_show = matches!(
         window.cached_state,
         GuiState::Listening | GuiState::Processing | GuiState::Closing
@@ -215,6 +205,7 @@ fn view(window: &MonitorWindow) -> Element<'_, Message> {
 
     // Render based on state
     let content = match (window.transition_phase, window.cached_state, window.previous_state) {
+        (_, GuiState::Hidden, _) => view_hidden(window),
         (TransitionPhase::Transitioning, GuiState::Listening, Some(GuiState::PreListening)) => {
             view_listening(window, visibility_alpha)
         }
@@ -228,6 +219,14 @@ fn view(window: &MonitorWindow) -> Element<'_, Message> {
     };
 
     content
+}
+
+fn view_hidden(_window: &MonitorWindow) -> Element<'_, Message> {
+    // Completely invisible/empty element when hidden
+    container(text(""))
+        .width(Length::Fixed(0.0))
+        .height(Length::Fixed(0.0))
+        .into()
 }
 
 fn view_prelistening(window: &MonitorWindow, visibility_alpha: f32) -> Element<'_, Message> {

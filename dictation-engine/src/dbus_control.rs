@@ -1,0 +1,96 @@
+use anyhow::Result;
+use zbus::{dbus_interface, ConnectionBuilder};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::info;
+
+/// D-Bus service interface for voice dictation control
+pub struct VoiceDictationService {
+    command_sender: Arc<Mutex<tokio::sync::mpsc::Sender<DaemonCommand>>>,
+}
+
+/// Commands that can be sent from D-Bus to the daemon
+#[derive(Debug, Clone)]
+pub enum DaemonCommand {
+    StartRecording,
+    StopRecording,
+    Confirm,
+    Shutdown,
+}
+
+/// Response from status query
+#[derive(Debug, Clone)]
+pub struct StatusInfo {
+    pub state: String,
+    pub session_active: bool,
+}
+
+#[dbus_interface(name = "com.voicedictation.Control")]
+impl VoiceDictationService {
+    /// Start a new recording session
+    async fn start_recording(&self) -> zbus::fdo::Result<()> {
+        info!("D-Bus: StartRecording called");
+        let sender = self.command_sender.lock().await;
+        sender.send(DaemonCommand::StartRecording).await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to send command: {}", e)))?;
+        Ok(())
+    }
+
+    /// Stop the current recording session (cancel)
+    async fn stop_recording(&self) -> zbus::fdo::Result<()> {
+        info!("D-Bus: StopRecording called");
+        let sender = self.command_sender.lock().await;
+        sender.send(DaemonCommand::StopRecording).await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to send command: {}", e)))?;
+        Ok(())
+    }
+
+    /// Confirm and finalize the current transcription
+    async fn confirm(&self) -> zbus::fdo::Result<()> {
+        info!("D-Bus: Confirm called");
+        let sender = self.command_sender.lock().await;
+        sender.send(DaemonCommand::Confirm).await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to send command: {}", e)))?;
+        Ok(())
+    }
+
+    /// Get current daemon status
+    async fn status(&self) -> zbus::fdo::Result<(String, bool)> {
+        info!("D-Bus: Status called");
+        // For now, return placeholder - will be enhanced with actual state query
+        Ok(("idle".to_string(), false))
+    }
+
+    /// Shutdown the daemon gracefully
+    async fn shutdown(&self) -> zbus::fdo::Result<()> {
+        info!("D-Bus: Shutdown called");
+        let sender = self.command_sender.lock().await;
+        sender.send(DaemonCommand::Shutdown).await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to send command: {}", e)))?;
+        Ok(())
+    }
+}
+
+/// Create and register D-Bus service
+pub async fn create_dbus_service() -> Result<(
+    zbus::Connection,
+    Arc<Mutex<tokio::sync::mpsc::Sender<DaemonCommand>>>,
+    tokio::sync::mpsc::Receiver<DaemonCommand>,
+)> {
+    let (command_tx, command_rx) = tokio::sync::mpsc::channel(10);
+    let command_sender = Arc::new(Mutex::new(command_tx));
+
+    let service = VoiceDictationService {
+        command_sender: Arc::clone(&command_sender),
+    };
+
+    let connection = ConnectionBuilder::session()?
+        .name("com.voicedictation.Daemon")?
+        .serve_at("/com/voicedictation/Control", service)?
+        .build()
+        .await?;
+
+    info!("D-Bus service registered at com.voicedictation.Daemon");
+
+    Ok((connection, command_sender, command_rx))
+}

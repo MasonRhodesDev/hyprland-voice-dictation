@@ -1,15 +1,16 @@
 [Unit]
-Description=Voice Dictation Engine
-After=pipewire.service
+Description=Voice Dictation Persistent Daemon with Integrated GUI
+After=pipewire.service graphical-session.target
 
 [Service]
 Type=simple
 ExecStart=%h/.local/bin/voice-dictation daemon
-ExecStop=/usr/bin/pkill -TERM -f "voice-dictation daemon"
-Restart=no
+Restart=on-failure
+RestartSec=5
 Environment="RUST_LOG=info"
+Environment="GUI_LOG=info"
 StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
