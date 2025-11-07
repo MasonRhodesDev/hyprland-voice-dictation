@@ -12,7 +12,8 @@ iced_layershell = "0.13.7"
 
 smithay-client-toolkit = "0.18"
 wayland-client = "0.31"
-wayland-protocols-wlr = "0.2"
+
+hyprland = "0.4.0-alpha.3"
 
 [lib]
 name = "monitor_label_poc"
