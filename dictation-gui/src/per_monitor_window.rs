@@ -171,8 +171,8 @@ fn update(window: &mut MonitorWindow, message: Message) -> Task<Message> {
             if window.cached_state == GuiState::Closing {
                 let closing_duration = window.config.animations.closing_background_duration as f32 / 1000.0;
                 if window.cached_closing_time >= closing_duration {
-                    debug!("[{}] Closing animation complete, exiting", window.monitor_name);
-                    std::process::exit(0);
+                    debug!("[{}] Closing animation complete, transitioning to Hidden", window.monitor_name);
+                    window.cached_state = GuiState::Hidden;
                 }
             }
 

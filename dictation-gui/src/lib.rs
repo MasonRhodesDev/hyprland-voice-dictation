@@ -374,8 +374,8 @@ fn update(overlay: &mut DictationOverlay, message: Message) -> Task<Message> {
                 overlay.closing_animation_time += delta_time;
                 let closing_duration = overlay.config.animations.closing_background_duration as f32 / 1000.0;
                 if overlay.closing_animation_time >= closing_duration {
-                    info!("Closing animation complete, exiting");
-                    return Task::perform(async {}, |_| Message::Exit);
+                    info!("Closing animation complete, transitioning to Hidden");
+                    overlay.state = GuiState::Hidden;
                 }
             }
 
