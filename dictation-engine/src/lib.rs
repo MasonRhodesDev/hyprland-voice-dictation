@@ -231,6 +231,14 @@ impl AudioCapture {
         }
         Ok(())
     }
+
+    fn stop(&self) -> Result<()> {
+        if let Some(stream) = &self.stream {
+            stream.pause()?;
+            info!("Audio capture stopped");
+        }
+        Ok(())
+    }
 }
 
 #[tokio::main]
@@ -435,6 +443,15 @@ pub async fn run() -> Result<()> {
                         DaemonCommand::StartRecording => {
                             info!("Received StartRecording command");
 
+                            // Drain any stale audio samples from previous session
+                            {
+                                let mut rx = audio_rx_shared.lock().await;
+                                while rx.try_recv().is_ok() {
+                                    // Discard stale samples
+                                }
+                                info!("Drained audio channel before new session");
+                            }
+
                             // Start new recording session
                             info!("Starting audio capture...");
                             capture.start()?;
@@ -615,7 +632,11 @@ pub async fn run() -> Result<()> {
                 let fast_result = session_engine.get_final_result()?;
                 info!("Fast model result: '{}'", fast_result);
 
-                if !fast_result.is_empty() {
+                // Check if any audio was captured (use buffer length instead of text check)
+                let audio_buffer_len = session_engine.as_ref().get_audio_buffer().len();
+                info!("Audio buffer contains {} samples", audio_buffer_len);
+
+                if audio_buffer_len > 0 {
                     // Send processing state to GUI
                     gui_control_tx.send(GuiControl::SetProcessing)
                         .map_err(|e| anyhow::anyhow!("Failed to send SetProcessing: {}", e))?;
@@ -698,6 +719,9 @@ pub async fn run() -> Result<()> {
                 // Hide GUI and return to Idle
                 gui_control_tx.send(GuiControl::SetHidden)
                     .map_err(|e| anyhow::anyhow!("Failed to send SetHidden: {}", e))?;
+
+                // Stop audio capture to prevent sample accumulation
+                capture.stop()?;
 
                 session = None;
                 daemon_state = DaemonState::Idle;
