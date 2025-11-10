@@ -1,5 +1,5 @@
 use anyhow::Result;
-use zbus::{dbus_interface, ConnectionBuilder};
+use zbus::{interface, ConnectionBuilder};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -25,7 +25,7 @@ pub struct StatusInfo {
     pub session_active: bool,
 }
 
-#[dbus_interface(name = "com.voicedictation.Control")]
+#[interface(name = "com.voicedictation.Control")]
 impl VoiceDictationService {
     /// Start a new recording session
     async fn start_recording(&self) -> zbus::fdo::Result<()> {

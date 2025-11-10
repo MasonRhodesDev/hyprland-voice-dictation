@@ -14,6 +14,7 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 /// - Native punctuation and capitalization
 /// - Handles proper nouns and complex vocabulary
 /// - CPU-efficient with quantized models
+#[allow(dead_code)]
 pub struct WhisperEngine {
     context: Arc<WhisperContext>,
     accumulated_text: Arc<Mutex<String>>,
@@ -21,6 +22,7 @@ pub struct WhisperEngine {
     sample_rate: u32,
 }
 
+#[allow(dead_code)]
 impl WhisperEngine {
     /// Create a new Whisper transcription engine.
     ///

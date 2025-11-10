@@ -54,7 +54,7 @@ enum Message {
 impl MonitorWindow {
     pub fn new(monitor_name: String, shared_state: Arc<RwLock<SharedState>>) -> Self {
         let config = config::load_config();
-        let target_size = calculate_prelistening_size(&config);
+        let initial_size = calculate_prelistening_size(&config);
 
         Self {
             monitor_name,
@@ -68,8 +68,8 @@ impl MonitorWindow {
             transition_phase: TransitionPhase::Idle,
             transition_progress: 0.0,
             previous_state: None,
-            current_size: (0.0, 0.0),
-            target_size: (0.0, 0.0),
+            current_size: initial_size,
+            target_size: initial_size,
         }
     }
 }

@@ -48,6 +48,7 @@ impl std::fmt::Display for DaemonState {
 
 // Recording session context
 struct RecordingSession {
+    #[allow(dead_code)]
     start_time: Instant,
     engine: Arc<VoskEngine>,
 }
@@ -79,6 +80,7 @@ struct DaemonConfig {
     final_model_custom_path: String,
 
     // Whisper models
+    #[allow(dead_code)]
     #[serde(default = "default_whisper_preview_model")]
     whisper_preview_model: String,
     #[serde(default = "default_whisper_final_model")]
@@ -134,11 +136,13 @@ fn load_config() -> Result<Config> {
 }
 
 /// Runtime engine selection wrapper.
+#[allow(dead_code)]
 enum Engine {
     Vosk(Arc<VoskEngine>),
     Whisper(Arc<WhisperEngine>),
 }
 
+#[allow(dead_code)]
 impl Engine {
     /// Get a reference to the underlying engine as a TranscriptionEngine trait object.
     fn as_trait(&self) -> &dyn TranscriptionEngine {
@@ -327,8 +331,6 @@ pub async fn run() -> Result<()> {
     // Don't start audio capture yet - will be started when StartRecording received
     info!("Audio capture initialized (paused)");
 
-    info!("Loading fast model for live preview from: {}", preview_model_path);
-    let engine = Arc::new(VoskEngine::new(&preview_model_path, sample_rate)?);
     let keyboard = Arc::new(KeyboardInjector::new(10, 50));
 
     // Spawn integrated GUI

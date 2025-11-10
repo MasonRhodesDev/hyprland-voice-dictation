@@ -99,7 +99,7 @@ pub fn download_whisper_model(model_name: &str, dest_dir: &Path) -> Result<PathB
     let temp_path = dest_dir.join(format!("{}.tmp", model_info.filename));
     let mut dest_file = fs::File::create(&temp_path)?;
 
-    use std::io::{copy, Read};
+    use std::io::copy;
     let mut reader = pb.wrap_read(response);
     copy(&mut reader, &mut dest_file)?;
 

@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 use schema_tui::SchemaTUIBuilder;
