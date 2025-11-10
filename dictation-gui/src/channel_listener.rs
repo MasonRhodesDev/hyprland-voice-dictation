@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info};
 
-use crate::{shared_state::SharedState, GuiState};
+use crate::{fft::SpectrumAnalyzer, shared_state::SharedState, GuiState};
 
 /// Spawn background tasks to listen for channel messages and update SharedState
 pub fn spawn_channel_listener(
@@ -88,15 +88,21 @@ pub fn spawn_channel_listener(
         error!("Channel listener: Control task exiting");
     });
 
-    // Spawn spectrum listener
+    // Spawn spectrum listener with FFT processing
     tokio::spawn(async move {
         debug!("Channel listener: Spectrum task started");
 
+        // Create spectrum analyzer (FFT_SIZE=1024, SAMPLE_RATE=16000, SMOOTHING=0.7)
+        let mut spectrum_analyzer = SpectrumAnalyzer::new(1024, 16000, 0.7);
+
         loop {
             match spectrum_rx.recv().await {
-                Ok(values) => {
+                Ok(raw_samples) => {
+                    // Process raw audio samples through FFT to get 8 frequency bands
+                    let frequency_bands = spectrum_analyzer.process(&raw_samples);
+
                     if let Ok(mut state) = shared_state.write() {
-                        state.set_spectrum_values(values);
+                        state.set_spectrum_values(frequency_bands);
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
