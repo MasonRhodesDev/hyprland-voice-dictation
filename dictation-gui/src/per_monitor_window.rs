@@ -4,6 +4,7 @@ use iced_layershell::build_pattern::application;
 use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
 use iced_layershell::settings::{LayerShellSettings, StartMode};
 use iced_layershell::to_layer_message;
+use iced_layershell::actions::ActionCallback;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tracing::debug;
@@ -71,6 +72,12 @@ impl MonitorWindow {
             current_size: initial_size,
             target_size: initial_size,
         }
+    }
+
+    fn disable_input_region() -> Task<Message> {
+        Task::done(Message::SetInputRegion(ActionCallback::new(|_region| {
+            // Empty input region - no calls to region.add() means all input passes through
+        })))
     }
 }
 
@@ -178,7 +185,7 @@ fn update(window: &mut MonitorWindow, message: Message) -> Task<Message> {
 
             Task::none()
         }
-        _ => Task::none(), // Handle layer-shell messages
+        _ => Task::none(),
     }
 }
 
@@ -541,6 +548,8 @@ pub fn run_monitor_window(
         .style(style)
         .run_with(move || {
             debug!("Initializing window for monitor: {}", monitor_name);
-            (MonitorWindow::new(monitor_name, shared_state), Task::none())
+            let window = MonitorWindow::new(monitor_name, shared_state);
+            let task = MonitorWindow::disable_input_region();
+            (window, task)
         })
 }
