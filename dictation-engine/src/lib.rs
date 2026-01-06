@@ -1,12 +1,14 @@
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
+use notify::{Event, EventKind, RecursiveMode, Watcher};
 use serde::Deserialize;
 use std::fs;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::{debug, error, info, warn};
+#[cfg(feature = "vosk")]
 use vosk::Model;
 
 pub mod control_ipc;
@@ -15,6 +17,8 @@ mod engine;
 mod keyboard;
 mod model_manager;
 mod post_processing;
+pub mod user_dictionary;
+#[cfg(feature = "vosk")]
 mod vosk_engine;
 mod whisper_engine;
 
@@ -24,6 +28,8 @@ use dbus_control::DaemonCommand;
 use engine::TranscriptionEngine;
 use keyboard::KeyboardInjector;
 use post_processing::Pipeline;
+use user_dictionary::UserDictionary;
+#[cfg(feature = "vosk")]
 use vosk_engine::VoskEngine;
 use whisper_engine::WhisperEngine;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
@@ -50,7 +56,10 @@ impl std::fmt::Display for DaemonState {
 struct RecordingSession {
     #[allow(dead_code)]
     start_time: Instant,
+    #[cfg(feature = "vosk")]
     engine: Arc<VoskEngine>,
+    #[cfg(not(feature = "vosk"))]
+    engine: Arc<WhisperEngine>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,9 +78,11 @@ struct DaemonConfig {
     #[serde(default = "default_transcription_engine")]
     transcription_engine: String,
 
-    // Vosk models
+    // Vosk models (only used when vosk feature is enabled)
+    #[cfg_attr(not(feature = "vosk"), allow(dead_code))]
     #[serde(default = "default_preview_model")]
     preview_model: String,
+    #[cfg_attr(not(feature = "vosk"), allow(dead_code))]
     #[serde(default = "default_preview_model_custom_path")]
     preview_model_custom_path: String,
     #[serde(default = "default_final_model")]
@@ -125,19 +136,78 @@ fn default_enable_grammar() -> bool { true }
 fn load_config() -> Result<Config> {
     let home = std::env::var("HOME")?;
     let config_path = format!("{}/.config/voice-dictation/config.toml", home);
-    
+
     let config_str = fs::read_to_string(&config_path)
         .map_err(|e| anyhow::anyhow!("Failed to read config file {}: {}", config_path, e))?;
-    
+
     let config: Config = toml::from_str(&config_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
-    
+
     Ok(config)
+}
+
+/// Watch dictionary files and reload on changes.
+async fn watch_dictionary_files(user_dict: Arc<UserDictionary>) -> Result<()> {
+    let paths = user_dict.watch_paths();
+
+    if paths.is_empty() {
+        info!("No dictionary files to watch");
+        return Ok(());
+    }
+
+    info!("Watching dictionary files: {:?}", paths);
+
+    let (tx, mut rx) = mpsc::channel(100);
+
+    // Create watcher in a separate thread (notify requires blocking)
+    let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+        if let Ok(event) = res {
+            let _ = tx.blocking_send(event);
+        }
+    })?;
+
+    // Watch all dictionary paths
+    for path in &paths {
+        if path.exists() {
+            watcher.watch(path, RecursiveMode::NonRecursive)?;
+        } else {
+            // Watch parent directory to detect file creation
+            if let Some(parent) = path.parent() {
+                if parent.exists() {
+                    watcher.watch(parent, RecursiveMode::NonRecursive)?;
+                }
+            }
+        }
+    }
+
+    // Keep watcher alive and process events
+    while let Some(event) = rx.recv().await {
+        match event.kind {
+            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+                // Check if event is for one of our dictionary files
+                for path in &paths {
+                    if event.paths.iter().any(|p| p == path) {
+                        info!("Dictionary file changed: {:?}, reloading...", path);
+                        if let Err(e) = user_dict.reload_all() {
+                            warn!("Failed to reload dictionaries: {}", e);
+                        } else {
+                            info!("Dictionaries reloaded successfully");
+                        }
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 /// Runtime engine selection wrapper.
 #[allow(dead_code)]
 enum Engine {
+    #[cfg(feature = "vosk")]
     Vosk(Arc<VoskEngine>),
     Whisper(Arc<WhisperEngine>),
 }
@@ -147,6 +217,7 @@ impl Engine {
     /// Get a reference to the underlying engine as a TranscriptionEngine trait object.
     fn as_trait(&self) -> &dyn TranscriptionEngine {
         match self {
+            #[cfg(feature = "vosk")]
             Engine::Vosk(e) => e.as_ref(),
             Engine::Whisper(e) => e.as_ref(),
         }
@@ -155,58 +226,188 @@ impl Engine {
 
 /// Accurate model wrapper for correction pass.
 enum AccurateModel {
+    #[cfg(feature = "vosk")]
     Vosk(Model),
     Whisper(WhisperContext),
 }
 
+/// Configuration for lazy-loading the accurate model
+#[derive(Clone)]
+struct AccurateModelConfig {
+    engine_type: String,
+    #[cfg(feature = "vosk")]
+    vosk_final_path: String,
+    whisper_model_name: String,
+    whisper_model_dir: String,
+}
+
+impl AccurateModelConfig {
+    /// Load the accurate model (blocking operation, run in spawn_blocking)
+    fn load(&self) -> Option<AccurateModel> {
+        match self.engine_type.as_str() {
+            #[cfg(feature = "vosk")]
+            "vosk" => {
+                info!("Loading Vosk accurate model from: {}", self.vosk_final_path);
+                Model::new(&self.vosk_final_path).map(AccurateModel::Vosk)
+            }
+            #[cfg(not(feature = "vosk"))]
+            "vosk" => {
+                error!("Vosk support not compiled in. Set transcription_engine = \"whisper\" in config.");
+                None
+            }
+            "whisper" => {
+                info!("Ensuring Whisper model available: {}", self.whisper_model_name);
+
+                // Ensure model exists, download if necessary
+                let model_path = match model_manager::ensure_whisper_model(
+                    &self.whisper_model_name,
+                    &self.whisper_model_dir,
+                ) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        error!("Failed to obtain Whisper model: {}", e);
+                        error!("Try running: ./scripts/download-whisper-models.sh");
+                        return None;
+                    }
+                };
+
+                info!("Loading Whisper model from: {}", model_path.display());
+
+                WhisperContext::new_with_params(
+                    model_path.to_str().unwrap(),
+                    WhisperContextParameters::default(),
+                )
+                .map(AccurateModel::Whisper)
+                .map_err(|e| {
+                    error!("Whisper model load failed: {:?}", e);
+                    e
+                })
+                .ok()
+            }
+            other => {
+                error!("Unknown transcription_engine '{}'. Valid: 'vosk' or 'whisper'", other);
+                None
+            }
+        }
+    }
+}
+
 struct AudioCapture {
-    stream: Option<Stream>,
+    streams: Vec<Stream>,
 }
 
 impl AudioCapture {
+    /// Check if a device name indicates it's a real input device (not a monitor/loopback)
+    fn is_real_input_device(name: &str) -> bool {
+        let name_lower = name.to_lowercase();
+        // Skip output monitors (loopback devices)
+        if name_lower.contains(".monitor") || name_lower.contains("monitor") {
+            return false;
+        }
+        // Skip HDMI outputs (usually no mic)
+        if name_lower.contains("hdmi") {
+            return false;
+        }
+        true
+    }
+
     fn new(tx: mpsc::UnboundedSender<Vec<i16>>, device_name: Option<&str>, sample_rate: u32) -> Result<Self> {
         let host = cpal::default_host();
-        
+
         info!("Available audio input devices from cpal:");
+        let mut real_devices = Vec::new();
         if let Ok(devices) = host.input_devices() {
             for device in devices {
                 if let Ok(name) = device.name() {
-                    info!("  - '{}'", name);
+                    let is_real = Self::is_real_input_device(&name);
+                    info!("  - '{}' {}", name, if is_real { "(will capture)" } else { "(skipped - monitor/hdmi)" });
+                    if is_real {
+                        real_devices.push(device);
+                    }
                 }
             }
         }
-        
-        let device = if let Some(name) = device_name {
-            info!("Searching for configured device: '{}'", name);
-            if name == "default" {
-                info!("Using default audio input device");
-                host.default_input_device().ok_or_else(|| anyhow::anyhow!("No default input device"))?
-            } else {
-                info!("Searching for audio device: {}", name);
-                let mut found_device = None;
-                
-                for device in host.input_devices()? {
-                    if let Ok(device_name) = device.name() {
-                        if device_name == name {
-                            found_device = Some(device);
+
+        // Determine which devices to use
+        let devices_to_use: Vec<_> = match device_name {
+            // "all" mode: capture from pipewire + all hardware devices
+            // Silent chunks are filtered out, so only devices with real audio contribute
+            Some("all") => {
+                let mut devices = Vec::new();
+
+                for device in real_devices {
+                    if let Ok(name) = device.name() {
+                        // Include pipewire (routes to default) and all hardware devices
+                        if name == "pipewire" || name.starts_with("sysdefault:CARD=") {
+                            devices.push(device);
+                        }
+                    }
+                }
+
+                if devices.is_empty() {
+                    if let Some(default) = host.default_input_device() {
+                        devices.push(default);
+                    }
+                }
+
+                info!("Multi-device mode: capturing from {} device(s) (silent chunks filtered)", devices.len());
+                devices
+            }
+            // "default" or None: use pipewire device for fastest route to PipeWire
+            None | Some("default") => {
+                let mut found = Vec::new();
+                // Look for "pipewire" device first - it routes to PipeWire's default source
+                for device in &real_devices {
+                    if let Ok(name) = device.name() {
+                        if name == "pipewire" {
+                            info!("Using 'pipewire' device (routes to PipeWire default source)");
+                            // Can't move from &real_devices, need to find it again
                             break;
                         }
                     }
                 }
-                
-                found_device.ok_or_else(|| {
-                    warn!("Configured device '{}' not found, falling back to default", name);
-                    anyhow::anyhow!("Audio device '{}' not found", name)
-                }).or_else(|_| {
-                    host.default_input_device().ok_or_else(|| anyhow::anyhow!("No input device available"))
-                })?
+                // Re-search to actually take the device
+                for device in real_devices {
+                    if let Ok(name) = device.name() {
+                        if name == "pipewire" {
+                            found.push(device);
+                            break;
+                        }
+                    }
+                }
+                if found.is_empty() {
+                    info!("'pipewire' device not found, using system default");
+                    if let Some(default) = host.default_input_device() {
+                        found.push(default);
+                    }
+                }
+                found
             }
-        } else {
-            info!("No device configured, using default");
-            host.default_input_device().ok_or_else(|| anyhow::anyhow!("No default input device"))?
+            // Specific device requested
+            Some(name) => {
+                info!("Single-device mode: searching for '{}'", name);
+                let mut found = Vec::new();
+                for device in real_devices {
+                    if let Ok(device_name) = device.name() {
+                        if device_name == name {
+                            found.push(device);
+                            break;
+                        }
+                    }
+                }
+                if found.is_empty() {
+                    warn!("Configured device '{}' not found, falling back to pipewire/default", name);
+                    if let Some(default) = host.default_input_device() {
+                        found.push(default);
+                    }
+                }
+                found
+            }
         };
 
-        info!("Using input device: {}", device.name()?);
+        if devices_to_use.is_empty() {
+            return Err(anyhow::anyhow!("No input devices available"));
+        }
 
         let config = StreamConfig {
             channels: 1,
@@ -214,33 +415,60 @@ impl AudioCapture {
             buffer_size: cpal::BufferSize::Default,
         };
 
-        let stream = device.build_input_stream(
-            &config,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<i16> =
-                    data.iter().map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16).collect();
-                let _ = tx.send(samples);
-            },
-            |err| error!("Audio stream error: {}", err),
-            None,
-        )?;
+        let mut streams = Vec::new();
+        for device in devices_to_use {
+            let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
+            let tx_clone = tx.clone();
 
-        Ok(Self { stream: Some(stream) })
+            match device.build_input_stream(
+                &config,
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    // Filter out silent chunks - only forward audio with meaningful amplitude
+                    // This allows multi-device capture where silent devices don't corrupt the signal
+                    let rms: f32 = (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
+                    const SILENCE_THRESHOLD: f32 = 0.001; // ~-60dB
+                    if rms < SILENCE_THRESHOLD {
+                        return; // Skip silent chunks
+                    }
+
+                    let samples: Vec<i16> =
+                        data.iter().map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16).collect();
+                    let _ = tx_clone.send(samples);
+                },
+                |err| error!("Audio stream error: {}", err),
+                None,
+            ) {
+                Ok(stream) => {
+                    info!("Created audio stream for: {}", device_name);
+                    streams.push(stream);
+                }
+                Err(e) => {
+                    warn!("Failed to create stream for '{}': {}", device_name, e);
+                }
+            }
+        }
+
+        if streams.is_empty() {
+            return Err(anyhow::anyhow!("Failed to create any audio streams"));
+        }
+
+        info!("Audio capture initialized with {} stream(s)", streams.len());
+        Ok(Self { streams })
     }
 
     fn start(&self) -> Result<()> {
-        if let Some(stream) = &self.stream {
+        for stream in &self.streams {
             stream.play()?;
-            info!("Audio capture started");
         }
+        info!("Audio capture started ({} streams)", self.streams.len());
         Ok(())
     }
 
     fn stop(&self) -> Result<()> {
-        if let Some(stream) = &self.stream {
+        for stream in &self.streams {
             stream.pause()?;
-            info!("Audio capture stopped");
         }
+        info!("Audio capture stopped ({} streams)", self.streams.len());
         Ok(())
     }
 }
@@ -254,7 +482,10 @@ pub async fn run() -> Result<()> {
         )
         .init();
 
+    #[cfg(feature = "vosk")]
     info!("Starting preview-based Vosk dictation engine");
+    #[cfg(not(feature = "vosk"))]
+    info!("Starting Whisper-only dictation engine");
 
     let config = load_config().unwrap_or_else(|e| {
         warn!("Failed to load config: {}, using defaults", e);
@@ -284,11 +515,28 @@ pub async fn run() -> Result<()> {
             16000
         });
 
-    info!("Config loaded: audio_device={}, sample_rate={}, language={}", 
+    info!("Config loaded: audio_device={}, sample_rate={}, language={}",
           config.daemon.audio_device, sample_rate, config.daemon.language);
+
+    // Initialize user dictionary
+    let user_dict = Arc::new(UserDictionary::new().unwrap_or_else(|e| {
+        warn!("Failed to initialize user dictionary: {}, spell checking will use defaults only", e);
+        // Create minimal dictionary that won't load system words
+        UserDictionary::new().unwrap()
+    }));
+    info!("User dictionary initialized");
+
+    // Spawn file watcher for dictionary hot-reload
+    let user_dict_watcher = Arc::clone(&user_dict);
+    tokio::spawn(async move {
+        if let Err(e) = watch_dictionary_files(user_dict_watcher).await {
+            error!("Dictionary file watcher error: {}", e);
+        }
+    });
 
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     
+    #[cfg(feature = "vosk")]
     let preview_model_path = if config.daemon.preview_model == "custom" {
         shellexpand::full(&config.daemon.preview_model_custom_path)
             .map_err(|e| anyhow::anyhow!("Failed to expand preview model path: {}", e))?
@@ -369,58 +617,16 @@ pub async fn run() -> Result<()> {
         }
     }
 
-    // Load accurate model based on configuration (eagerly)
-    info!("Loading accurate model in background...");
-    let accurate_model_opt = {
-        let engine_type = config.daemon.transcription_engine.clone();
-        let vosk_final_path = final_model_path.clone();
-        let whisper_model_name = config.daemon.whisper_final_model.clone();
-        let whisper_model_dir = config.daemon.whisper_model_path.clone();
-
-        tokio::task::spawn_blocking(move || {
-            match engine_type.as_str() {
-                "vosk" => {
-                    info!("Loading Vosk accurate model from: {}", vosk_final_path);
-                    Model::new(&vosk_final_path).map(AccurateModel::Vosk)
-                }
-                "whisper" => {
-                    info!("Ensuring Whisper model available: {}", whisper_model_name);
-
-                    // Ensure model exists, download if necessary
-                    let model_path = match model_manager::ensure_whisper_model(
-                        &whisper_model_name,
-                        &whisper_model_dir,
-                    ) {
-                        Ok(path) => path,
-                        Err(e) => {
-                            error!("Failed to obtain Whisper model: {}", e);
-                            error!("Try running: ./scripts/download-whisper-models.sh");
-                            return None;
-                        }
-                    };
-
-                    info!("Loading Whisper model from: {}", model_path.display());
-
-                    WhisperContext::new_with_params(
-                        model_path.to_str().unwrap(),
-                        WhisperContextParameters::default(),
-                    )
-                    .map(AccurateModel::Whisper)
-                    .map_err(|e| {
-                        error!("Whisper model load failed: {:?}", e);
-                        e
-                    })
-                    .ok()
-                }
-                other => {
-                    error!("Unknown transcription_engine '{}'. Valid: 'vosk' or 'whisper'", other);
-                    None
-                }
-            }
-        }).await.ok().flatten()
+    // Lazy model loading: store config, load on first confirm
+    let accurate_model_config = AccurateModelConfig {
+        engine_type: config.daemon.transcription_engine.clone(),
+        #[cfg(feature = "vosk")]
+        vosk_final_path: final_model_path.clone(),
+        whisper_model_name: config.daemon.whisper_final_model.clone(),
+        whisper_model_dir: config.daemon.whisper_model_path.clone(),
     };
-
-    let accurate_model = Arc::new(accurate_model_opt);
+    let accurate_model: Arc<RwLock<Option<AccurateModel>>> = Arc::new(RwLock::new(None));
+    info!("Accurate model will be loaded on first use (lazy loading enabled)");
 
     // Create D-Bus service for control commands
     // IMPORTANT: Must keep connection alive for D-Bus service to remain registered
@@ -458,8 +664,19 @@ pub async fn run() -> Result<()> {
                             info!("Starting audio capture...");
                             capture.start()?;
 
-                            // Create new engine for new session (Vosk doesn't have reset)
+                            // Create new engine for new session
+                            #[cfg(feature = "vosk")]
                             let session_engine = Arc::new(VoskEngine::new(&preview_model_path, sample_rate)?);
+                            #[cfg(not(feature = "vosk"))]
+                            let session_engine = {
+                                // Use whisper for preview when vosk is disabled
+                                let whisper_preview_path = format!("{}/{}", config.daemon.whisper_model_path, config.daemon.whisper_preview_model);
+                                let whisper_preview_path = model_manager::ensure_whisper_model(
+                                    &config.daemon.whisper_preview_model,
+                                    &config.daemon.whisper_model_path,
+                                ).unwrap_or_else(|_| std::path::PathBuf::from(&whisper_preview_path));
+                                Arc::new(WhisperEngine::new(whisper_preview_path.to_str().unwrap(), sample_rate)?)
+                            };
 
                             // Show GUI
                             gui_control_tx.send(GuiControl::SetListening)
@@ -507,10 +724,16 @@ pub async fn run() -> Result<()> {
                             let gui_control_tx_preview = gui_control_tx.clone();
                             let enable_acronyms = config.daemon.enable_acronyms;
                             let enable_punctuation = config.daemon.enable_punctuation;
-                            let enable_grammar = config.daemon.enable_grammar;
+                            // Skip grammar checking in preview for speed (saves ~10-20ms per update)
+                            let user_dict_preview = Arc::clone(&user_dict);
                             preview_task = Some(tokio::spawn(async move {
                                 let mut check_interval = tokio::time::interval(std::time::Duration::from_millis(200));
-                                let pipeline = Pipeline::from_config(enable_acronyms, enable_punctuation, enable_grammar);
+                                let pipeline = Pipeline::from_config_with_dict(
+                                    enable_acronyms,
+                                    enable_punctuation,
+                                    false,  // grammar disabled in preview for speed
+                                    Some(user_dict_preview),
+                                );
 
                                 loop {
                                     check_interval.tick().await;
@@ -643,13 +866,33 @@ pub async fn run() -> Result<()> {
                     gui_control_tx.send(GuiControl::SetProcessing)
                         .map_err(|e| anyhow::anyhow!("Failed to send SetProcessing: {}", e))?;
 
-                    // Check if accurate model is loaded
-                    let model_ref = accurate_model.as_ref()
-                        .as_ref()
+                    // Lazy load accurate model if not already loaded
+                    {
+                        let needs_load = accurate_model.read().await.is_none();
+                        if needs_load {
+                            info!("Loading accurate model (first use)...");
+                            let config_clone = accurate_model_config.clone();
+                            let loaded = tokio::task::spawn_blocking(move || {
+                                config_clone.load()
+                            }).await.ok().flatten();
+
+                            if loaded.is_some() {
+                                *accurate_model.write().await = loaded;
+                                info!("Accurate model loaded successfully");
+                            } else {
+                                return Err(anyhow::anyhow!("Failed to load accurate model"));
+                            }
+                        }
+                    }
+
+                    // Get read lock on the model for transcription
+                    let model_guard = accurate_model.read().await;
+                    let model_ref = model_guard.as_ref()
                         .ok_or_else(|| anyhow::anyhow!("Accurate model not loaded"))?;
 
                     info!("Running correction pass...");
                     let accurate_result = match model_ref {
+                        #[cfg(feature = "vosk")]
                         AccurateModel::Vosk(vosk_model) => {
                             session_engine.run_correction_pass(vosk_model, sample_rate)?
                         }
@@ -691,10 +934,11 @@ pub async fn run() -> Result<()> {
                     info!("[Accurate] Raw: '{}'", accurate_result);
 
                     // Apply post-processing pipeline
-                    let pipeline = Pipeline::from_config(
+                    let pipeline = Pipeline::from_config_with_dict(
                         config.daemon.enable_acronyms,
                         config.daemon.enable_punctuation,
                         config.daemon.enable_grammar,
+                        Some(Arc::clone(&user_dict)),
                     );
                     let processed_result = pipeline.process(&accurate_result)?;
 

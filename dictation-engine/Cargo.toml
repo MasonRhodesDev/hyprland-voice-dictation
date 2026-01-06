@@ -3,6 +3,10 @@ name = "dictation-engine"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+vosk = ["dep:vosk"]
+
 [dependencies]
 tokio = { workspace = true }
 anyhow = { workspace = true }
@@ -14,7 +18,7 @@ serde_json = { workspace = true }
 dictation-gui = { path = "../dictation-gui" }
 dictation-types = { path = "../dictation-types" }
 shellexpand = "3"
-vosk = "0.3.1"
+vosk = { version = "0.3.1", optional = true }
 cpal = "0.15"
 toml = "0.8"
 harper-core = "0.68"
@@ -22,6 +26,8 @@ whisper-rs = "0.15"
 reqwest = { version = "0.12", features = ["blocking"] }
 indicatif = "0.17"
 zbus = "4.1"
+dirs = "5"
+notify = "6"
 
 [lib]
 name = "dictation_engine"

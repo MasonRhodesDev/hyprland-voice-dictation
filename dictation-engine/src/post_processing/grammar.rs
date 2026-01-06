@@ -1,4 +1,5 @@
 use super::TextProcessor;
+use crate::user_dictionary::UserDictionary;
 use anyhow::Result;
 use harper_core::linting::{Lint, LintGroup, LintKind, Linter, Suggestion};
 use harper_core::parsers::PlainEnglish;
@@ -18,15 +19,29 @@ use std::sync::Arc;
 /// - Developer-friendly (understands code/technical context)
 /// - ~10-20ms processing time
 /// - <50MB memory footprint
+/// - User dictionary integration (app-specific + Hunspell personal dictionary)
 pub struct GrammarProcessor {
     dictionary: Arc<MutableDictionary>,
+    user_dict: Option<Arc<UserDictionary>>,
 }
 
 impl GrammarProcessor {
     /// Create a new grammar processor with Harper's default configuration.
     pub fn new() -> Self {
         let dictionary = MutableDictionary::curated();
-        Self { dictionary }
+        Self {
+            dictionary,
+            user_dict: None,
+        }
+    }
+
+    /// Create a new grammar processor with user dictionary integration.
+    pub fn new_with_user_dictionary(user_dict: Arc<UserDictionary>) -> Self {
+        let dictionary = MutableDictionary::curated();
+        Self {
+            dictionary,
+            user_dict: Some(user_dict),
+        }
     }
 }
 
@@ -54,6 +69,17 @@ impl TextProcessor for GrammarProcessor {
         let mut result = text.to_string();
 
         for lint in sorted_lints {
+            // Skip spelling corrections for words in user dictionary
+            if matches!(lint.lint_kind, LintKind::Spelling) {
+                if let Some(user_dict) = &self.user_dict {
+                    let span = lint.span;
+                    let word = &text[span.start..span.end];
+                    if user_dict.contains(word) {
+                        continue;
+                    }
+                }
+            }
+
             // Only apply lints with suggestions
             if let Some(suggestion) = get_best_suggestion(&lint) {
                 let span = lint.span;

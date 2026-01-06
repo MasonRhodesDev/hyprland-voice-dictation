@@ -2,7 +2,10 @@ mod acronym;
 mod grammar;
 mod punctuation;
 
+use crate::user_dictionary::UserDictionary;
 use anyhow::Result;
+use std::sync::Arc;
+
 pub use acronym::AcronymProcessor;
 pub use grammar::GrammarProcessor;
 pub use punctuation::PunctuationProcessor;
@@ -46,6 +49,19 @@ impl Pipeline {
         enable_punctuation: bool,
         enable_grammar: bool,
     ) -> Self {
+        Self::from_config_with_dict(enable_acronyms, enable_punctuation, enable_grammar, None)
+    }
+
+    /// Create a pipeline from configuration with optional user dictionary.
+    ///
+    /// Enables processors based on configuration flags.
+    /// Processors are applied in order: acronyms → punctuation → grammar.
+    pub fn from_config_with_dict(
+        enable_acronyms: bool,
+        enable_punctuation: bool,
+        enable_grammar: bool,
+        user_dict: Option<Arc<UserDictionary>>,
+    ) -> Self {
         let mut pipeline = Self::new();
 
         // Apply acronym detection first (a p i → API)
@@ -60,7 +76,13 @@ impl Pipeline {
 
         // Finally apply grammar checking
         if enable_grammar {
-            pipeline.add_processor(Box::new(GrammarProcessor::new()));
+            if let Some(dict) = user_dict {
+                pipeline.add_processor(Box::new(GrammarProcessor::new_with_user_dictionary(
+                    dict,
+                )));
+            } else {
+                pipeline.add_processor(Box::new(GrammarProcessor::new()));
+            }
         }
 
         pipeline
