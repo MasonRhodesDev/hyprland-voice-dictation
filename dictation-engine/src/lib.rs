@@ -555,7 +555,8 @@ pub async fn run() -> Result<()> {
         format!("{}/{}", base_path, config.daemon.final_model)
     };
 
-    let (audio_tx, audio_rx) = mpsc::unbounded_channel();
+    // Create initial audio channel (will be replaced each recording session for hot-swap support)
+    let (_audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
     let audio_rx_shared = Arc::new(tokio::sync::Mutex::new(audio_rx));
 
     // Create GUI channels for integrated communication
@@ -563,21 +564,9 @@ pub async fn run() -> Result<()> {
     let (spectrum_tx, _) = broadcast::channel::<Vec<f32>>(50);
     let (gui_status_tx, mut gui_status_rx) = mpsc::channel::<GuiStatus>(10);
 
-    let audio_device = if config.daemon.audio_device.is_empty() {
-        None
-    } else {
-        let device_str = config.daemon.audio_device.as_str();
-        let device_name = if let Some(idx) = device_str.find(" (") {
-            &device_str[..idx]
-        } else {
-            device_str
-        };
-        Some(device_name)
-    };
-
-    let capture = AudioCapture::new(audio_tx, audio_device, sample_rate)?;
-    // Don't start audio capture yet - will be started when StartRecording received
-    info!("Audio capture initialized (paused)");
+    // Store audio config for lazy capture creation (supports hot-swap and sleep/wake)
+    let audio_device_config = config.daemon.audio_device.clone();
+    info!("Audio capture will be created fresh each recording session (hot-swap support)");
 
     let keyboard = Arc::new(KeyboardInjector::new(10, 50));
 
@@ -640,6 +629,7 @@ pub async fn run() -> Result<()> {
     let mut session: Option<RecordingSession> = None;
     let mut audio_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut preview_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut capture: Option<AudioCapture> = None;
 
     // ===== PERSISTENT STATE MACHINE LOOP =====
     loop {
@@ -651,18 +641,34 @@ pub async fn run() -> Result<()> {
                         DaemonCommand::StartRecording => {
                             info!("Received StartRecording command");
 
-                            // Drain any stale audio samples from previous session
+                            // Create fresh audio capture (supports hot-swap and sleep/wake recovery)
+                            info!("Creating fresh audio capture...");
+                            let (new_audio_tx, new_audio_rx) = mpsc::unbounded_channel();
+
+                            // Parse audio device config
+                            let audio_device = if audio_device_config.is_empty() {
+                                None
+                            } else {
+                                let device_str = audio_device_config.as_str();
+                                let device_name = if let Some(idx) = device_str.find(" (") {
+                                    &device_str[..idx]
+                                } else {
+                                    device_str
+                                };
+                                Some(device_name)
+                            };
+
+                            // Create and start new capture
+                            let new_capture = AudioCapture::new(new_audio_tx, audio_device, sample_rate)?;
+                            new_capture.start()?;
+                            capture = Some(new_capture);
+
+                            // Replace audio receiver
                             {
                                 let mut rx = audio_rx_shared.lock().await;
-                                while rx.try_recv().is_ok() {
-                                    // Discard stale samples
-                                }
-                                info!("Drained audio channel before new session");
+                                *rx = new_audio_rx;
+                                info!("Audio capture created and started");
                             }
-
-                            // Start new recording session
-                            info!("Starting audio capture...");
-                            capture.start()?;
 
                             // Create new engine for new session
                             #[cfg(feature = "vosk")]
@@ -966,8 +972,11 @@ pub async fn run() -> Result<()> {
                 gui_control_tx.send(GuiControl::SetHidden)
                     .map_err(|e| anyhow::anyhow!("Failed to send SetHidden: {}", e))?;
 
-                // Stop audio capture to prevent sample accumulation
-                capture.stop()?;
+                // Stop and drop audio capture to release resources
+                if let Some(ref cap) = capture {
+                    cap.stop()?;
+                }
+                capture = None; // Drop capture to release device handles
 
                 session = None;
                 daemon_state = DaemonState::Idle;
