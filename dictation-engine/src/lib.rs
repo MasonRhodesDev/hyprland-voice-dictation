@@ -34,23 +34,8 @@ use vosk_engine::VoskEngine;
 use whisper_engine::WhisperEngine;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-// Daemon state machine
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DaemonState {
-    Idle,        // Waiting for StartRecording command, GUI hidden
-    Recording,   // Actively recording audio and transcribing, GUI visible
-    Processing,  // Running accurate model and typing, GUI visible with spinner
-}
-
-impl std::fmt::Display for DaemonState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DaemonState::Idle => write!(f, "idle"),
-            DaemonState::Recording => write!(f, "recording"),
-            DaemonState::Processing => write!(f, "processing"),
-        }
-    }
-}
+// Re-export DaemonState from dbus_control
+use dbus_control::DaemonState;
 
 // Recording session context
 struct RecordingSession {
@@ -106,6 +91,10 @@ struct DaemonConfig {
     enable_punctuation: bool,
     #[serde(default = "default_enable_grammar")]
     enable_grammar: bool,
+
+    // Audio capture
+    #[serde(default = "default_silence_threshold_db")]
+    silence_threshold_db: f32,
 }
 
 fn default_language() -> String { "en".to_string() }
@@ -132,6 +121,12 @@ fn default_whisper_model_path() -> String {
 fn default_enable_acronyms() -> bool { true }
 fn default_enable_punctuation() -> bool { true }
 fn default_enable_grammar() -> bool { true }
+fn default_silence_threshold_db() -> f32 { -60.0 }
+
+/// Convert decibels to linear amplitude (RMS threshold).
+fn db_to_linear(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
+}
 
 fn load_config() -> Result<Config> {
     let home = std::env::var("HOME")?;
@@ -273,8 +268,16 @@ impl AccurateModelConfig {
 
                 info!("Loading Whisper model from: {}", model_path.display());
 
+                let model_path_str = match model_path.to_str() {
+                    Some(s) => s,
+                    None => {
+                        error!("Whisper model path contains invalid UTF-8");
+                        return None;
+                    }
+                };
+
                 WhisperContext::new_with_params(
-                    model_path.to_str().unwrap(),
+                    model_path_str,
                     WhisperContextParameters::default(),
                 )
                 .map(AccurateModel::Whisper)
@@ -311,7 +314,7 @@ impl AudioCapture {
         true
     }
 
-    fn new(tx: mpsc::UnboundedSender<Vec<i16>>, device_name: Option<&str>, sample_rate: u32) -> Result<Self> {
+    fn new(tx: mpsc::UnboundedSender<Vec<i16>>, device_name: Option<&str>, sample_rate: u32, silence_threshold: f32) -> Result<Self> {
         let host = cpal::default_host();
 
         info!("Available audio input devices from cpal:");
@@ -419,6 +422,7 @@ impl AudioCapture {
         for device in devices_to_use {
             let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
             let tx_clone = tx.clone();
+            let threshold = silence_threshold;
 
             match device.build_input_stream(
                 &config,
@@ -426,8 +430,7 @@ impl AudioCapture {
                     // Filter out silent chunks - only forward audio with meaningful amplitude
                     // This allows multi-device capture where silent devices don't corrupt the signal
                     let rms: f32 = (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
-                    const SILENCE_THRESHOLD: f32 = 0.001; // ~-60dB
-                    if rms < SILENCE_THRESHOLD {
+                    if rms < threshold {
                         return; // Skip silent chunks
                     }
 
@@ -505,6 +508,7 @@ pub async fn run() -> Result<()> {
                 enable_acronyms: default_enable_acronyms(),
                 enable_punctuation: default_enable_punctuation(),
                 enable_grammar: default_enable_grammar(),
+                silence_threshold_db: default_silence_threshold_db(),
             }
         }
     });
@@ -515,14 +519,18 @@ pub async fn run() -> Result<()> {
             16000
         });
 
+    // Convert silence threshold from dB to linear RMS value
+    let silence_threshold = db_to_linear(config.daemon.silence_threshold_db);
+    info!("Silence threshold: {:.1}dB ({:.6} linear)", config.daemon.silence_threshold_db, silence_threshold);
+
     info!("Config loaded: audio_device={}, sample_rate={}, language={}",
           config.daemon.audio_device, sample_rate, config.daemon.language);
 
     // Initialize user dictionary
     let user_dict = Arc::new(UserDictionary::new().unwrap_or_else(|e| {
         warn!("Failed to initialize user dictionary: {}, spell checking will use defaults only", e);
-        // Create minimal dictionary that won't load system words
-        UserDictionary::new().unwrap()
+        // Create empty dictionary that won't load any words
+        UserDictionary::empty()
     }));
     info!("User dictionary initialized");
 
@@ -617,9 +625,12 @@ pub async fn run() -> Result<()> {
     let accurate_model: Arc<RwLock<Option<AccurateModel>>> = Arc::new(RwLock::new(None));
     info!("Accurate model will be loaded on first use (lazy loading enabled)");
 
+    // Create watch channel for state sharing with D-Bus
+    let (state_tx, state_rx) = tokio::sync::watch::channel(DaemonState::Idle);
+
     // Create D-Bus service for control commands
     // IMPORTANT: Must keep connection alive for D-Bus service to remain registered
-    let (dbus_conn, _command_sender, mut command_rx) = dbus_control::create_dbus_service().await?;
+    let (dbus_conn, _command_sender, mut command_rx) = dbus_control::create_dbus_service(state_rx).await?;
     let _dbus_conn = dbus_conn; // Keep alive but mark unused
 
     info!("Daemon initialized - entering idle state (GUI hidden)");
@@ -659,7 +670,7 @@ pub async fn run() -> Result<()> {
                             };
 
                             // Create and start new capture
-                            let new_capture = AudioCapture::new(new_audio_tx, audio_device, sample_rate)?;
+                            let new_capture = AudioCapture::new(new_audio_tx, audio_device, sample_rate, silence_threshold)?;
                             new_capture.start()?;
                             capture = Some(new_capture);
 
@@ -681,7 +692,9 @@ pub async fn run() -> Result<()> {
                                     &config.daemon.whisper_preview_model,
                                     &config.daemon.whisper_model_path,
                                 ).unwrap_or_else(|_| std::path::PathBuf::from(&whisper_preview_path));
-                                Arc::new(WhisperEngine::new(whisper_preview_path.to_str().unwrap(), sample_rate)?)
+                                let path_str = whisper_preview_path.to_str()
+                                    .ok_or_else(|| anyhow::anyhow!("Whisper preview model path contains invalid UTF-8"))?;
+                                Arc::new(WhisperEngine::new(path_str, sample_rate)?)
                             };
 
                             // Show GUI
@@ -769,6 +782,7 @@ pub async fn run() -> Result<()> {
                             }));
 
                             daemon_state = DaemonState::Recording;
+                            let _ = state_tx.send(daemon_state);
                             info!("Entered Recording state");
                         }
                         DaemonCommand::Shutdown => {
@@ -799,6 +813,7 @@ pub async fn run() -> Result<()> {
                         DaemonCommand::Confirm => {
                             info!("Received Confirm command");
                             daemon_state = DaemonState::Processing;
+                            let _ = state_tx.send(daemon_state);
                         }
                         DaemonCommand::StopRecording => {
                             info!("Received StopRecording (cancel)");
@@ -816,6 +831,7 @@ pub async fn run() -> Result<()> {
 
                             session = None;
                             daemon_state = DaemonState::Idle;
+                            let _ = state_tx.send(daemon_state);
                             info!("Returned to Idle state");
                         }
                         DaemonCommand::Shutdown => {
@@ -980,6 +996,7 @@ pub async fn run() -> Result<()> {
 
                 session = None;
                 daemon_state = DaemonState::Idle;
+                let _ = state_tx.send(daemon_state);
                 info!("Processing complete - returned to Idle state");
             }
         }

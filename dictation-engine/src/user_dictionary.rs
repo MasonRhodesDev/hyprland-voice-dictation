@@ -20,6 +20,18 @@ pub struct UserDictionary {
 }
 
 impl UserDictionary {
+    /// Create an empty user dictionary (fallback for initialization failures).
+    ///
+    /// Used when normal initialization fails but we still need a working dictionary.
+    pub fn empty() -> Self {
+        Self {
+            app_words: Arc::new(RwLock::new(HashSet::new())),
+            system_words: Arc::new(RwLock::new(HashSet::new())),
+            app_words_path: PathBuf::new(),
+            system_dict_path: None,
+        }
+    }
+
     /// Create new user dictionary.
     ///
     /// Loads from:

@@ -77,7 +77,8 @@ impl WhisperEngine {
     pub fn run_correction_pass(&self, accurate_context: &WhisperContext) -> Result<String> {
         info!("Running Whisper correction pass...");
 
-        let audio_buffer = self.audio_buffer.lock().unwrap();
+        let audio_buffer = self.audio_buffer.lock()
+            .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
 
         if audio_buffer.is_empty() {
             info!("Audio buffer empty, returning empty string");
@@ -150,25 +151,36 @@ impl WhisperEngine {
 
 impl TranscriptionEngine for WhisperEngine {
     fn process_audio(&self, samples: &[i16]) -> Result<()> {
-        let mut audio_buffer = self.audio_buffer.lock().unwrap();
+        let mut audio_buffer = self.audio_buffer.lock()
+            .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
         audio_buffer.extend_from_slice(samples);
         Ok(())
     }
 
     fn get_current_text(&self) -> Result<String> {
-        // For preview mode: return accumulated text
-        // Note: Whisper preview would require incremental transcription,
-        // which is complex. For now, return accumulated preview text.
-        // In practice, the preview model will be Vosk for speed.
-        Ok(self.accumulated_text.lock().unwrap().clone())
+        // Whisper doesn't support incremental transcription efficiently,
+        // so show recording duration as feedback instead of empty string.
+        let buffer = self.audio_buffer.lock()
+            .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
+
+        if buffer.is_empty() {
+            Ok(String::new())
+        } else {
+            let duration = buffer.len() as f32 / self.sample_rate as f32;
+            Ok(format!("Recording... ({:.1}s)", duration))
+        }
     }
 
     fn get_final_result(&self) -> Result<String> {
-        Ok(self.accumulated_text.lock().unwrap().clone())
+        let text = self.accumulated_text.lock()
+            .map_err(|e| anyhow::anyhow!("Accumulated text lock poisoned: {}", e))?;
+        Ok(text.clone())
     }
 
     fn get_audio_buffer(&self) -> Vec<i16> {
-        self.audio_buffer.lock().unwrap().clone()
+        self.audio_buffer.lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
     }
 }
 

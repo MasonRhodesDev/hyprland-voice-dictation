@@ -1,12 +1,31 @@
 use anyhow::Result;
 use zbus::{interface, ConnectionBuilder};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tracing::info;
+
+/// Daemon state enum shared between lib.rs and dbus_control.rs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonState {
+    Idle,        // Waiting for StartRecording command, GUI hidden
+    Recording,   // Actively recording audio and transcribing, GUI visible
+    Processing,  // Running accurate model and typing, GUI visible with spinner
+}
+
+impl std::fmt::Display for DaemonState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DaemonState::Idle => write!(f, "idle"),
+            DaemonState::Recording => write!(f, "recording"),
+            DaemonState::Processing => write!(f, "processing"),
+        }
+    }
+}
 
 /// D-Bus service interface for voice dictation control
 pub struct VoiceDictationService {
     command_sender: Arc<Mutex<tokio::sync::mpsc::Sender<DaemonCommand>>>,
+    state_receiver: watch::Receiver<DaemonState>,
 }
 
 /// Commands that can be sent from D-Bus to the daemon
@@ -57,8 +76,9 @@ impl VoiceDictationService {
     /// Get current daemon status
     async fn status(&self) -> zbus::fdo::Result<(String, bool)> {
         info!("D-Bus: Status called");
-        // For now, return placeholder - will be enhanced with actual state query
-        Ok(("idle".to_string(), false))
+        let state = *self.state_receiver.borrow();
+        let session_active = state != DaemonState::Idle;
+        Ok((state.to_string(), session_active))
     }
 
     /// Shutdown the daemon gracefully
@@ -72,7 +92,9 @@ impl VoiceDictationService {
 }
 
 /// Create and register D-Bus service
-pub async fn create_dbus_service() -> Result<(
+pub async fn create_dbus_service(
+    state_receiver: watch::Receiver<DaemonState>,
+) -> Result<(
     zbus::Connection,
     Arc<Mutex<tokio::sync::mpsc::Sender<DaemonCommand>>>,
     tokio::sync::mpsc::Receiver<DaemonCommand>,
@@ -82,6 +104,7 @@ pub async fn create_dbus_service() -> Result<(
 
     let service = VoiceDictationService {
         command_sender: Arc::clone(&command_sender),
+        state_receiver,
     };
 
     let connection = ConnectionBuilder::session()?
