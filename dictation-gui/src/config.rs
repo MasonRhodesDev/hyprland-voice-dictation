@@ -20,10 +20,6 @@ pub struct GuiGeneralConfig {
     pub window_height: u32,
     #[serde(default = "default_position")]
     pub position: String,
-    #[serde(default = "default_opacity")]
-    pub opacity: f32,
-    #[serde(default = "default_show_spectrum")]
-    pub show_spectrum: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -121,8 +117,6 @@ pub struct ElementsConfig {
 fn default_window_width() -> u32 { 400 }
 fn default_window_height() -> u32 { 200 }
 fn default_position() -> String { "bottom".to_string() }
-fn default_opacity() -> f32 { 0.95 }
-fn default_show_spectrum() -> bool { true }
 
 fn default_true() -> bool { true }
 fn default_opacity_one() -> f32 { 1.0 }
@@ -169,8 +163,6 @@ impl Default for GuiGeneralConfig {
             window_width: default_window_width(),
             window_height: default_window_height(),
             position: default_position(),
-            opacity: default_opacity(),
-            show_spectrum: default_show_spectrum(),
         }
     }
 }

@@ -22,6 +22,15 @@ pub enum GuiControl {
     /// Frequency band values (typically 8-10 bands, 0.0-1.0 range)
     UpdateSpectrum(Vec<f32>),
 
+    /// Update VAD (voice activity detection) state
+    /// Used to sync visual feedback with actual speech detection
+    UpdateVadState {
+        /// Whether voice activity is currently detected
+        is_speaking: bool,
+        /// Whether transcription text has settled (no changes for 300ms+)
+        text_settled: bool,
+    },
+
     /// Transition to processing state (spinner animation)
     SetProcessing,
 

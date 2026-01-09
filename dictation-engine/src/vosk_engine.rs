@@ -192,6 +192,18 @@ impl TranscriptionEngine for VoskEngine {
             .map(|guard| guard.clone())
             .unwrap_or_default()
     }
+
+    fn reset(&self) {
+        if let Ok(mut buffer) = self.audio_buffer.lock() {
+            buffer.clear();
+        }
+        if let Ok(mut text) = self.accumulated_text.lock() {
+            text.clear();
+        }
+        // Note: Vosk recognizer keeps some internal state that can't be reset
+        // without recreating it. For now, the above clearing is sufficient
+        // for most use cases. A full reset would require recreating the recognizer.
+    }
 }
 
 #[cfg(test)]

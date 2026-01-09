@@ -4,8 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = []
+# All engines compiled by default - runtime detection determines availability
+# Vosk requires libvosk.so at runtime (checked dynamically)
+# GPU requires CUDA at build time
+default = ["vosk", "parakeet"]
 vosk = ["dep:vosk"]
+gpu = ["whisper-rs/cuda"]
+parakeet = ["dep:parakeet-rs", "dep:tempfile"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -28,6 +33,18 @@ indicatif = "0.17"
 zbus = "4.1"
 dirs = "5"
 notify = "6"
+hound = "3.5"
+crossbeam-channel = "0.5"
+chrono = { version = "0.4", features = ["serde"] }
+# Silero VAD (neural voice activity detection)
+# NOTE: Keep exact versions aligned with parakeet-rs requirements
+ort = "=2.0.0-rc.10"
+ndarray = "=0.16.1"
+# Parakeet engine
+parakeet-rs = { version = "0.2", optional = true }
+tempfile = { version = "3", optional = true }
+
+[dev-dependencies]
 
 [lib]
 name = "dictation_engine"

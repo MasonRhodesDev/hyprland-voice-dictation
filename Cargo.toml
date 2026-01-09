@@ -3,13 +3,21 @@ name = "voice-dictation"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# All engines always compiled - runtime detection determines availability
+default = ["vosk", "parakeet"]
+vosk = ["dictation-engine/vosk"]
+parakeet = ["dictation-engine/parakeet"]
+gpu = ["dictation-engine/gpu"]  # Requires CUDA at build time
+
 [dependencies]
-dictation-engine = { path = "dictation-engine" }
+dictation-engine = { path = "dictation-engine", default-features = false }
 dictation-gui = { path = "dictation-gui" }
 schema-tui = { git = "https://github.com/MasonRhodesDev/schema-tui.git" }
 clap = { version = "4", features = ["derive"] }
 zbus = "4.1"
 tokio = { workspace = true }
+cpal = "0.15"
 
 [workspace]
 members = [

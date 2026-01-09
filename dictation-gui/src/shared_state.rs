@@ -21,6 +21,12 @@ pub struct SharedState {
 
     /// Animation timer for closing effect
     pub closing_animation_time: f32,
+
+    /// VAD state: whether voice activity is currently detected
+    pub is_speaking: bool,
+
+    /// Whether transcription text has settled (no changes for 300ms+)
+    pub text_settled: bool,
 }
 
 impl Default for SharedState {
@@ -32,6 +38,8 @@ impl Default for SharedState {
             active_monitor: String::new(),
             animation_time: 0.0,
             closing_animation_time: 0.0,
+            is_speaking: false,
+            text_settled: true,
         }
     }
 }
@@ -74,5 +82,11 @@ impl SharedState {
     pub fn reset_animations(&mut self) {
         self.animation_time = 0.0;
         self.closing_animation_time = 0.0;
+    }
+
+    /// Update VAD (voice activity detection) state
+    pub fn set_vad_state(&mut self, is_speaking: bool, text_settled: bool) {
+        self.is_speaking = is_speaking;
+        self.text_settled = text_settled;
     }
 }

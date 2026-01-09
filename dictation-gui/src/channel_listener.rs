@@ -8,16 +8,20 @@ use tracing::{debug, error, info};
 use crate::{fft::SpectrumAnalyzer, shared_state::SharedState, GuiState};
 
 /// Spawn background tasks to listen for channel messages and update SharedState
+///
+/// Uses the provided runtime handle to spawn tasks on the daemon's tokio runtime,
+/// which is necessary because this function is called from within spawn_blocking.
 pub fn spawn_channel_listener(
     mut gui_control_rx: broadcast::Receiver<GuiControl>,
     mut spectrum_rx: broadcast::Receiver<Vec<f32>>,
     shared_state: Arc<RwLock<SharedState>>,
     gui_status_tx: mpsc::Sender<GuiStatus>,
+    runtime_handle: tokio::runtime::Handle,
 ) {
-    // Spawn control message listener
+    // Spawn control message listener on daemon's runtime
     let state_clone = shared_state.clone();
     let status_tx_clone = gui_status_tx.clone();
-    tokio::spawn(async move {
+    runtime_handle.spawn(async move {
         info!("Channel listener: Control task started");
 
         loop {
@@ -55,6 +59,12 @@ pub fn spawn_channel_listener(
                         state.set_spectrum_values(values);
                     }
                 }
+                Ok(GuiControl::UpdateVadState { is_speaking, text_settled }) => {
+                    // VAD state updates for visual sync
+                    if let Ok(mut state) = state_clone.write() {
+                        state.set_vad_state(is_speaking, text_settled);
+                    }
+                }
                 Ok(GuiControl::SetProcessing) => {
                     info!("Channel listener: SetProcessing received");
                     if let Ok(mut state) = state_clone.write() {
@@ -88,8 +98,8 @@ pub fn spawn_channel_listener(
         error!("Channel listener: Control task exiting");
     });
 
-    // Spawn spectrum listener with FFT processing
-    tokio::spawn(async move {
+    // Spawn spectrum listener with FFT processing on daemon's runtime
+    runtime_handle.spawn(async move {
         debug!("Channel listener: Spectrum task started");
 
         // Create spectrum analyzer (FFT_SIZE=1024, SAMPLE_RATE=16000, SMOOTHING=0.7)
@@ -110,13 +120,15 @@ pub fn spawn_channel_listener(
                     continue;
                 }
                 Err(broadcast::error::RecvError::Closed) => {
-                    error!("Channel listener: Spectrum channel closed");
+                    // Spectrum channel closed - this is non-fatal, just stop updating visualization
+                    // This can happen during model loading or state transitions
+                    debug!("Channel listener: Spectrum channel closed, stopping visualization updates");
                     break;
                 }
             }
         }
 
-        error!("Channel listener: Spectrum task exiting");
+        debug!("Channel listener: Spectrum task finished");
     });
 
     info!("Channel listeners spawned");

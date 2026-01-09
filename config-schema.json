@@ -9,13 +9,25 @@
       "description": "Daemon engine settings",
       "fields": [
         {
+          "id": "activation_mode",
+          "label": "Activation Mode",
+          "description": "Toggle: press to start, press again to confirm. Hold: hold to record, release to confirm.",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["toggle", "hold"]
+          },
+          "default": "toggle",
+          "ui_widget": "dropdown"
+        },
+        {
           "id": "audio_device",
           "label": "Audio Device",
           "description": "ALSA audio input device name (e.g., 'default', 'pipewire', 'sysdefault:CARD=Pro'). Run 'arecord -L' to see all available devices.",
           "type": "enum",
           "options_source": {
             "type": "script",
-            "command": "bash scripts/list-audio-devices.sh"
+            "command": "voice-dictation list-audio-devices"
           },
           "default": "default",
           "ui_widget": "dropdown"
@@ -33,14 +45,23 @@
           "ui_widget": "dropdown"
         },
         {
+          "id": "vad_enabled",
+          "label": "Enable Neural VAD",
+          "description": "Use Silero neural network for voice activity detection. Requires 'silero-vad' feature. Falls back to dB threshold if unavailable.",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle"
+        },
+        {
           "id": "vad_threshold",
           "label": "VAD Threshold",
-          "description": "Voice activity detection threshold (0.0-1.0)",
+          "description": "Voice activity detection threshold (0.0-1.0 for neural VAD)",
           "type": "float",
           "default": 0.5,
           "min": 0.0,
           "max": 1.0,
-          "ui_widget": "number_input"
+          "ui_widget": "number_input",
+          "visible_when": "daemon.vad_enabled == true"
         },
         {
           "id": "language",
@@ -57,95 +78,30 @@
         {
           "id": "preview_model",
           "label": "Preview Model (Fast)",
-          "description": "Model for real-time GUI feedback during recording",
+          "description": "Model for real-time GUI feedback during recording. Format: engine:model_name",
           "type": "enum",
           "options_source": {
             "type": "script",
-            "command": "bash scripts/list-vosk-models.sh ${daemon.language}",
+            "command": "voice-dictation list-preview-models ${daemon.language}",
             "depends_on": ["daemon.language"],
             "cache_duration": 3600
           },
-          "default": "vosk-model-en-us-daanzu-20200905-lgraph",
+          "default": "vosk:vosk-model-en-us-daanzu-20200905-lgraph",
           "ui_widget": "dropdown_searchable"
-        },
-        {
-          "id": "preview_model_custom_path",
-          "label": "Custom Preview Model Path",
-          "description": "Path to custom preview model directory",
-          "type": "path",
-          "default": "$HOME/.config/voice-dictation/models/",
-          "ui_widget": "file_picker",
-          "visible_when": "daemon.preview_model == 'custom'"
         },
         {
           "id": "final_model",
           "label": "Final Model (Accurate)",
-          "description": "Model for final accurate transcription processing",
+          "description": "Model for final accurate transcription. Format: engine:model_name",
           "type": "enum",
           "options_source": {
             "type": "script",
-            "command": "bash scripts/list-vosk-models.sh ${daemon.language}",
+            "command": "voice-dictation list-final-models ${daemon.language}",
             "depends_on": ["daemon.language"],
             "cache_duration": 3600
           },
-          "default": "vosk-model-en-us-0.22",
+          "default": "whisper:ggml-small.en.bin",
           "ui_widget": "dropdown_searchable"
-        },
-        {
-          "id": "final_model_custom_path",
-          "label": "Custom Final Model Path",
-          "description": "Path to custom final model directory",
-          "type": "path",
-          "default": "$HOME/.config/voice-dictation/models/",
-          "ui_widget": "file_picker",
-          "visible_when": "daemon.final_model == 'custom'"
-        },
-        {
-          "id": "transcription_engine",
-          "label": "Transcription Engine",
-          "description": "Engine for final accurate transcription (Whisper: better accuracy, Vosk: original behavior)",
-          "type": "enum",
-          "options_source": {
-            "type": "static",
-            "values": ["whisper", "vosk"]
-          },
-          "default": "whisper",
-          "ui_widget": "dropdown"
-        },
-        {
-          "id": "whisper_preview_model",
-          "label": "Whisper Preview Model",
-          "description": "Whisper model for preview (currently unused, preview uses Vosk)",
-          "type": "enum",
-          "options_source": {
-            "type": "static",
-            "values": ["ggml-tiny.en.bin", "ggml-base.en.bin", "ggml-small.en.bin"]
-          },
-          "default": "ggml-base.en.bin",
-          "ui_widget": "dropdown",
-          "visible_when": "daemon.transcription_engine == 'whisper'"
-        },
-        {
-          "id": "whisper_final_model",
-          "label": "Whisper Final Model",
-          "description": "Whisper model for accurate transcription (small recommended for CPU)",
-          "type": "enum",
-          "options_source": {
-            "type": "static",
-            "values": ["ggml-tiny.en.bin", "ggml-base.en.bin", "ggml-small.en.bin", "ggml-medium.en.bin"]
-          },
-          "default": "ggml-small.en.bin",
-          "ui_widget": "dropdown",
-          "visible_when": "daemon.transcription_engine == 'whisper'"
-        },
-        {
-          "id": "whisper_model_path",
-          "label": "Whisper Model Path",
-          "description": "Directory containing Whisper GGML model files",
-          "type": "path",
-          "default": "$HOME/.config/voice-dictation/models/whisper/",
-          "ui_widget": "file_picker",
-          "visible_when": "daemon.transcription_engine == 'whisper'"
         },
         {
           "id": "enable_acronyms",
@@ -209,24 +165,6 @@
           },
           "default": "bottom",
           "ui_widget": "dropdown"
-        },
-        {
-          "id": "opacity",
-          "label": "Opacity",
-          "description": "Window opacity (0.0-1.0)",
-          "type": "float",
-          "default": 0.95,
-          "min": 0.1,
-          "max": 1.0,
-          "ui_widget": "number_input"
-        },
-        {
-          "id": "show_spectrum",
-          "label": "Show Spectrum",
-          "description": "Display audio spectrum visualization",
-          "type": "boolean",
-          "default": true,
-          "ui_widget": "toggle"
         }
       ]
     },
@@ -667,17 +605,6 @@
           "default": 0.95,
           "min": 0.1,
           "max": 1.0,
-          "ui_widget": "number_input",
-          "subsection": "background"
-        },
-        {
-          "id": "background_blur",
-          "label": "Background Blur",
-          "description": "Background blur amount (if supported)",
-          "type": "number",
-          "default": 10,
-          "min": 0,
-          "max": 30,
           "ui_widget": "number_input",
           "subsection": "background"
         },

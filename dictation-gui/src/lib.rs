@@ -97,9 +97,10 @@ pub fn run() -> Result<(), iced_layershell::Error> {
 
 /// Run GUI integrated with daemon (channel-based communication)
 pub fn run_integrated(
-    gui_control_rx: tokio::sync::broadcast::Receiver<dictation_types::GuiControl>,
-    spectrum_rx: tokio::sync::broadcast::Receiver<Vec<f32>>,
+    gui_control_tx: tokio::sync::broadcast::Sender<dictation_types::GuiControl>,
+    spectrum_tx: tokio::sync::broadcast::Sender<Vec<f32>>,
     gui_status_tx: tokio::sync::mpsc::Sender<dictation_types::GuiStatus>,
+    runtime_handle: tokio::runtime::Handle,
 ) -> Result<(), iced_layershell::Error> {
     // Note: tracing subscriber is already initialized by the daemon in integrated mode
     // No need to initialize it again here
@@ -109,13 +110,22 @@ pub fn run_integrated(
     // Create shared state
     let shared_state = shared_state::SharedState::new();
 
+    // Subscribe to channels here (in GUI context) to ensure proper channel lifetime
+    // Keeping sender clones alive in GUI ensures channels stay open
+    let gui_control_rx = gui_control_tx.subscribe();
+    let spectrum_rx = spectrum_tx.subscribe();
+    let _gui_control_tx_keeper = gui_control_tx; // Keep sender alive for channel lifetime
+    let _spectrum_tx_keeper = spectrum_tx; // Keep sender alive for channel lifetime
+
     // Spawn channel listeners (replaces background_tasks)
+    // Use the runtime handle to ensure tasks run on daemon's tokio runtime
     info!("Spawning channel listeners");
     channel_listener::spawn_channel_listener(
         gui_control_rx,
         spectrum_rx,
         shared_state.clone(),
         gui_status_tx.clone(),
+        runtime_handle.clone(),
     );
 
     // Spawn Hyprland event listener

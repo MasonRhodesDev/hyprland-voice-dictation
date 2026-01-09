@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 
 #[tokio::test]
@@ -26,25 +25,6 @@ async fn test_control_server_client_communication() {
     let _ = std::fs::remove_file(socket_path);
 }
 
-#[tokio::test]
-async fn test_ipc_server_broadcast() {
-    use dictation_engine::ipc::IpcServer;
-
-    let socket_path = "/tmp/test_audio_integration_1.sock";
-    let _ = std::fs::remove_file(socket_path);
-
-    let server = Arc::new(IpcServer::new(socket_path.to_string()));
-    server.start_server();
-
-    sleep(Duration::from_millis(100)).await;
-
-    let samples = vec![0.5f32; 512];
-    server.broadcast_samples(&samples).await;
-
-    sleep(Duration::from_millis(100)).await;
-
-    let _ = std::fs::remove_file(socket_path);
-}
 
 #[tokio::test]
 async fn test_multiple_control_messages() {

@@ -46,4 +46,10 @@ pub trait TranscriptionEngine: Send + Sync {
     /// # Returns
     /// * Complete audio buffer accumulated during recording
     fn get_audio_buffer(&self) -> Vec<i16>;
+
+    /// Reset the engine state for a new recording session.
+    ///
+    /// Clears the audio buffer and any accumulated transcription state.
+    /// Called between recording sessions when reusing the same engine.
+    fn reset(&self);
 }
