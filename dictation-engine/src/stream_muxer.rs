@@ -75,9 +75,10 @@ impl PerStreamBuffer {
     }
 
     /// Get samples as contiguous slice for scoring.
-    /// Returns a Vec since VecDeque may not be contiguous.
-    fn recent_vec(&self) -> Vec<i16> {
-        self.samples.iter().copied().collect()
+    /// Uses make_contiguous() to avoid allocation - rearranges internal
+    /// VecDeque storage and returns a slice reference.
+    fn as_contiguous_slice(&mut self) -> &[i16] {
+        self.samples.make_contiguous()
     }
 
     /// Reset the samples-since-score counter.
@@ -441,8 +442,9 @@ impl StreamMuxer {
 
             for (id, buffer) in &mut self.streams {
                 if buffer.len() >= window_samples {
-                    let samples_vec = buffer.recent_vec();
-                    let score = self.scorer.score(&samples_vec);
+                    // Use make_contiguous() to avoid allocation - returns &[i16]
+                    let samples_slice = buffer.as_contiguous_slice();
+                    let score = self.scorer.score(samples_slice);
                     self.scores_cache.insert(id.clone(), score);
                     buffer.reset_score_counter();
                 }
@@ -587,14 +589,14 @@ mod tests {
         let mut buffer = PerStreamBuffer::new(100);
         buffer.extend(&[1, 2, 3]);
         assert_eq!(buffer.len(), 3);
-        assert_eq!(buffer.recent_vec(), vec![1, 2, 3]);
+        assert_eq!(buffer.as_contiguous_slice(), &[1, 2, 3]);
 
         // Test overflow - VecDeque should handle this efficiently
         buffer.extend(&(0..150).map(|i| i as i16).collect::<Vec<_>>());
         assert_eq!(buffer.len(), 100);
 
         // Should have the last 100 values (50-149)
-        let recent = buffer.recent_vec();
+        let recent = buffer.as_contiguous_slice();
         assert_eq!(recent[0], 50);
         assert_eq!(recent[99], 149);
     }

@@ -43,6 +43,9 @@ ndarray = "=0.16.1"
 # Parakeet engine
 parakeet-rs = { version = "0.2", optional = true }
 tempfile = { version = "3", optional = true }
+# SHA256 verification for downloaded models
+sha2 = "0.10"
+hex = "0.4"
 
 [dev-dependencies]
 

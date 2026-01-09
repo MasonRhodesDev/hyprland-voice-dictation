@@ -58,8 +58,13 @@ pub mod silero {
     use super::*;
     use ort::session::{Session, builder::GraphOptimizationLevel};
     use ort::value::Value;
+    use sha2::{Sha256, Digest};
     use std::path::Path;
     use tracing::warn;
+
+    /// Known SHA256 hash of silero_vad.onnx (v5.1 from master branch)
+    /// This can be updated if the upstream model changes
+    const SILERO_VAD_SHA256: &str = "b73d9134cc9c86c5a0ac86082fbb74b10d926fe5d0b8a3dd0cee93aa3a2ef5f3";
 
     /// Silero VAD detector using ONNX Runtime
     pub struct SileroVadDetector {
@@ -105,11 +110,39 @@ pub mod silero {
             })
         }
 
+        /// Verify SHA256 hash of a file
+        fn verify_sha256(path: &Path, expected_hex: &str) -> Result<bool> {
+            let bytes = std::fs::read(path)?;
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            let result = hasher.finalize();
+            let actual_hex = hex::encode(result);
+            Ok(actual_hex == expected_hex)
+        }
+
         /// Download the Silero VAD model if not present
         pub fn ensure_model(model_dir: &Path) -> Result<std::path::PathBuf> {
             let model_path = model_dir.join("silero_vad.onnx");
             if model_path.exists() {
-                return Ok(model_path);
+                // Verify existing model's hash
+                match Self::verify_sha256(&model_path, SILERO_VAD_SHA256) {
+                    Ok(true) => {
+                        debug!("Silero VAD model verified: {:?}", model_path);
+                        return Ok(model_path);
+                    }
+                    Ok(false) => {
+                        warn!(
+                            "Silero VAD model hash mismatch - re-downloading. \
+                             This may indicate model corruption or an upstream update."
+                        );
+                        // Remove corrupted/outdated file
+                        let _ = std::fs::remove_file(&model_path);
+                    }
+                    Err(e) => {
+                        warn!("Failed to verify Silero VAD model: {} - re-downloading", e);
+                        let _ = std::fs::remove_file(&model_path);
+                    }
+                }
             }
 
             std::fs::create_dir_all(model_dir)?;
@@ -120,6 +153,25 @@ pub mod silero {
 
             let response = reqwest::blocking::get(url)?;
             let bytes = response.bytes()?;
+
+            // Verify downloaded content before saving
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            let result = hasher.finalize();
+            let actual_hex = hex::encode(result);
+
+            if actual_hex != SILERO_VAD_SHA256 {
+                warn!(
+                    "Downloaded Silero VAD model has unexpected hash.\n\
+                     Expected: {}\n\
+                     Got: {}\n\
+                     The upstream model may have been updated. Proceeding with caution.",
+                    SILERO_VAD_SHA256, actual_hex
+                );
+                // Still save and use - warn user but don't fail
+                // This allows the system to work if upstream updates the model
+            }
+
             std::fs::write(&model_path, &bytes)?;
 
             debug!("Silero VAD model saved to {:?}", model_path);
