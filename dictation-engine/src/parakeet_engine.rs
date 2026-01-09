@@ -167,46 +167,41 @@ impl TranscriptionEngine for ParakeetEngine {
     }
 
     fn get_current_text(&self) -> Result<String> {
-        // Incremental transcription for preview: only transcribe NEW audio
-        // This is called from the preview task (100ms polling), not the audio thread
+        // Full-buffer transcription for preview: same approach as get_final_result()
+        // This produces coherent output without word-boundary duplicates
         let buffer = self.audio_buffer.lock().unwrap();
         if buffer.is_empty() {
+            return Ok(String::new());
+        }
+
+        // Need minimum audio to transcribe (~0.15s)
+        if buffer.len() < 2400 {
             return Ok(String::new());
         }
 
         let current_len = buffer.len();
         let mut last_len = self.last_transcribed_len.lock().unwrap();
 
-        // If no new audio, return cached result
-        if current_len <= *last_len {
+        // Only re-transcribe when enough new audio accumulated (~0.3s)
+        // This balances responsiveness vs CPU usage
+        if current_len <= *last_len + 4800 {
             return Ok(self.current_text.lock().unwrap().clone());
         }
 
-        // Need minimum ~0.15s (2400 samples) to avoid ndarray shape overflow in model
-        let new_samples = current_len - *last_len;
-        if new_samples < 2400 {
-            return Ok(self.current_text.lock().unwrap().clone());
-        }
-
-        // Transcribe only the new chunk
-        let new_audio: Vec<i16> = buffer[*last_len..].to_vec();
+        // Transcribe FULL buffer (same as get_final_result)
+        let full_audio = buffer.clone();
         drop(buffer);
 
-        let new_text = self.transcribe_chunk(&new_audio)?;
+        debug!("Preview transcription: {} samples ({:.2}s)",
+               full_audio.len(), full_audio.len() as f32 / 16000.0);
 
-        // Append to cached text
-        let mut cached = self.current_text.lock().unwrap();
-        if !new_text.is_empty() {
-            if !cached.is_empty() {
-                cached.push(' ');
-            }
-            cached.push_str(&new_text);
-            debug!("Incremental transcription: +{} samples -> '{}' (total: {} chars)",
-                   new_samples, new_text, cached.len());
-        }
+        let full_text = self.transcribe_buffer(&full_audio)?;
+
+        // Replace cache with new result (not append)
+        *self.current_text.lock().unwrap() = full_text.clone();
         *last_len = current_len;
 
-        Ok(cached.clone())
+        Ok(full_text)
     }
 
     fn get_final_result(&self) -> Result<String> {

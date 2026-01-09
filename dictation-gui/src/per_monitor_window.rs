@@ -17,7 +17,6 @@ use crate::{config, shared_state::SharedState, GuiState};
 const SPECTRUM_HEIGHT: f32 = 50.0;
 const SPECTRUM_WIDTH: f32 = 400.0;
 const CONTENT_SPACING: f32 = 5.0;
-const MAX_TEXT_LINES: usize = 2;
 
 /// Per-monitor window that reads from shared state
 pub struct MonitorWindow {
@@ -487,6 +486,7 @@ fn calculate_listening_size(transcription: &str, config: &config::Config) -> (f3
     let padding = config.elements.background_padding as f32;
     let base_height = SPECTRUM_HEIGHT + padding * 2.0;
     let width = config.gui_general.window_width as f32;
+    let max_text_lines = config.elements.text_max_visible_lines;
 
     if transcription.is_empty() {
         return (width, base_height);
@@ -497,7 +497,7 @@ fn calculate_listening_size(transcription: &str, config: &config::Config) -> (f3
     let chars_per_line = ((width - padding * 2.0) / char_width) as usize;
 
     let char_count = transcription.len();
-    let line_count = ((char_count as f32 / chars_per_line as f32).ceil() as usize).max(1).min(MAX_TEXT_LINES);
+    let line_count = ((char_count as f32 / chars_per_line as f32).ceil() as usize).max(1).min(max_text_lines);
     let text_line_height = text_font_size * config.elements.text_line_height;
     let text_height = line_count as f32 * text_line_height;
 

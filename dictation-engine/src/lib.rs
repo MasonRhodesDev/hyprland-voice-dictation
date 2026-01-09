@@ -1121,7 +1121,11 @@ pub async fn run() -> Result<()> {
             DaemonState::Processing => {
                 info!("Entering Processing state");
 
-                // Signal tasks to stop gracefully
+                // Send SetProcessing IMMEDIATELY before any blocking work (shows spinner)
+                gui_control_tx.send(GuiControl::SetProcessing)
+                    .map_err(|e| anyhow::anyhow!("Failed to send SetProcessing: {}", e))?;
+
+                // Signal tasks to stop gracefully (may block 50-200ms)
                 let _ = cancel_tx.send(true);
                 if let Some(task) = audio_task.take() {
                     let _ = task.await;
@@ -1150,9 +1154,6 @@ pub async fn run() -> Result<()> {
                         fast_result.clone()
                     } else {
                         // Different model - run accurate transcription
-                        // Send processing state to GUI (only show spinner if doing work)
-                        gui_control_tx.send(GuiControl::SetProcessing)
-                            .map_err(|e| anyhow::anyhow!("Failed to send SetProcessing: {}", e))?;
 
                         // Lazy load accurate model if not already loaded
                         {
