@@ -211,6 +211,12 @@ impl TranscriptionEngine for ParakeetEngine {
         self.transcribe_buffer(&samples)
     }
 
+    fn get_cached_text(&self) -> String {
+        // Return the cached preview text without re-transcribing
+        // Useful in single-model mode where preview already has full transcription
+        self.current_text.lock().unwrap().clone()
+    }
+
     fn get_audio_buffer(&self) -> Vec<i16> {
         let buffer = self.audio_buffer.lock().unwrap();
         buffer.clone()

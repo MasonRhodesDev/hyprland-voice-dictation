@@ -187,6 +187,12 @@ impl TranscriptionEngine for VoskEngine {
         self.get_final_result_internal()
     }
 
+    fn get_cached_text(&self) -> String {
+        self.accumulated_text.lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
     fn get_audio_buffer(&self) -> Vec<i16> {
         self.audio_buffer.lock()
             .map(|guard| guard.clone())

@@ -38,6 +38,15 @@ pub trait TranscriptionEngine: Send + Sync {
     /// * Final transcription from the preview/fast model
     fn get_final_result(&self) -> Result<String>;
 
+    /// Get the cached preview text without re-transcribing.
+    ///
+    /// In single-model mode, the preview already has a recent full-buffer
+    /// transcription. This avoids redundant work when finalizing.
+    ///
+    /// # Returns
+    /// * Cached transcription text from the last preview update
+    fn get_cached_text(&self) -> String;
+
     /// Get a copy of the accumulated audio buffer.
     ///
     /// Used by the accurate model to run a correction pass on the

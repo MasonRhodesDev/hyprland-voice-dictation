@@ -198,6 +198,12 @@ impl TranscriptionEngine for WhisperEngine {
         Ok(text.clone())
     }
 
+    fn get_cached_text(&self) -> String {
+        self.accumulated_text.lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
     fn get_audio_buffer(&self) -> Vec<i16> {
         self.audio_buffer.lock()
             .map(|guard| guard.clone())

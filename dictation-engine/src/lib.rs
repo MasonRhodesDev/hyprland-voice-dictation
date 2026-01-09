@@ -1139,19 +1139,20 @@ pub async fn run() -> Result<()> {
                     .ok_or_else(|| anyhow::anyhow!("No active session in Processing state"))?
                     .engine.clone();
 
-                let fast_result = session_engine.get_final_result()?;
-                info!("Fast model result: '{}'", fast_result);
-
-                // Check if any audio was captured (use buffer length instead of text check)
+                // Check if any audio was captured
                 let audio_buffer_len = session_engine.as_ref().get_audio_buffer().len();
                 info!("Audio buffer contains {} samples", audio_buffer_len);
 
                 if audio_buffer_len > 0 {
+                    // Get preview text (for debug logging and potential reuse)
+                    let preview_text = session_engine.as_ref().get_cached_text();
+                    info!("Preview text: '{}'", preview_text);
+
                     // Determine final text: skip accurate pass if models are identical
                     let accurate_result = if same_model_for_preview_and_final {
-                        // Same model - use preview result directly (skip expensive re-transcription)
-                        info!("Same model for preview/final - skipping accurate pass");
-                        fast_result.clone()
+                        // Same model - use cached preview text (no re-transcription needed)
+                        info!("Same model mode - skipping re-transcription");
+                        preview_text.clone()
                     } else {
                         // Different model - run accurate transcription
 
@@ -1280,7 +1281,7 @@ pub async fn run() -> Result<()> {
                             sample_count: audio_buffer.len(),
                             devices: vec![config.daemon.audio_device.clone()],
                             active_device: Some(config.daemon.audio_device.clone()),
-                            preview_text: fast_result.clone(),
+                            preview_text: preview_text.clone(),
                             final_text: processed_result.clone(),
                             preview_engine: format!("{}", preview_spec.engine),
                             accurate_engine: format!("{}", final_spec.engine),
