@@ -20,10 +20,6 @@ pub struct GuiGeneralConfig {
     pub window_height: u32,
     #[serde(default = "default_position")]
     pub position: String,
-    #[serde(default = "default_opacity")]
-    pub opacity: f32,
-    #[serde(default = "default_show_spectrum")]
-    pub show_spectrum: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -107,7 +103,9 @@ pub struct ElementsConfig {
     pub text_appear_duration: u32,
     #[serde(default = "default_text_scroll_speed")]
     pub text_scroll_speed: f32,
-    
+    #[serde(default = "default_text_max_visible_lines")]
+    pub text_max_visible_lines: usize,
+
     #[serde(default = "default_background_corner_radius")]
     pub background_corner_radius: f32,
     #[serde(default = "default_background_corner_radius_processing")]
@@ -121,8 +119,6 @@ pub struct ElementsConfig {
 fn default_window_width() -> u32 { 400 }
 fn default_window_height() -> u32 { 200 }
 fn default_position() -> String { "bottom".to_string() }
-fn default_opacity() -> f32 { 0.95 }
-fn default_show_spectrum() -> bool { true }
 
 fn default_true() -> bool { true }
 fn default_opacity_one() -> f32 { 1.0 }
@@ -157,6 +153,7 @@ fn default_text_alignment() -> String { "center".to_string() }
 fn default_text_line_height() -> f32 { 1.2 }
 fn default_text_appear_duration() -> u32 { 150 }
 fn default_text_scroll_speed() -> f32 { 1.0 }
+fn default_text_max_visible_lines() -> usize { 1 }
 
 fn default_background_corner_radius() -> f32 { 25.0 }
 fn default_background_corner_radius_processing() -> f32 { 50.0 }
@@ -169,8 +166,6 @@ impl Default for GuiGeneralConfig {
             window_width: default_window_width(),
             window_height: default_window_height(),
             position: default_position(),
-            opacity: default_opacity(),
-            show_spectrum: default_show_spectrum(),
         }
     }
 }
@@ -221,7 +216,8 @@ impl Default for ElementsConfig {
             text_line_height: default_text_line_height(),
             text_appear_duration: default_text_appear_duration(),
             text_scroll_speed: default_text_scroll_speed(),
-            
+            text_max_visible_lines: default_text_max_visible_lines(),
+
             background_corner_radius: default_background_corner_radius(),
             background_corner_radius_processing: default_background_corner_radius_processing(),
             background_opacity: default_background_opacity(),

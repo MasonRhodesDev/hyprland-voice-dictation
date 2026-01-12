@@ -70,11 +70,13 @@ impl VoskEngine {
 
     /// Internal audio processing implementation.
     fn process_audio_internal(&self, samples: &[i16]) -> Result<()> {
-        let mut audio_buffer = self.audio_buffer.lock().unwrap();
+        let mut audio_buffer = self.audio_buffer.lock()
+            .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
         audio_buffer.extend_from_slice(samples);
         drop(audio_buffer);
 
-        let mut recognizer = self.recognizer.lock().unwrap();
+        let mut recognizer = self.recognizer.lock()
+            .map_err(|e| anyhow::anyhow!("Recognizer lock poisoned: {}", e))?;
         let state = recognizer.accept_waveform(samples)?;
 
         if state == vosk::DecodingState::Finalized {
@@ -82,7 +84,8 @@ impl VoskEngine {
             if let Some(finalized) = result.single() {
                 let text = finalized.text.to_string().trim().to_string();
                 if !text.is_empty() {
-                    let mut accumulated = self.accumulated_text.lock().unwrap();
+                    let mut accumulated = self.accumulated_text.lock()
+                        .map_err(|e| anyhow::anyhow!("Accumulated text lock poisoned: {}", e))?;
 
                     let deduplicated = remove_duplicate_suffix(&accumulated, &text);
 
@@ -114,7 +117,8 @@ impl VoskEngine {
         let mut accurate_recognizer = Recognizer::new(accurate_model, sample_rate as f32)
             .ok_or_else(|| anyhow::anyhow!("Failed to create accurate recognizer"))?;
 
-        let audio_buffer = self.audio_buffer.lock().unwrap();
+        let audio_buffer = self.audio_buffer.lock()
+            .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
 
         const CHUNK_SIZE: usize = 8000;
         for chunk in audio_buffer.chunks(CHUNK_SIZE) {
@@ -131,8 +135,10 @@ impl VoskEngine {
 
     /// Get the current full text including partial results.
     fn get_current_full_text(&self) -> Result<String> {
-        let mut recognizer = self.recognizer.lock().unwrap();
-        let accumulated = self.accumulated_text.lock().unwrap();
+        let mut recognizer = self.recognizer.lock()
+            .map_err(|e| anyhow::anyhow!("Recognizer lock poisoned: {}", e))?;
+        let accumulated = self.accumulated_text.lock()
+            .map_err(|e| anyhow::anyhow!("Accumulated text lock poisoned: {}", e))?;
 
         let partial_result = recognizer.partial_result();
         let partial = partial_result.partial.to_string().trim().to_string();
@@ -148,8 +154,10 @@ impl VoskEngine {
 
     /// Get the final result from the preview model.
     fn get_final_result_internal(&self) -> Result<String> {
-        let mut recognizer = self.recognizer.lock().unwrap();
-        let mut accumulated = self.accumulated_text.lock().unwrap();
+        let mut recognizer = self.recognizer.lock()
+            .map_err(|e| anyhow::anyhow!("Recognizer lock poisoned: {}", e))?;
+        let mut accumulated = self.accumulated_text.lock()
+            .map_err(|e| anyhow::anyhow!("Accumulated text lock poisoned: {}", e))?;
 
         let result = recognizer.final_result();
         if let Some(final_chunk) = result.single() {
@@ -179,8 +187,28 @@ impl TranscriptionEngine for VoskEngine {
         self.get_final_result_internal()
     }
 
+    fn get_cached_text(&self) -> String {
+        self.accumulated_text.lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
     fn get_audio_buffer(&self) -> Vec<i16> {
-        self.audio_buffer.lock().unwrap().clone()
+        self.audio_buffer.lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    fn reset(&self) {
+        if let Ok(mut buffer) = self.audio_buffer.lock() {
+            buffer.clear();
+        }
+        if let Ok(mut text) = self.accumulated_text.lock() {
+            text.clear();
+        }
+        // Note: Vosk recognizer keeps some internal state that can't be reset
+        // without recreating it. For now, the above clearing is sufficient
+        // for most use cases. A full reset would require recreating the recognizer.
     }
 }
 

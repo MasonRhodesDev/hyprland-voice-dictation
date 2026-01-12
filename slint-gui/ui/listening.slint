@@ -1,0 +1,65 @@
+// listening.slint - Displayed during active voice capture
+// ============================================================================
+// PROPERTIES (set from Rust daemon):
+//
+// spectrum: [float] - 8 frequency band values (0.0-1.0), updated ~60fps
+//                     Values represent audio energy in each band from FFT
+//                     Use for visualizer bar heights
+//
+// text: string - Current transcription or status message
+//                Updated as speech is recognized
+//                Empty string when no speech detected
+//
+// fade: float - Overall opacity (0.0-1.0), used for transitions
+//               Animate from 0→1 on appear, 1→0 on disappear
+//
+// pre-listening: bool - True during initial startup ("Starting...")
+//                       Hides spectrum, shows only text
+//                       Set false once audio capture begins
+// ============================================================================
+
+export component Listening inherits Window {
+    // Input properties - set from Rust
+    in property <[float]> spectrum: [0.3, 0.5, 0.8, 0.4, 0.6, 0.9, 0.3, 0.7];
+    in property <string> text: "Listening...";
+    in property <float> fade: 1.0;
+    in property <bool> pre-listening: false;
+
+    background: transparent;
+    default-font-family: "Noto Sans";
+    default-font-size: 16px;
+
+    Rectangle {
+        width: 380px;
+        height: 90px;
+        background: #000000.with_alpha(0.9 * fade);
+        border-radius: 20px;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+            alignment: center;
+
+            // Spectrum visualizer - hidden during pre-listening
+            if !pre-listening: HorizontalLayout {
+                spacing: 6px;
+                alignment: center;
+
+                for value[i] in spectrum: Rectangle {
+                    width: 6px;
+                    height: 4px + value * 20px;
+                    background: white.with_alpha(fade);
+                    border-radius: 3px;
+                }
+            }
+
+            // Status text
+            Text {
+                text: pre-listening ? "Starting..." : text;
+                color: white.with_alpha(fade);
+                font-size: 16px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}

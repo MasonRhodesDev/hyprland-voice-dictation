@@ -1,0 +1,67 @@
+// closing.slint - Collapse animation before shutdown
+// ============================================================================
+// PROPERTIES (set from Rust daemon):
+//
+// progress: float - Animation progress (0.0-1.0)
+//                   0.0 = start (full size, full opacity)
+//                   1.0 = end (collapsed, invisible)
+//                   Driven by Rust, typically over 300-500ms
+//
+// USAGE:
+// Shown when dictation session ends. Progress is animated from 0→1 by Rust.
+// Dots orbit with shrinking radius and fading alpha.
+// When progress reaches 1.0, the GUI exits.
+//
+// CUSTOMIZATION:
+// - radius shrinks from 10px to 0px based on progress
+// - alpha fades from 1.0 to 0.0 based on progress
+// - Spinner continues rotating during collapse
+// ============================================================================
+
+export component Closing inherits Window {
+    // Input properties - set from Rust
+    in property <float> progress: 0.0;
+
+    // Animation state
+    property <float> spinner-angle: 0;
+    property <float> radius: 10.0 * (1.0 - progress);  // Shrinks as progress increases
+    property <float> alpha: 1.0 - progress;  // Fades out
+
+    background: transparent;
+
+    // Continuous spinner animation
+    animate spinner-angle {
+        duration: 800ms;
+        iteration-count: -1;
+        easing: linear;
+    }
+
+    init => {
+        spinner-angle = 360;
+    }
+
+    // Circular container that shrinks
+    Rectangle {
+        width: 60px;
+        height: 60px;
+        background: #000000.with_alpha(0.9 * alpha);
+        border-radius: 30px;
+
+        // Collapsing dots
+        Rectangle {
+            x: 15px;
+            y: 15px;
+            width: 30px;
+            height: 30px;
+
+            for i in 8: Rectangle {
+                x: 15px + radius * 1px * cos(spinner-angle * 1deg + i * 45deg) - 3px;
+                y: 15px + radius * 1px * sin(spinner-angle * 1deg + i * 45deg) - 3px;
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: white.with_alpha(alpha * (0.3 + 0.7 * (i / 7)));
+            }
+        }
+    }
+}

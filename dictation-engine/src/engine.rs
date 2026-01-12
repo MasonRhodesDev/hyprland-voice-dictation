@@ -38,6 +38,15 @@ pub trait TranscriptionEngine: Send + Sync {
     /// * Final transcription from the preview/fast model
     fn get_final_result(&self) -> Result<String>;
 
+    /// Get the cached preview text without re-transcribing.
+    ///
+    /// In single-model mode, the preview already has a recent full-buffer
+    /// transcription. This avoids redundant work when finalizing.
+    ///
+    /// # Returns
+    /// * Cached transcription text from the last preview update
+    fn get_cached_text(&self) -> String;
+
     /// Get a copy of the accumulated audio buffer.
     ///
     /// Used by the accurate model to run a correction pass on the
@@ -46,4 +55,10 @@ pub trait TranscriptionEngine: Send + Sync {
     /// # Returns
     /// * Complete audio buffer accumulated during recording
     fn get_audio_buffer(&self) -> Vec<i16>;
+
+    /// Reset the engine state for a new recording session.
+    ///
+    /// Clears the audio buffer and any accumulated transcription state.
+    /// Called between recording sessions when reusing the same engine.
+    fn reset(&self);
 }

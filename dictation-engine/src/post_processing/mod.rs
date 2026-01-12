@@ -1,6 +1,7 @@
 mod acronym;
 mod grammar;
 mod punctuation;
+mod sanitize;
 
 use crate::user_dictionary::UserDictionary;
 use anyhow::Result;
@@ -9,6 +10,7 @@ use std::sync::Arc;
 pub use acronym::AcronymProcessor;
 pub use grammar::GrammarProcessor;
 pub use punctuation::PunctuationProcessor;
+pub use sanitize::{SanitizationProcessor, SanitizationRules};
 
 /// Trait for text post-processors.
 ///

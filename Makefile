@@ -1,4 +1,7 @@
-.PHONY: help check deps build install test test-manual clean dev fmt lint rpm deb
+.PHONY: help check deps build release install docker-build docker-install test test-manual clean dev fmt lint rpm deb
+
+DOCKER_IMAGE := voice-dictation-builder
+DOCKER_OUTPUT := docker-output
 
 help:  ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -9,14 +12,34 @@ check:  ## Check system dependencies
 deps:  ## Download Vosk models (2GB download!)
 	@cd models && ./download-models.sh
 
-build:  ## Build debug binaries
-	cargo build
+build: docker-build  ## Build release with all features via Docker
 
-release:  ## Build release binaries
-	cargo build --release
+release: docker-build  ## Build release with all features via Docker
 
-install: release  ## Build and install to ~/.local/bin
-	./install.sh
+docker-build:  ## Build release binary with all features using Docker
+	@echo "Building with Docker (includes vosk + parakeet)..."
+	@mkdir -p $(DOCKER_OUTPUT)
+	docker build --target export -o $(DOCKER_OUTPUT) .
+	@echo "Build complete. Output in $(DOCKER_OUTPUT)/"
+	@ls -la $(DOCKER_OUTPUT)/
+
+docker-install: docker-build  ## Build via Docker and install to ~/.local
+	@echo "Installing to ~/.local/bin and ~/.local/lib..."
+	@mkdir -p ~/.local/bin ~/.local/lib
+	@pkill -x voice-dictation 2>/dev/null || true
+	@sleep 1
+	cp $(DOCKER_OUTPUT)/voice-dictation ~/.local/bin/
+	cp $(DOCKER_OUTPUT)/lib/libvosk.so ~/.local/lib/
+	@echo "Installing UI files to ~/.config/voice-dictation/ui/..."
+	@mkdir -p ~/.config/voice-dictation/ui/examples
+	cp slint-gui/ui/*.slint ~/.config/voice-dictation/ui/
+	cp slint-gui/ui/examples/* ~/.config/voice-dictation/ui/examples/
+	@echo "Updating library path..."
+	@grep -q 'LD_LIBRARY_PATH.*\.local/lib' ~/.bashrc 2>/dev/null || \
+		echo 'export LD_LIBRARY_PATH="$$HOME/.local/lib:$$LD_LIBRARY_PATH"' >> ~/.bashrc
+	@echo "Installed! Run: source ~/.bashrc (or restart shell)"
+
+install: docker-install  ## Build and install to ~/.local/bin (uses Docker)
 
 test:  ## Run automated tests
 	cargo test

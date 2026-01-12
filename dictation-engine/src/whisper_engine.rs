@@ -1,7 +1,8 @@
+use super::chunking::{transcribe_chunked, ChunkConfig};
 use super::engine::TranscriptionEngine;
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 /// Whisper-based speech-to-text transcription engine.
@@ -20,6 +21,8 @@ pub struct WhisperEngine {
     accumulated_text: Arc<Mutex<String>>,
     audio_buffer: Arc<Mutex<Vec<i16>>>,
     sample_rate: u32,
+    /// Chunking configuration for long audio (30s chunks, 2s overlap)
+    chunk_config: ChunkConfig,
 }
 
 #[allow(dead_code)]
@@ -56,47 +59,31 @@ impl WhisperEngine {
 
         info!("✓ Whisper model loaded successfully");
 
+        // Whisper has 30s context window; use 30s chunks with 2s overlap
+        let chunk_config = ChunkConfig::new(30, 2, sample_rate);
+
         Ok(Self {
             context: Arc::new(context),
             accumulated_text: Arc::new(Mutex::new(String::new())),
             audio_buffer: Arc::new(Mutex::new(Vec::new())),
             sample_rate,
+            chunk_config,
         })
     }
 
-    /// Run a correction pass using an accurate Whisper model.
-    ///
-    /// This method transcribes the entire accumulated audio buffer using
-    /// a larger/more accurate Whisper model for the final result.
-    ///
-    /// # Arguments
-    /// * `accurate_context` - Whisper context for the accurate model
-    ///
-    /// # Returns
-    /// * Final transcription with punctuation and capitalization
-    pub fn run_correction_pass(&self, accurate_context: &WhisperContext) -> Result<String> {
-        info!("Running Whisper correction pass...");
-
-        let audio_buffer = self.audio_buffer.lock().unwrap();
-
-        if audio_buffer.is_empty() {
-            info!("Audio buffer empty, returning empty string");
+    /// Transcribe a single chunk of i16 audio samples
+    fn transcribe_chunk(&self, context: &WhisperContext, samples: &[i16]) -> Result<String> {
+        if samples.is_empty() {
             return Ok(String::new());
         }
 
-        info!("Converting {} audio samples to float...", audio_buffer.len());
-
         // Convert i16 PCM samples to f32 mono required by Whisper
-        let mut float_samples = vec![0.0f32; audio_buffer.len()];
-        whisper_rs::convert_integer_to_float_audio(&audio_buffer, &mut float_samples)
+        let mut float_samples = vec![0.0f32; samples.len()];
+        whisper_rs::convert_integer_to_float_audio(samples, &mut float_samples)
             .map_err(|e| anyhow::anyhow!("Audio conversion i16→f32 failed: {:?}", e))?;
 
-        drop(audio_buffer);
-
-        info!("Creating Whisper transcription state...");
-
         // Create transcription state from context
-        let mut state = accurate_context
+        let mut state = context
             .create_state()
             .map_err(|e| {
                 error!("Failed to create Whisper state: {:?}", e);
@@ -118,8 +105,8 @@ impl WhisperEngine {
         params.set_no_context(true);
         params.set_single_segment(false);
 
-        info!("Running Whisper transcription on {:.2}s of audio...",
-              float_samples.len() as f32 / self.sample_rate as f32);
+        debug!("transcribe_chunk: processing {:.2}s of audio",
+               float_samples.len() as f32 / self.sample_rate as f32);
 
         // Run the actual transcription
         state
@@ -141,7 +128,42 @@ impl WhisperEngine {
             .filter(|text| !text.is_empty())
             .collect();
 
-        let result = segments.join(" ");
+        Ok(segments.join(" "))
+    }
+
+    /// Run a correction pass using an accurate Whisper model.
+    ///
+    /// This method transcribes the entire accumulated audio buffer using
+    /// a larger/more accurate Whisper model for the final result.
+    /// Long audio is automatically chunked to avoid context limits.
+    ///
+    /// # Arguments
+    /// * `accurate_context` - Whisper context for the accurate model
+    ///
+    /// # Returns
+    /// * Final transcription with punctuation and capitalization
+    pub fn run_correction_pass(&self, accurate_context: &WhisperContext) -> Result<String> {
+        info!("Running Whisper correction pass...");
+
+        let audio_buffer = self.audio_buffer.lock()
+            .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
+
+        if audio_buffer.is_empty() {
+            info!("Audio buffer empty, returning empty string");
+            return Ok(String::new());
+        }
+
+        let samples = audio_buffer.clone();
+        drop(audio_buffer);
+
+        let duration_secs = samples.len() as f32 / self.sample_rate as f32;
+        info!("Running Whisper transcription on {:.2}s of audio...", duration_secs);
+
+        // Use chunking for long audio
+        let result = transcribe_chunked(&samples, &self.chunk_config, |chunk| {
+            self.transcribe_chunk(accurate_context, chunk)
+        })?;
+
         info!("✓ Whisper transcription complete: {} characters", result.len());
 
         Ok(result)
@@ -150,25 +172,51 @@ impl WhisperEngine {
 
 impl TranscriptionEngine for WhisperEngine {
     fn process_audio(&self, samples: &[i16]) -> Result<()> {
-        let mut audio_buffer = self.audio_buffer.lock().unwrap();
+        let mut audio_buffer = self.audio_buffer.lock()
+            .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
         audio_buffer.extend_from_slice(samples);
         Ok(())
     }
 
     fn get_current_text(&self) -> Result<String> {
-        // For preview mode: return accumulated text
-        // Note: Whisper preview would require incremental transcription,
-        // which is complex. For now, return accumulated preview text.
-        // In practice, the preview model will be Vosk for speed.
-        Ok(self.accumulated_text.lock().unwrap().clone())
+        // Whisper doesn't support incremental transcription efficiently,
+        // so show recording duration as feedback instead of empty string.
+        let buffer = self.audio_buffer.lock()
+            .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
+
+        if buffer.is_empty() {
+            Ok(String::new())
+        } else {
+            let duration = buffer.len() as f32 / self.sample_rate as f32;
+            Ok(format!("Recording... ({:.1}s)", duration))
+        }
     }
 
     fn get_final_result(&self) -> Result<String> {
-        Ok(self.accumulated_text.lock().unwrap().clone())
+        let text = self.accumulated_text.lock()
+            .map_err(|e| anyhow::anyhow!("Accumulated text lock poisoned: {}", e))?;
+        Ok(text.clone())
+    }
+
+    fn get_cached_text(&self) -> String {
+        self.accumulated_text.lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
     }
 
     fn get_audio_buffer(&self) -> Vec<i16> {
-        self.audio_buffer.lock().unwrap().clone()
+        self.audio_buffer.lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    fn reset(&self) {
+        if let Ok(mut buffer) = self.audio_buffer.lock() {
+            buffer.clear();
+        }
+        if let Ok(mut text) = self.accumulated_text.lock() {
+            text.clear();
+        }
     }
 }
 

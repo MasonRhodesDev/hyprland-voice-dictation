@@ -1,0 +1,63 @@
+// processing.slint - Displayed during transcription processing
+// ============================================================================
+// PROPERTIES (set from Rust daemon):
+//
+// fade: float - Overall opacity (0.0-1.0), used for transitions
+//               Animate from 0→1 on appear, 1→0 on disappear
+//
+// USAGE:
+// Shown when audio capture stops and transcription is being processed.
+// Typically displayed for 0.5-2 seconds depending on model speed.
+// Spinner animation runs automatically (no external timing needed).
+//
+// CUSTOMIZATION:
+// - Container is a 60x60 circle with semi-transparent black background
+// - 8 dots orbit at fixed radius, fading from dim to bright
+// - Modify colors, sizes, animation speed as desired
+// ============================================================================
+
+export component Processing inherits Window {
+    // Input properties - set from Rust
+    in property <float> fade: 1.0;
+
+    // Animation state
+    property <float> spinner-angle: 0;
+
+    background: transparent;
+
+    // Continuous spinner animation
+    animate spinner-angle {
+        duration: 1000ms;
+        iteration-count: -1;
+        easing: linear;
+    }
+
+    init => {
+        spinner-angle = 360;
+    }
+
+    // Circular container
+    Rectangle {
+        width: 60px;
+        height: 60px;
+        background: #000000.with_alpha(0.9 * fade);
+        border-radius: 30px;  // 50% of width/height = circle
+
+        // Spinner - 8 dots in a circle, centered in container
+        Rectangle {
+            x: 15px;
+            y: 15px;
+            width: 30px;
+            height: 30px;
+
+            for i in 8: Rectangle {
+                x: 15px + 10px * cos(spinner-angle * 1deg + i * 45deg) - 3px;
+                y: 15px + 10px * sin(spinner-angle * 1deg + i * 45deg) - 3px;
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: white.with_alpha(fade * (0.3 + 0.7 * (i / 7)));
+            }
+        }
+    }
+}

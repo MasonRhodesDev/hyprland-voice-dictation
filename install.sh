@@ -1,73 +1,113 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VOSK_VERSION="0.3.45"
+VOSK_DIR="$SCRIPT_DIR/.vosk"
+INSTALL_LIB_DIR="$HOME/.local/lib"
+
 echo "=== Installing Voice Dictation System ==="
 echo ""
 
-# Build release binaries
-echo "1. Building binary..."
+# Download libvosk if needed
+echo "1. Checking libvosk..."
+if [ ! -f "$VOSK_DIR/libvosk.so" ]; then
+    echo "  Downloading libvosk $VOSK_VERSION..."
+    mkdir -p "$VOSK_DIR"
+    cd "$VOSK_DIR"
+    wget -q "https://github.com/alphacep/vosk-api/releases/download/v${VOSK_VERSION}/vosk-linux-x86_64-${VOSK_VERSION}.zip" -O vosk.zip
+    unzip -q vosk.zip
+    mv vosk-linux-x86_64-${VOSK_VERSION}/* .
+    rmdir vosk-linux-x86_64-${VOSK_VERSION}
+    rm vosk.zip
+    cd "$SCRIPT_DIR"
+    echo "  ✓ libvosk downloaded"
+else
+    echo "  ✓ libvosk already exists"
+fi
+
+# Set up build environment
+export LIBRARY_PATH="$VOSK_DIR:$LIBRARY_PATH"
+export LD_LIBRARY_PATH="$VOSK_DIR:$LD_LIBRARY_PATH"
+
+# Build release binary with all features
+echo ""
+echo "2. Building binary (all features)..."
 cargo build --release
+
+# Install libvosk to user lib directory
+echo ""
+echo "3. Installing libvosk..."
+mkdir -p "$INSTALL_LIB_DIR"
+cp "$VOSK_DIR/libvosk.so" "$INSTALL_LIB_DIR/"
+echo "  ✓ libvosk installed to $INSTALL_LIB_DIR"
 
 # Install binary
 echo ""
-echo "2. Installing binary to ~/.local/bin..."
+echo "4. Installing binary to ~/.local/bin..."
 cargo install --path . --root ~/.local --force
 
 # Copy control scripts
 echo ""
-echo "3. Installing control scripts to ~/scripts..."
+echo "5. Installing scripts..."
 mkdir -p ~/scripts
 cp scripts/dictation-control ~/scripts/
 chmod +x ~/scripts/dictation-control
+echo "  ✓ Scripts installed"
 
-# Setup config directory and download default models
+# Setup config directory
 echo ""
-echo "4. Setting up configuration and models..."
+echo "6. Setting up configuration..."
 mkdir -p "$HOME/.config/voice-dictation/models"
+echo "  ✓ Config directory ready"
 
-cd "$HOME/.config/voice-dictation/models"
-
-# Download default preview model (fast)
-if [ ! -d "vosk-model-en-us-daanzu-20200905-lgraph" ]; then
-    echo "  Downloading preview model (fast, ~130MB)..."
-    curl -L -O https://alphacephei.com/vosk/models/vosk-model-en-us-daanzu-20200905-lgraph.zip
-    unzip -q vosk-model-en-us-daanzu-20200905-lgraph.zip
-    rm vosk-model-en-us-daanzu-20200905-lgraph.zip
-    echo "  ✓ Preview model installed"
-else
-    echo "  ✓ Preview model already exists"
-fi
-
-# Download default final model (accurate)
-if [ ! -d "vosk-model-en-us-0.22" ]; then
-    echo "  Downloading final model (accurate, ~1.8GB)..."
-    curl -L -O https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip
-    unzip -q vosk-model-en-us-0.22.zip
-    rm vosk-model-en-us-0.22.zip
-    echo "  ✓ Final model installed"
-else
-    echo "  ✓ Final model already exists"
-fi
-
-cd - > /dev/null
-
-# Install systemd service
+# Install systemd service with LD_LIBRARY_PATH
 echo ""
-echo "5. Installing systemd service..."
+echo "7. Installing systemd service..."
 mkdir -p "$HOME/.config/systemd/user"
-cp packaging/systemd/voice-dictation.service "$HOME/.config/systemd/user/"
+
+# Create service file with library path
+cat > "$HOME/.config/systemd/user/voice-dictation.service" << EOF
+[Unit]
+Description=Voice Dictation Daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment="LD_LIBRARY_PATH=$INSTALL_LIB_DIR"
+ExecStart=%h/.local/bin/voice-dictation daemon
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+
 systemctl --user daemon-reload
 echo "  ✓ Service installed"
 
 # Cleanup old state
 echo ""
-echo "6. Cleaning up old state files..."
-pkill -9 -f voice-dictation 2>/dev/null || true
+echo "8. Cleaning up old state files..."
+pkill -9 -f "voice-dictation daemon" 2>/dev/null || true
 rm -f /tmp/voice-dictation-active /tmp/voice-dictation-state
 rm -f /tmp/voice-dictation*.sock
 
+# Restart daemon if it was enabled
+if systemctl --user is-enabled voice-dictation &>/dev/null; then
+    echo ""
+    echo "9. Restarting daemon..."
+    systemctl --user restart voice-dictation
+    echo "  ✓ Daemon restarted"
+fi
+
 echo ""
 echo "✓ Installation complete!"
+echo ""
+echo "=== Library Path Setup ==="
+echo ""
+echo "Add to your shell profile (~/.bashrc or ~/.zshrc):"
+echo "  export LD_LIBRARY_PATH=\"$INSTALL_LIB_DIR:\$LD_LIBRARY_PATH\""
 echo ""
 echo "=== Starting the Service ==="
 echo ""
@@ -76,7 +116,7 @@ echo "  systemctl --user enable voice-dictation"
 echo "  systemctl --user start voice-dictation"
 echo ""
 echo "Or run manually for testing:"
-echo "  voice-dictation daemon"
+echo "  LD_LIBRARY_PATH=$INSTALL_LIB_DIR voice-dictation daemon"
 echo ""
 echo "=== Usage ==="
 echo ""
@@ -88,16 +128,3 @@ echo "  voice-dictation confirm  - Confirm and finalize transcription"
 echo "  voice-dictation status   - Show current status"
 echo "  voice-dictation config   - Open configuration TUI"
 echo ""
-echo "Add a keybind in your compositor config:"
-echo ""
-echo "  Hyprland:  bind=\$Meh, V, exec, voice-dictation toggle"
-echo "  Sway:      bindsym Mod4+Shift+Alt+v exec voice-dictation toggle"
-echo "  KDE/GNOME: Use Settings → Keyboard → Custom Shortcuts"
-echo ""
-echo "Available commands:"
-echo "  voice-dictation toggle   - Start recording or confirm transcription"
-echo "  voice-dictation start    - Start recording session"
-echo "  voice-dictation stop     - Stop recording session"
-echo "  voice-dictation confirm  - Confirm and finalize transcription"
-echo "  voice-dictation status   - Show current status"
-echo "  voice-dictation config   - Open configuration TUI"

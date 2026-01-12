@@ -4,8 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = []
+# All engines compiled by default - runtime detection determines availability
+# Vosk requires libvosk.so at runtime (checked dynamically)
+# GPU requires CUDA at build time
+default = ["vosk", "parakeet", "slint-gui"]
 vosk = ["dep:vosk"]
+gpu = ["whisper-rs/cuda"]
+parakeet = ["dep:parakeet-rs", "dep:tempfile"]
+# GUI backends (choose one)
+iced-gui = ["dep:dictation-gui"]
+slint-gui = ["dep:slint-gui"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -15,7 +23,8 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-dictation-gui = { path = "../dictation-gui" }
+dictation-gui = { path = "../dictation-gui", optional = true }
+slint-gui = { path = "../slint-gui", optional = true }
 dictation-types = { path = "../dictation-types" }
 shellexpand = "3"
 vosk = { version = "0.3.1", optional = true }
@@ -28,6 +37,21 @@ indicatif = "0.17"
 zbus = "4.1"
 dirs = "5"
 notify = "6"
+hound = "3.5"
+crossbeam-channel = "0.5"
+chrono = { version = "0.4", features = ["serde"] }
+# Silero VAD (neural voice activity detection)
+# NOTE: Keep exact versions aligned with parakeet-rs requirements
+ort = "=2.0.0-rc.10"
+ndarray = "=0.16.1"
+# Parakeet engine
+parakeet-rs = { version = "0.2", optional = true }
+tempfile = { version = "3", optional = true }
+# SHA256 verification for downloaded models
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
 
 [lib]
 name = "dictation_engine"

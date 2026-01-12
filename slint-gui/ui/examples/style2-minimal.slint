@@ -1,0 +1,135 @@
+// style2-minimal.slint - Minimal mirrored spectrum pill
+// ============================================================================
+// STYLE 2 (Minimal) - Horizontal pill with mirrored spectrum
+//   - Compact pill shape, no text
+//   - Spectrum bars mirrored vertically (up and down from center)
+//   - Same processing/closing modes as Style 1
+// ============================================================================
+// PROPERTIES (set from Rust daemon):
+//
+// mode: int - Current display mode:
+//             0 = hidden (window stays open but nothing visible)
+//             1 = listening (mirrored spectrum)
+//             2 = processing (spinner)
+//             3 = closing (collapse animation)
+//
+// spectrum: [float] - 8 frequency band values (0.0-1.0) for listening mode
+// text: string - (unused in this style)
+// fade: float - Overall opacity (0.0-1.0) for transitions
+// closing-progress: float - Collapse animation progress (0.0-1.0)
+// pre-listening: bool - (unused in this style)
+// ============================================================================
+
+export component Dictation inherits Window {
+    // Mode selection
+    in property <int> mode: 0;  // 0=hidden, 1=listening, 2=processing, 3=closing
+
+    // Listening mode properties
+    in property <[float]> spectrum: [0.3, 0.5, 0.8, 0.4, 0.6, 0.9, 0.3, 0.7];
+    in property <string> text: "";  // Unused in this style
+    in property <bool> pre-listening: false;  // Unused in this style
+
+    // Shared properties
+    in property <float> fade: 1.0;
+
+    // Closing mode properties
+    in property <float> closing-progress: 0.0;
+
+    // Animation states
+    property <float> spinner-angle: 0;
+    property <float> closing-radius: 10.0 * (1.0 - closing-progress);
+    property <float> closing-alpha: 1.0 - closing-progress;
+
+    background: transparent;
+    default-font-family: "Noto Sans";
+    default-font-size: 16px;
+
+    // Spinner animation (runs when in processing or closing mode)
+    animate spinner-angle {
+        duration: 1000ms;
+        iteration-count: -1;
+        easing: linear;
+    }
+
+    init => {
+        spinner-angle = 360;
+    }
+
+    // ========== LISTENING MODE (mode == 1) - Mirrored Spectrum Pill ==========
+    if mode == 1: Rectangle {
+        width: 134px;
+        height: 40px;
+        background: #000000.with_alpha(0.9 * fade);
+        border-radius: 20px;
+        clip: true;  // Prevent children from affecting box size
+
+        // Spectrum bars - absolutely positioned from center with smoothing
+        // Min 4px height (dots), max 30px, higher amplitude multiplier
+        // 8 bars * 5px + 7 gaps * 8px = 96px total, centered in 134px = 19px offset
+        for value[i] in spectrum: Rectangle {
+            x: 19px + i * 13px;
+            y: 18px - value * 13px;           // Center minus half of variable height
+            width: 5px;
+            height: 4px + value * 26px;       // 4px min (dot) + up to 26px from activity
+            background: white.with_alpha(fade);
+            border-radius: 2px;
+
+            animate y, height {
+                duration: 80ms;
+                easing: ease-out;
+            }
+        }
+    }
+
+    // ========== PROCESSING MODE (mode == 2) ==========
+    if mode == 2: Rectangle {
+        width: 60px;
+        height: 60px;
+        background: #000000.with_alpha(0.9 * fade);
+        border-radius: 30px;
+
+        // Spinner - 8 dots in a circle
+        Rectangle {
+            x: 15px;
+            y: 15px;
+            width: 30px;
+            height: 30px;
+
+            for i in 8: Rectangle {
+                x: 15px + 10px * cos(spinner-angle * 1deg + i * 45deg) - 3px;
+                y: 15px + 10px * sin(spinner-angle * 1deg + i * 45deg) - 3px;
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: white.with_alpha(fade * (0.3 + 0.7 * (i / 7)));
+            }
+        }
+    }
+
+    // ========== CLOSING MODE (mode == 3) ==========
+    if mode == 3: Rectangle {
+        width: 60px;
+        height: 60px;
+        background: #000000.with_alpha(0.9 * closing-alpha);
+        border-radius: 30px;
+
+        // Collapsing dots
+        Rectangle {
+            x: 15px;
+            y: 15px;
+            width: 30px;
+            height: 30px;
+
+            for i in 8: Rectangle {
+                x: 15px + closing-radius * 1px * cos(spinner-angle * 1deg + i * 45deg) - 3px;
+                y: 15px + closing-radius * 1px * sin(spinner-angle * 1deg + i * 45deg) - 3px;
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: white.with_alpha(closing-alpha * (0.3 + 0.7 * (i / 7)));
+            }
+        }
+    }
+
+    // mode == 0 (hidden): nothing rendered, window stays open
+}

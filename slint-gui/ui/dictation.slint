@@ -1,0 +1,156 @@
+// dictation.slint - Unified overlay component with mode switching
+// ============================================================================
+// STYLE 1 (Default) - Minimal dark overlay
+//   - Black rounded rectangle with white text/elements
+//   - Spectrum visualizer bars for listening mode
+//   - Spinning dots for processing/closing modes
+// ============================================================================
+// PROPERTIES (set from Rust daemon):
+//
+// mode: int - Current display mode:
+//             0 = hidden (window stays open but nothing visible)
+//             1 = listening (spectrum + text)
+//             2 = processing (spinner)
+//             3 = closing (collapse animation)
+//
+// spectrum: [float] - 8 frequency band values (0.0-1.0) for listening mode
+// text: string - Transcription text for listening mode
+// fade: float - Overall opacity (0.0-1.0) for transitions
+// closing-progress: float - Collapse animation progress (0.0-1.0)
+// pre-listening: bool - Shows "Starting..." instead of spectrum
+// ============================================================================
+
+export component Dictation inherits Window {
+    // Mode selection
+    in property <int> mode: 0;  // 0=hidden, 1=listening, 2=processing, 3=closing
+
+    // Listening mode properties
+    in property <[float]> spectrum: [0.3, 0.5, 0.8, 0.4, 0.6, 0.9, 0.3, 0.7];
+    in property <string> text: "Listening...";
+    in property <bool> pre-listening: false;
+
+    // Shared properties
+    in property <float> fade: 1.0;
+
+    // Closing mode properties
+    in property <float> closing-progress: 0.0;
+
+    // Animation states
+    property <float> spinner-angle: 0;
+    property <float> closing-radius: 10.0 * (1.0 - closing-progress);
+    property <float> closing-alpha: 1.0 - closing-progress;
+
+    background: transparent;
+    default-font-family: "Noto Sans";
+    default-font-size: 16px;
+
+    // Spinner animation (runs when in processing or closing mode)
+    animate spinner-angle {
+        duration: 1000ms;
+        iteration-count: -1;
+        easing: linear;
+    }
+
+    init => {
+        spinner-angle = 360;
+    }
+
+    // ========== LISTENING MODE (mode == 1) ==========
+    if mode == 1: Rectangle {
+        width: 380px;
+        height: 90px;
+        background: #000000.with_alpha(0.9 * fade);
+        border-radius: 20px;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+            alignment: center;
+
+            // Spectrum visualizer - hidden during pre-listening
+            // Fixed height container prevents text from jumping
+            if !pre-listening: Rectangle {
+                height: 24px;
+                background: transparent;
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: center;
+                    vertical-stretch: 0;
+
+                    for value[i] in spectrum: VerticalLayout {
+                        alignment: end;
+                        Rectangle {
+                            width: 6px;
+                            height: 4px + value * 20px;
+                            background: white.with_alpha(fade);
+                            border-radius: 3px;
+                        }
+                    }
+                }
+            }
+
+            // Status text
+            Text {
+                text: pre-listening ? "Starting..." : root.text;
+                color: white.with_alpha(fade);
+                font-size: 16px;
+                horizontal-alignment: center;
+                overflow: elide;
+                max-width: 348px;
+            }
+        }
+    }
+
+    // ========== PROCESSING MODE (mode == 2) ==========
+    if mode == 2: Rectangle {
+        width: 60px;
+        height: 60px;
+        background: #000000.with_alpha(0.9 * fade);
+        border-radius: 30px;
+
+        // Spinner - 8 dots in a circle
+        Rectangle {
+            x: 15px;
+            y: 15px;
+            width: 30px;
+            height: 30px;
+
+            for i in 8: Rectangle {
+                x: 15px + 10px * cos(spinner-angle * 1deg + i * 45deg) - 3px;
+                y: 15px + 10px * sin(spinner-angle * 1deg + i * 45deg) - 3px;
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: white.with_alpha(fade * (0.3 + 0.7 * (i / 7)));
+            }
+        }
+    }
+
+    // ========== CLOSING MODE (mode == 3) ==========
+    if mode == 3: Rectangle {
+        width: 60px;
+        height: 60px;
+        background: #000000.with_alpha(0.9 * closing-alpha);
+        border-radius: 30px;
+
+        // Collapsing dots
+        Rectangle {
+            x: 15px;
+            y: 15px;
+            width: 30px;
+            height: 30px;
+
+            for i in 8: Rectangle {
+                x: 15px + closing-radius * 1px * cos(spinner-angle * 1deg + i * 45deg) - 3px;
+                y: 15px + closing-radius * 1px * sin(spinner-angle * 1deg + i * 45deg) - 3px;
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: white.with_alpha(closing-alpha * (0.3 + 0.7 * (i / 7)));
+            }
+        }
+    }
+
+    // mode == 0 (hidden): nothing rendered, window stays open
+}

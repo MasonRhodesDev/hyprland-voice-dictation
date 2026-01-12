@@ -8,6 +8,8 @@ use std::time::Duration;
 use schema_tui::SchemaTUIBuilder;
 use zbus::Connection;
 
+mod utils;
+
 const STATE_FILE: &str = "/tmp/voice-dictation-state";
 const MEDIA_STATE_FILE: &str = "/tmp/voice-dictation-media-state";
 const DBUS_SERVICE_NAME: &str = "com.voicedictation.Daemon";
@@ -38,6 +40,18 @@ enum Commands {
     Status,
     #[command(about = "Open configuration TUI")]
     Config,
+    #[command(about = "List available preview (fast) models")]
+    ListPreviewModels {
+        #[arg(default_value = "en")]
+        language: String,
+    },
+    #[command(about = "List available final (accurate) models")]
+    ListFinalModels {
+        #[arg(default_value = "en")]
+        language: String,
+    },
+    #[command(about = "List available audio input devices")]
+    ListAudioDevices,
 }
 
 fn get_state() -> String {
@@ -224,47 +238,69 @@ fn toggle_recording() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn show_status() {
+    // Always show daemon status first
+    let daemon_running = is_process_running("voice-dictation daemon");
+    println!("Daemon: {}", if daemon_running { "running" } else { "NOT running" });
+
     let state = get_state();
     println!("State: {}", state);
+}
 
-    if state != "stopped" {
-        if is_process_running("voice-dictation daemon") {
-            println!("  Daemon: running");
-        } else {
-            println!("  Daemon: NOT running");
+/// Parse model spec format: "engine:model_name"
+fn parse_model_spec(spec: &str) -> Option<(&str, &str)> {
+    let parts: Vec<&str> = spec.splitn(2, ':').collect();
+    if parts.len() == 2 {
+        Some((parts[0], parts[1]))
+    } else {
+        None
+    }
+}
+
+fn check_model_exists(model_spec: &str, models_dir: &PathBuf) -> bool {
+    if let Some((engine, model_name)) = parse_model_spec(model_spec) {
+        match engine {
+            "whisper" => {
+                // Whisper models are auto-downloaded, so always "available"
+                true
+            }
+            "parakeet" => {
+                // Parakeet uses a fixed model location
+                models_dir.join("parakeet").exists()
+            }
+            "vosk" => {
+                // Vosk models must be manually downloaded
+                models_dir.join(model_name).exists()
+            }
+            _ => false,
         }
+    } else {
+        // Legacy format (just model name without engine prefix)
+        models_dir.join(model_spec).exists()
     }
 }
 
-fn check_model_exists(model_name: &str, models_dir: &PathBuf) -> bool {
-    if model_name == "custom" {
-        return true;
-    }
-    models_dir.join(model_name).exists()
-}
-
-fn get_model_url(model_name: &str) -> String {
+fn get_vosk_model_url(model_name: &str) -> String {
     format!("https://alphacephei.com/vosk/models/{}.zip", model_name)
 }
 
-fn download_model(model_name: &str, models_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let url = get_model_url(model_name);
+fn download_vosk_model(model_name: &str, models_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let url = get_vosk_model_url(model_name);
     let zip_path = models_dir.join(format!("{}.zip", model_name));
-    
+
     println!("Downloading {} ({})...", model_name, url);
     println!("This may take several minutes depending on model size...");
-    
+
     let status = Command::new("curl")
         .arg("-L")
         .arg("-o")
         .arg(&zip_path)
         .arg(&url)
         .status()?;
-    
+
     if !status.success() {
         return Err("Download failed".into());
     }
-    
+
     println!("Extracting model...");
     let status = Command::new("unzip")
         .arg("-q")
@@ -272,95 +308,254 @@ fn download_model(model_name: &str, models_dir: &PathBuf) -> Result<(), Box<dyn 
         .arg("-d")
         .arg(models_dir)
         .status()?;
-    
+
     if !status.success() {
         return Err("Extraction failed".into());
     }
-    
+
     fs::remove_file(&zip_path)?;
     println!("✓ Model installed successfully");
-    
+
     Ok(())
 }
 
 fn validate_and_prompt_models(config_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let config_content = fs::read_to_string(config_path)?;
-    
+
     let home = std::env::var("HOME")?;
     let models_dir = PathBuf::from(&home).join(".config/voice-dictation/models");
-    
+
     if !models_dir.exists() {
         fs::create_dir_all(&models_dir)?;
     }
-    
+
     let preview_model = config_content
         .lines()
         .find(|line| line.starts_with("preview_model"))
         .and_then(|line| line.split('=').nth(1))
         .map(|s| s.trim().trim_matches('"').to_string());
-    
+
     let final_model = config_content
         .lines()
         .find(|line| line.starts_with("final_model"))
         .and_then(|line| line.split('=').nth(1))
         .map(|s| s.trim().trim_matches('"').to_string());
-    
-    let mut missing_models = Vec::new();
-    
-    if let Some(model) = &preview_model {
-        if !check_model_exists(model, &models_dir) {
-            missing_models.push(("Preview", model.clone()));
+
+    // Collect missing Vosk models (whisper auto-downloads, parakeet bundled)
+    let mut missing_vosk_models = Vec::new();
+
+    if let Some(model_spec) = &preview_model {
+        if let Some(("vosk", model_name)) = parse_model_spec(model_spec) {
+            if !models_dir.join(model_name).exists() {
+                missing_vosk_models.push(("Preview", model_name.to_string()));
+            }
         }
     }
-    
-    if let Some(model) = &final_model {
-        if !check_model_exists(model, &models_dir) {
-            missing_models.push(("Final", model.clone()));
+
+    if let Some(model_spec) = &final_model {
+        if let Some(("vosk", model_name)) = parse_model_spec(model_spec) {
+            if !models_dir.join(model_name).exists() {
+                missing_vosk_models.push(("Final", model_name.to_string()));
+            }
         }
     }
-    
-    if missing_models.is_empty() {
+
+    if missing_vosk_models.is_empty() {
         return Ok(());
     }
-    
-    println!("\n⚠️  Missing models detected:");
-    for (model_type, model_name) in &missing_models {
+
+    println!("\n⚠️  Missing Vosk models detected:");
+    for (model_type, model_name) in &missing_vosk_models {
         println!("  - {} model: {}", model_type, model_name);
-        println!("    URL: {}", get_model_url(model_name));
+        println!("    URL: {}", get_vosk_model_url(model_name));
     }
-    
+
     print!("\nWould you like to download missing models now? [y/N]: ");
     io::stdout().flush()?;
-    
+
     let mut response = String::new();
     io::stdin().read_line(&mut response)?;
-    
+
     if response.trim().to_lowercase() == "y" {
-        for (model_type, model_name) in &missing_models {
+        for (model_type, model_name) in &missing_vosk_models {
             println!("\nDownloading {} model: {}", model_type, model_name);
-            if let Err(e) = download_model(model_name, &models_dir) {
+            if let Err(e) = download_vosk_model(model_name, &models_dir) {
                 eprintln!("✗ Failed to download {}: {}", model_name, e);
-                eprintln!("  Please download manually from: {}", get_model_url(model_name));
+                eprintln!("  Please download manually from: {}", get_vosk_model_url(model_name));
             }
         }
     } else {
         println!("\nSkipping download. You can download models manually with:");
         println!("  cd ~/.config/voice-dictation/models");
-        for (_, model_name) in &missing_models {
-            println!("  curl -L -O {}", get_model_url(model_name));
+        for (_, model_name) in &missing_vosk_models {
+            println!("  curl -L -O {}", get_vosk_model_url(model_name));
             println!("  unzip {}.zip", model_name);
         }
     }
-    
+
     Ok(())
+}
+
+// Embed schema in binary for installation
+const CONFIG_SCHEMA: &str = include_str!("../config-schema.json");
+
+/// Migrate old config format to new unified model selection format
+fn migrate_config(config_path: &PathBuf) -> Result<bool, Box<dyn std::error::Error>> {
+    if !config_path.exists() {
+        return Ok(false);
+    }
+
+    let content = fs::read_to_string(config_path)?;
+
+    // Check if migration is needed (old format has transcription_engine or model without engine prefix)
+    let has_old_format = content.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with("transcription_engine")
+            || line.starts_with("preview_model_custom_path")
+            || line.starts_with("final_model_custom_path")
+            || line.starts_with("whisper_final_model")
+            || line.starts_with("whisper_model_path")
+            || line.starts_with("use_gpu")
+    });
+
+    // Also check if preview_model/final_model are in old format (no colon)
+    let preview_model_old = content.lines()
+        .find(|line| line.trim().starts_with("preview_model") && !line.contains("custom_path"))
+        .and_then(|line| line.split('=').nth(1))
+        .map(|s| s.trim().trim_matches('"'))
+        .map(|s| !s.contains(':'))
+        .unwrap_or(false);
+
+    let final_model_old = content.lines()
+        .find(|line| line.trim().starts_with("final_model") && !line.contains("custom_path"))
+        .and_then(|line| line.split('=').nth(1))
+        .map(|s| s.trim().trim_matches('"'))
+        .map(|s| !s.contains(':'))
+        .unwrap_or(false);
+
+    if !has_old_format && !preview_model_old && !final_model_old {
+        return Ok(false);
+    }
+
+    println!("Migrating config to new unified model selection format...");
+
+    // Parse old values
+    let engine = content.lines()
+        .find(|line| line.trim().starts_with("transcription_engine"))
+        .and_then(|line| line.split('=').nth(1))
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .unwrap_or_else(|| "vosk".to_string());
+
+    let old_preview = content.lines()
+        .find(|line| line.trim().starts_with("preview_model") && !line.contains("custom_path"))
+        .and_then(|line| line.split('=').nth(1))
+        .map(|s| s.trim().trim_matches('"').to_string());
+
+    let old_final = content.lines()
+        .find(|line| line.trim().starts_with("final_model") && !line.contains("custom_path"))
+        .and_then(|line| line.split('=').nth(1))
+        .map(|s| s.trim().trim_matches('"').to_string());
+
+    let whisper_final = content.lines()
+        .find(|line| line.trim().starts_with("whisper_final_model"))
+        .and_then(|line| line.split('=').nth(1))
+        .map(|s| s.trim().trim_matches('"').to_string());
+
+    // Build new model specs
+    let new_preview = if let Some(model) = old_preview {
+        if model.contains(':') {
+            model // Already in new format
+        } else if model == "custom" {
+            "vosk:vosk-model-en-us-daanzu-20200905-lgraph".to_string() // Default
+        } else {
+            format!("{}:{}", engine, model)
+        }
+    } else {
+        "vosk:vosk-model-en-us-daanzu-20200905-lgraph".to_string()
+    };
+
+    let new_final = if let Some(model) = old_final {
+        if model.contains(':') {
+            model // Already in new format
+        } else if model == "custom" {
+            whisper_final.map(|m| format!("whisper:{}", m))
+                .unwrap_or_else(|| "whisper:ggml-small.en.bin".to_string())
+        } else {
+            format!("{}:{}", engine, model)
+        }
+    } else if engine == "whisper" {
+        whisper_final.map(|m| format!("whisper:{}", m))
+            .unwrap_or_else(|| "whisper:ggml-small.en.bin".to_string())
+    } else {
+        "whisper:ggml-small.en.bin".to_string()
+    };
+
+    // Remove old fields and update with new format
+    let mut new_lines: Vec<String> = Vec::new();
+    let mut updated_preview = false;
+    let mut updated_final = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Skip deprecated fields
+        if trimmed.starts_with("transcription_engine")
+            || trimmed.starts_with("preview_model_custom_path")
+            || trimmed.starts_with("final_model_custom_path")
+            || trimmed.starts_with("whisper_preview_model")
+            || trimmed.starts_with("whisper_final_model")
+            || trimmed.starts_with("whisper_model_path")
+            || trimmed.starts_with("use_gpu")
+        {
+            continue;
+        }
+
+        // Update preview_model
+        if trimmed.starts_with("preview_model") && !trimmed.contains("custom_path") {
+            new_lines.push(format!("preview_model = \"{}\"", new_preview));
+            updated_preview = true;
+            continue;
+        }
+
+        // Update final_model
+        if trimmed.starts_with("final_model") && !trimmed.contains("custom_path") {
+            new_lines.push(format!("final_model = \"{}\"", new_final));
+            updated_final = true;
+            continue;
+        }
+
+        new_lines.push(line.to_string());
+    }
+
+    // Add fields if not already present
+    if !updated_preview {
+        // Find [daemon] section and add after it
+        if let Some(pos) = new_lines.iter().position(|l| l.trim() == "[daemon]") {
+            new_lines.insert(pos + 1, format!("preview_model = \"{}\"", new_preview));
+        }
+    }
+    if !updated_final {
+        if let Some(pos) = new_lines.iter().position(|l| l.trim() == "[daemon]") {
+            new_lines.insert(pos + 2, format!("final_model = \"{}\"", new_final));
+        }
+    }
+
+    // Write migrated config
+    let new_content = new_lines.join("\n");
+    fs::write(config_path, &new_content)?;
+
+    println!("✓ Config migrated successfully");
+    println!("  preview_model = \"{}\"", new_preview);
+    println!("  final_model = \"{}\"", new_final);
+
+    Ok(true)
 }
 
 fn open_config() -> Result<(), Box<dyn std::error::Error>> {
     let home = std::env::var("HOME")?;
     let config_dir = PathBuf::from(&home).join(".config/voice-dictation");
     let config_path = config_dir.join("config.toml");
-    let schema_path = PathBuf::from(&home)
-        .join("repos/voice-dictation-rust/config-schema.json");
+    let schema_path = config_dir.join("config-schema.json");
 
     if !config_dir.exists() {
         fs::create_dir_all(&config_dir)?;
@@ -369,6 +564,12 @@ fn open_config() -> Result<(), Box<dyn std::error::Error>> {
     if !config_path.exists() {
         fs::write(&config_path, "")?;
     }
+
+    // Migrate old config format if needed
+    migrate_config(&config_path)?;
+
+    // Install/update schema from embedded version
+    fs::write(&schema_path, CONFIG_SCHEMA)?;
 
     let mut tui = SchemaTUIBuilder::new()
         .schema_file(&schema_path)?
@@ -406,6 +607,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Config => {
             open_config()?;
+        }
+        Commands::ListPreviewModels { language } => {
+            for model in utils::list_preview_models(&language) {
+                println!("{}", model);
+            }
+        }
+        Commands::ListFinalModels { language } => {
+            for model in utils::list_final_models(&language) {
+                println!("{}", model);
+            }
+        }
+        Commands::ListAudioDevices => {
+            for device in utils::list_audio_devices() {
+                println!("{}", device);
+            }
         }
     }
 

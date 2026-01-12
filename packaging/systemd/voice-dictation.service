@@ -7,6 +7,8 @@ Type=simple
 ExecStart=%h/.local/bin/voice-dictation daemon
 Restart=on-failure
 RestartSec=5
+# Exit code 64 = UI reload requested, should trigger restart
+RestartForceExitStatus=64
 Environment="RUST_LOG=info"
 Environment="GUI_LOG=info"
 StandardOutput=journal
