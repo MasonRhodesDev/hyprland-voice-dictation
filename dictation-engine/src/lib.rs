@@ -992,14 +992,18 @@ pub async fn run() -> Result<()> {
                             let mut cancel_rx = cancel_tx.subscribe();
                             audio_task = Some(tokio::spawn(async move {
                                 let mut buffer = Vec::new();
+                                let trailing_duration = Duration::from_millis(750); // Capture trailing audio
+                                let mut trailing_deadline: Option<tokio::time::Instant> = None;
+
                                 loop {
                                     // Use select to allow graceful cancellation
                                     tokio::select! {
                                         biased;
                                         _ = cancel_rx.changed() => {
-                                            if *cancel_rx.borrow() {
-                                                debug!("Audio task: cancellation received");
-                                                break;
+                                            if *cancel_rx.borrow() && trailing_deadline.is_none() {
+                                                // Start trailing buffer period instead of stopping immediately
+                                                debug!("Audio task: cancellation received, starting trailing capture");
+                                                trailing_deadline = Some(tokio::time::Instant::now() + trailing_duration);
                                             }
                                         }
                                         samples = async {
@@ -1022,6 +1026,14 @@ pub async fn run() -> Result<()> {
                                                 }
                                                 None => break,
                                             }
+                                        }
+                                    }
+
+                                    // Check if trailing period has elapsed
+                                    if let Some(deadline) = trailing_deadline {
+                                        if tokio::time::Instant::now() >= deadline {
+                                            debug!("Audio task: trailing capture complete");
+                                            break;
                                         }
                                     }
                                 }
