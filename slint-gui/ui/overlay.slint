@@ -1,0 +1,43 @@
+export component Overlay inherits Window {
+    in property <[float]> spectrum_values: [0.3, 0.5, 0.8, 0.4, 0.6, 0.9, 0.3, 0.7];
+    in property <string> status_text: "Listening...";
+
+    background: transparent;
+    default-font-family: "Cantarell";
+    default-font-size: 18px;
+
+    Rectangle {
+        width: 400px;
+        height: 100px;
+        background: #000000e6;  // rgba(0,0,0,0.9)
+        border-radius: 25px;
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: 10px;
+            alignment: center;
+
+            // Spectrum bars
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: center;
+
+                for value[i] in spectrum_values: Rectangle {
+                    width: 8px;
+                    height: 5px + value * 25px;
+                    background: white;
+                    border-radius: 3px;
+                }
+            }
+
+            // Status text
+            Text {
+                text: status_text;
+                color: white;
+                font-size: 18px;
+                font-weight: 500;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}

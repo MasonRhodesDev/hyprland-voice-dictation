@@ -52,9 +52,9 @@ RUN echo 'prefix=/opt/vosk' > /opt/vosk/vosk.pc && \
 WORKDIR /build
 COPY . .
 
-# Build with all features (vosk + parakeet)
+# Build with all features (vosk + parakeet + slint-gui)
 # Note: GPU feature requires CUDA which isn't in this image
-RUN cargo build --release --features "vosk,parakeet"
+RUN cargo build --release --features "vosk,parakeet,slint-gui"
 
 # Create output directory with binary and required libraries
 RUN mkdir -p /output/lib \

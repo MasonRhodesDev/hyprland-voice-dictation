@@ -306,6 +306,8 @@ struct AudioCapture {
     streams: Vec<Stream>,
     #[allow(dead_code)] // Kept alive for stream selection; may be used for debug finalization
     muxer: Arc<std::sync::Mutex<StreamMuxer>>,
+    /// Tracks stream IDs that have errored (for log-once behavior)
+    errored_streams: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl AudioCapture {
@@ -424,12 +426,19 @@ impl AudioCapture {
             buffer_size: cpal::BufferSize::Default,
         };
 
+        let errored_streams: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+
         let mut streams = Vec::new();
         for device in devices_to_use {
             let stream_id = device.name().unwrap_or_else(|_| "unknown".to_string());
             let muxer_clone = Arc::clone(&muxer);
             let stream_id_clone = stream_id.clone();
             let threshold = silence_threshold;
+
+            // Clone for error callback
+            let error_stream_id = stream_id.clone();
+            let errored_streams_clone = Arc::clone(&errored_streams);
 
             match device.build_input_stream(
                 &config,
@@ -449,7 +458,14 @@ impl AudioCapture {
                         muxer.push_samples(&stream_id_clone, &samples);
                     }
                 },
-                |err| error!("Audio stream error: {}", err),
+                move |err| {
+                    // Log once per stream - insert returns true if value was not present
+                    if let Ok(mut errored) = errored_streams_clone.lock() {
+                        if errored.insert(error_stream_id.clone()) {
+                            error!("Audio stream '{}' error: {} (will retry on device reconnection)", error_stream_id, err);
+                        }
+                    }
+                },
                 None,
             ) {
                 Ok(stream) => {
@@ -477,7 +493,7 @@ impl AudioCapture {
         });
 
         info!("Audio capture initialized with {} stream(s) and StreamMuxer", streams.len());
-        Ok(Self { streams, muxer })
+        Ok(Self { streams, muxer, errored_streams })
     }
 
     fn start(&self) -> Result<()> {
@@ -508,6 +524,26 @@ impl AudioCapture {
             }
         }
         Ok(())
+    }
+
+    /// Returns true if at least one stream is healthy (not errored)
+    #[allow(dead_code)] // Available for future use
+    fn has_healthy_streams(&self) -> bool {
+        if let Ok(errored) = self.errored_streams.lock() {
+            errored.len() < self.streams.len()
+        } else {
+            false // Assume unhealthy if lock fails
+        }
+    }
+
+    /// Returns list of errored stream IDs
+    #[allow(dead_code)] // Available for future use
+    fn errored_stream_ids(&self) -> Vec<String> {
+        if let Ok(errored) = self.errored_streams.lock() {
+            errored.iter().cloned().collect()
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -563,13 +599,39 @@ impl DeviceManager {
     }
 
     /// Start recording (fast unless devices changed since last recording)
+    /// Includes retry logic for transient device failures.
     fn start(&mut self) -> Result<()> {
+        const MAX_RETRIES: u32 = 3;
+        const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+
         // Check if we need to recreate due to device changes
         if self.needs_recreate.swap(false, std::sync::atomic::Ordering::SeqCst) {
             info!("DeviceManager: Device change detected, recreating streams...");
             self.capture = None;
-            self.capture = Some(Self::create_capture(&self.config, self.audio_tx.clone())?);
-            info!("DeviceManager: Streams recreated");
+
+            // Retry stream creation with backoff
+            let mut last_error = None;
+            for attempt in 1..=MAX_RETRIES {
+                match Self::create_capture(&self.config, self.audio_tx.clone()) {
+                    Ok(capture) => {
+                        self.capture = Some(capture);
+                        info!("DeviceManager: Streams recreated");
+                        break;
+                    }
+                    Err(e) if attempt < MAX_RETRIES => {
+                        warn!("DeviceManager: Stream creation failed (attempt {}): {}, retrying...", attempt, e);
+                        last_error = Some(e);
+                        std::thread::sleep(RETRY_DELAY);
+                    }
+                    Err(e) => {
+                        last_error = Some(e);
+                    }
+                }
+            }
+
+            if self.capture.is_none() {
+                return Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Failed to create audio capture")));
+            }
         }
 
         if let Some(ref capture) = self.capture {
@@ -783,6 +845,18 @@ pub async fn run() -> Result<()> {
     let spectrum_tx_gui = spectrum_tx.clone();
     // Get runtime handle to pass to GUI for spawning async tasks
     let runtime_handle = tokio::runtime::Handle::current();
+
+    #[cfg(feature = "slint-gui")]
+    let _gui_handle = tokio::task::spawn_blocking(move || {
+        slint_gui::run_integrated(
+            gui_control_tx_gui,
+            spectrum_tx_gui,
+            gui_status_tx,
+            runtime_handle,
+        )
+    });
+
+    #[cfg(all(feature = "iced-gui", not(feature = "slint-gui")))]
     let _gui_handle = tokio::task::spawn_blocking(move || {
         dictation_gui::run_integrated(
             gui_control_tx_gui,
