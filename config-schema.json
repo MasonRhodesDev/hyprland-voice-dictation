@@ -126,6 +126,16 @@
           "type": "boolean",
           "default": true,
           "ui_widget": "toggle"
+        },
+        {
+          "id": "trailing_buffer_ms",
+          "label": "Trailing Audio Buffer",
+          "description": "Duration in milliseconds to continue recording after stop command (captures final words that might otherwise be cut off)",
+          "type": "number",
+          "default": 750,
+          "min": 0,
+          "max": 2000,
+          "ui_widget": "number_input"
         }
       ]
     },

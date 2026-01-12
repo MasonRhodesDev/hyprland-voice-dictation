@@ -104,6 +104,10 @@ struct DaemonConfig {
     muxer_switch_threshold: f32,
     #[serde(default = "default_muxer_scoring_window_ms")]
     muxer_scoring_window_ms: u64,
+
+    // Trailing audio buffer after stop command (captures final words)
+    #[serde(default = "default_trailing_buffer_ms")]
+    trailing_buffer_ms: u64,
 }
 
 fn default_language() -> String { "en".to_string() }
@@ -121,6 +125,7 @@ fn default_muxer_sticky_duration_ms() -> u64 { 500 }
 fn default_muxer_cooldown_ms() -> u64 { 200 }
 fn default_muxer_switch_threshold() -> f32 { 0.15 }
 fn default_muxer_scoring_window_ms() -> u64 { 100 }
+fn default_trailing_buffer_ms() -> u64 { 750 }
 
 /// Convert decibels to linear amplitude (RMS threshold).
 fn db_to_linear(db: f32) -> f32 {
@@ -731,6 +736,7 @@ pub async fn run() -> Result<()> {
                 muxer_cooldown_ms: default_muxer_cooldown_ms(),
                 muxer_switch_threshold: default_muxer_switch_threshold(),
                 muxer_scoring_window_ms: default_muxer_scoring_window_ms(),
+                trailing_buffer_ms: default_trailing_buffer_ms(),
             }
         }
     });
@@ -990,9 +996,10 @@ pub async fn run() -> Result<()> {
                             let spectrum_tx_clone = spectrum_tx.clone();
                             let audio_rx_clone = Arc::clone(&audio_rx_shared);
                             let mut cancel_rx = cancel_tx.subscribe();
+                            let trailing_buffer_ms = config.daemon.trailing_buffer_ms;
                             audio_task = Some(tokio::spawn(async move {
                                 let mut buffer = Vec::new();
-                                let trailing_duration = Duration::from_millis(750); // Capture trailing audio
+                                let trailing_duration = Duration::from_millis(trailing_buffer_ms);
                                 let mut trailing_deadline: Option<tokio::time::Instant> = None;
 
                                 loop {
