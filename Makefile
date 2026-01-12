@@ -31,8 +31,9 @@ docker-install: docker-build  ## Build via Docker and install to ~/.local
 	cp $(DOCKER_OUTPUT)/voice-dictation ~/.local/bin/
 	cp $(DOCKER_OUTPUT)/lib/libvosk.so ~/.local/lib/
 	@echo "Installing UI files to ~/.config/voice-dictation/ui/..."
-	@mkdir -p ~/.config/voice-dictation/ui
+	@mkdir -p ~/.config/voice-dictation/ui/examples
 	cp slint-gui/ui/*.slint ~/.config/voice-dictation/ui/
+	cp slint-gui/ui/examples/* ~/.config/voice-dictation/ui/examples/
 	@echo "Updating library path..."
 	@grep -q 'LD_LIBRARY_PATH.*\.local/lib' ~/.bashrc 2>/dev/null || \
 		echo 'export LD_LIBRARY_PATH="$$HOME/.local/lib:$$LD_LIBRARY_PATH"' >> ~/.bashrc

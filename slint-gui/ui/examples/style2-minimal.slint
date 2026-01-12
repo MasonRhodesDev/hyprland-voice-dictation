@@ -1,23 +1,23 @@
-// dictation.slint - Unified overlay component with mode switching
+// style2-minimal.slint - Minimal mirrored spectrum pill
 // ============================================================================
-// STYLE 1 (Default) - Minimal dark overlay
-//   - Black rounded rectangle with white text/elements
-//   - Spectrum visualizer bars for listening mode
-//   - Spinning dots for processing/closing modes
+// STYLE 2 (Minimal) - Horizontal pill with mirrored spectrum
+//   - Compact pill shape, no text
+//   - Spectrum bars mirrored vertically (up and down from center)
+//   - Same processing/closing modes as Style 1
 // ============================================================================
 // PROPERTIES (set from Rust daemon):
 //
 // mode: int - Current display mode:
 //             0 = hidden (window stays open but nothing visible)
-//             1 = listening (spectrum + text)
+//             1 = listening (mirrored spectrum)
 //             2 = processing (spinner)
 //             3 = closing (collapse animation)
 //
 // spectrum: [float] - 8 frequency band values (0.0-1.0) for listening mode
-// text: string - Transcription text for listening mode
+// text: string - (unused in this style)
 // fade: float - Overall opacity (0.0-1.0) for transitions
 // closing-progress: float - Collapse animation progress (0.0-1.0)
-// pre-listening: bool - Shows "Starting..." instead of spectrum
+// pre-listening: bool - (unused in this style)
 // ============================================================================
 
 export component Dictation inherits Window {
@@ -26,8 +26,8 @@ export component Dictation inherits Window {
 
     // Listening mode properties
     in property <[float]> spectrum: [0.3, 0.5, 0.8, 0.4, 0.6, 0.9, 0.3, 0.7];
-    in property <string> text: "Listening...";
-    in property <bool> pre-listening: false;
+    in property <string> text: "";  // Unused in this style
+    in property <bool> pre-listening: false;  // Unused in this style
 
     // Shared properties
     in property <float> fade: 1.0;
@@ -55,49 +55,28 @@ export component Dictation inherits Window {
         spinner-angle = 360;
     }
 
-    // ========== LISTENING MODE (mode == 1) ==========
+    // ========== LISTENING MODE (mode == 1) - Mirrored Spectrum Pill ==========
     if mode == 1: Rectangle {
-        width: 380px;
-        height: 90px;
+        width: 134px;
+        height: 40px;
         background: #000000.with_alpha(0.9 * fade);
         border-radius: 20px;
+        clip: true;  // Prevent children from affecting box size
 
-        VerticalLayout {
-            padding: 16px;
-            spacing: 8px;
-            alignment: center;
+        // Spectrum bars - absolutely positioned from center with smoothing
+        // Min 4px height (dots), max 30px, higher amplitude multiplier
+        // 8 bars * 5px + 7 gaps * 8px = 96px total, centered in 134px = 19px offset
+        for value[i] in spectrum: Rectangle {
+            x: 19px + i * 13px;
+            y: 18px - value * 13px;           // Center minus half of variable height
+            width: 5px;
+            height: 4px + value * 26px;       // 4px min (dot) + up to 26px from activity
+            background: white.with_alpha(fade);
+            border-radius: 2px;
 
-            // Spectrum visualizer - hidden during pre-listening
-            // Fixed height container prevents text from jumping
-            if !pre-listening: Rectangle {
-                height: 24px;
-                background: transparent;
-
-                HorizontalLayout {
-                    spacing: 6px;
-                    alignment: center;
-                    vertical-stretch: 0;
-
-                    for value[i] in spectrum: VerticalLayout {
-                        alignment: end;
-                        Rectangle {
-                            width: 6px;
-                            height: 4px + value * 20px;
-                            background: white.with_alpha(fade);
-                            border-radius: 3px;
-                        }
-                    }
-                }
-            }
-
-            // Status text
-            Text {
-                text: pre-listening ? "Starting..." : root.text;
-                color: white.with_alpha(fade);
-                font-size: 16px;
-                horizontal-alignment: center;
-                overflow: elide;
-                max-width: 348px;
+            animate y, height {
+                duration: 80ms;
+                easing: ease-out;
             }
         }
     }
