@@ -399,6 +399,11 @@ fn validate_and_prompt_models(config_path: &PathBuf) -> Result<(), Box<dyn std::
 // Embed schema in binary for installation
 const CONFIG_SCHEMA: &str = include_str!("../config-schema.json");
 
+// Embed UI examples for installation
+const UI_STYLE1_EXAMPLE: &str = include_str!("../slint-gui/ui/examples/style1-default.slint");
+const UI_STYLE2_EXAMPLE: &str = include_str!("../slint-gui/ui/examples/style2-minimal.slint");
+const UI_EXAMPLES_README: &str = include_str!("../slint-gui/ui/examples/README.md");
+
 /// Migrate old config format to new unified model selection format
 fn migrate_config(config_path: &PathBuf) -> Result<bool, Box<dyn std::error::Error>> {
     if !config_path.exists() {
@@ -559,6 +564,15 @@ fn open_config() -> Result<(), Box<dyn std::error::Error>> {
 
     if !config_dir.exists() {
         fs::create_dir_all(&config_dir)?;
+    }
+
+    // Initialize UI examples directory (user can copy to ui/dictation.slint to activate)
+    let ui_examples_dir = config_dir.join("ui/examples");
+    if !ui_examples_dir.exists() {
+        fs::create_dir_all(&ui_examples_dir)?;
+        fs::write(ui_examples_dir.join("style1-default.slint"), UI_STYLE1_EXAMPLE)?;
+        fs::write(ui_examples_dir.join("style2-minimal.slint"), UI_STYLE2_EXAMPLE)?;
+        fs::write(ui_examples_dir.join("README.md"), UI_EXAMPLES_README)?;
     }
 
     if !config_path.exists() {
