@@ -603,16 +603,18 @@ impl DeviceManager {
         )
     }
 
-    /// Start recording (fast unless devices changed since last recording)
+    /// Start recording - recreates audio capture if needed
     /// Includes retry logic for transient device failures.
     fn start(&mut self) -> Result<()> {
         const MAX_RETRIES: u32 = 3;
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
-        // Check if we need to recreate due to device changes
-        if self.needs_recreate.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            info!("DeviceManager: Device change detected, recreating streams...");
-            self.capture = None;
+        // Clear the needs_recreate flag (we'll recreate anyway if capture is None)
+        self.needs_recreate.swap(false, std::sync::atomic::Ordering::SeqCst);
+
+        // Recreate capture if it was released (dropped on stop) or device changed
+        if self.capture.is_none() {
+            info!("DeviceManager: Creating audio streams...");
 
             // Retry stream creation with backoff
             let mut last_error = None;
@@ -620,7 +622,7 @@ impl DeviceManager {
                 match Self::create_capture(&self.config, self.audio_tx.clone()) {
                     Ok(capture) => {
                         self.capture = Some(capture);
-                        info!("DeviceManager: Streams recreated");
+                        info!("DeviceManager: Audio streams created");
                         break;
                     }
                     Err(e) if attempt < MAX_RETRIES => {
@@ -647,10 +649,12 @@ impl DeviceManager {
         Ok(())
     }
 
-    /// Stop recording (streams paused but kept alive)
-    fn stop(&self) -> Result<()> {
-        if let Some(ref capture) = self.capture {
+    /// Stop recording and release the microphone
+    fn stop(&mut self) -> Result<()> {
+        if let Some(capture) = self.capture.take() {
             capture.stop()?;
+            // capture is dropped here, releasing microphone
+            info!("DeviceManager: Audio capture released");
         }
         Ok(())
     }
