@@ -9,7 +9,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}Voice Dictation Daemon Watcher${NC}"
-echo -e "${YELLOW}Watching for changes in dictation-engine and dictation-gui...${NC}"
+echo -e "${YELLOW}Watching for changes in dictation-engine and slint-gui...${NC}"
 echo ""
 
 # Kill any existing daemon processes
@@ -47,7 +47,7 @@ fi
 # Watch for changes and rebuild/restart
 cargo watch \
     -w dictation-engine/src \
-    -w dictation-gui/src \
+    -w slint-gui/src \
     -w dictation-types/src \
     -w src \
     -x 'build' \

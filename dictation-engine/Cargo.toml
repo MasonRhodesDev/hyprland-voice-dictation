@@ -11,8 +11,6 @@ default = ["vosk", "parakeet", "slint-gui"]
 vosk = ["dep:vosk"]
 gpu = ["whisper-rs/cuda"]
 parakeet = ["dep:parakeet-rs", "dep:tempfile"]
-# GUI backends (choose one)
-iced-gui = ["dep:dictation-gui"]
 slint-gui = ["dep:slint-gui"]
 
 [dependencies]
@@ -23,7 +21,6 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-dictation-gui = { path = "../dictation-gui", optional = true }
 slint-gui = { path = "../slint-gui", optional = true }
 dictation-types = { path = "../dictation-types" }
 shellexpand = "3"

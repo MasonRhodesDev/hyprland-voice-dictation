@@ -9,13 +9,10 @@ default = ["vosk", "parakeet", "slint-gui"]
 vosk = ["dictation-engine/vosk"]
 parakeet = ["dictation-engine/parakeet"]
 gpu = ["dictation-engine/gpu"]  # Requires CUDA at build time
-# GUI backends (choose one)
-iced-gui = ["dictation-engine/iced-gui", "dep:dictation-gui"]
 slint-gui = ["dictation-engine/slint-gui", "dep:slint-gui"]
 
 [dependencies]
 dictation-engine = { path = "dictation-engine", default-features = false }
-dictation-gui = { path = "dictation-gui", optional = true }
 slint-gui = { path = "slint-gui", optional = true }
 schema-tui = { git = "https://github.com/MasonRhodesDev/schema-tui.git" }
 clap = { version = "4", features = ["derive"] }
@@ -26,13 +23,8 @@ cpal = "0.15"
 [workspace]
 members = [
     "dictation-engine",
-    "dictation-gui",
     "dictation-types",
-    "monitor-label-poc",
-    "webkit-gui-proto",
-    "slint-proto",
     "slint-gui",
-    "egui-proto",
 ]
 resolver = "2"
 

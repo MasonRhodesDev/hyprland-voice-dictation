@@ -40,15 +40,12 @@ echo "Extracting..."
 tar -xzf "$TMP_DIR/voice-dictation.tar.gz" -C "$TMP_DIR"
 
 echo "Stopping running instances..."
-pkill -9 -f dictation-engine 2>/dev/null || true
-pkill -9 -f dictation-gui 2>/dev/null || true
+pkill -9 -f "voice-dictation daemon" 2>/dev/null || true
 
 echo "Installing binaries..."
 mkdir -p ~/.local/bin
-cp "$TMP_DIR/voice-dictation-${LATEST_VERSION}/bin/dictation-engine" ~/.local/bin/
-cp "$TMP_DIR/voice-dictation-${LATEST_VERSION}/bin/dictation-gui" ~/.local/bin/
-chmod +x ~/.local/bin/dictation-engine
-chmod +x ~/.local/bin/dictation-gui
+cp "$TMP_DIR/voice-dictation-${LATEST_VERSION}/bin/voice-dictation" ~/.local/bin/
+chmod +x ~/.local/bin/voice-dictation
 
 echo "Installing scripts..."
 mkdir -p ~/scripts

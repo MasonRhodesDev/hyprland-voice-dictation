@@ -140,7 +140,7 @@ cargo clippy
 bash test_manual.sh
 
 # Monitor logs
-tail -f /tmp/dictation-engine.log /tmp/dictation-gui.log
+tail -f /tmp/dictation-engine.log
 ```
 
 ## Models
@@ -163,13 +163,13 @@ The configuration TUI will offer to download missing models automatically.
 
 **No overlay?**
 ```bash
-pgrep dictation-gui || echo "GUI not running"
-tail /tmp/dictation-gui.log
+pgrep -f "voice-dictation daemon" || echo "Daemon not running"
+tail /tmp/dictation-engine.log
 ```
 
 **No transcription?**
 ```bash
-tail -f /tmp/dictation-gui.log | grep "Transcription:"
+tail -f /tmp/dictation-engine.log | grep "Transcription:"
 ```
 
 **Text not being typed?**
@@ -186,7 +186,7 @@ pkill -9 -f dictation
 ```bash
 make logs
 # or
-tail -f /tmp/dictation-engine.log /tmp/dictation-gui.log
+tail -f /tmp/dictation-engine.log
 ```
 
 ## Project Structure
@@ -213,16 +213,13 @@ voice-dictation-rust/
 │       ├── control_ipc.rs      # Control socket server
 │       ├── ipc.rs              # Audio socket server
 │       └── keyboard.rs         # wtype injection
-├── dictation-gui/              # Wayland overlay (iced framework)
+├── slint-gui/                  # Wayland overlay (Slint framework)
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs              # GUI entry point
-│       ├── control_ipc.rs      # Control socket client
-│       ├── ipc.rs              # Audio socket client
-│       ├── wayland.rs          # Layer-shell setup
-│       ├── renderer.rs         # Spectrum + text rendering
-│       ├── animations.rs       # Smooth state transitions
-│       └── fft.rs              # FFT analysis
+│       └── monitor.rs          # Monitor detection
+├── dictation-types/            # Shared types for daemon-GUI communication
+│   └── src/lib.rs
 ├── config-schema.json          # JSON Schema for configuration
 ├── scripts/                    # Utility scripts
 │   ├── check-deps.sh
@@ -244,7 +241,7 @@ voice-dictation-rust/
 **Rust Libraries:**
 - `whisper-rs` - Whisper.cpp bindings
 - `vosk` - Vosk speech recognition
-- `iced` - GUI framework
+- `slint` - GUI framework
 - `harper-core` - Grammar and spell checking
 - `schema-tui` - Configuration interface
 - `tokio` - Async runtime

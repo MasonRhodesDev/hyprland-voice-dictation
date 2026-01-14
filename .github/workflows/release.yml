@@ -159,10 +159,9 @@ jobs:
       - name: Create source tarball
         run: |
           mkdir -p release-pkg/voice-dictation-${{ steps.version.outputs.version }}/{bin,scripts}
-          
-          cp target/release/dictation-engine release-pkg/voice-dictation-${{ steps.version.outputs.version }}/bin/
-          cp target/release/dictation-gui release-pkg/voice-dictation-${{ steps.version.outputs.version }}/bin/
-          
+
+          cp target/release/voice-dictation release-pkg/voice-dictation-${{ steps.version.outputs.version }}/bin/
+
           cp scripts/dictation-control release-pkg/voice-dictation-${{ steps.version.outputs.version }}/scripts/
           cp scripts/send_confirm.py release-pkg/voice-dictation-${{ steps.version.outputs.version }}/scripts/
           cp scripts/update.sh release-pkg/voice-dictation-${{ steps.version.outputs.version }}/scripts/

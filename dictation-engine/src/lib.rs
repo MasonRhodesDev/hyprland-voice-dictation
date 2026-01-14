@@ -856,19 +856,8 @@ pub async fn run() -> Result<()> {
     // Get runtime handle to pass to GUI for spawning async tasks
     let runtime_handle = tokio::runtime::Handle::current();
 
-    #[cfg(feature = "slint-gui")]
     let _gui_handle = tokio::task::spawn_blocking(move || {
         slint_gui::run_integrated(
-            gui_control_tx_gui,
-            spectrum_tx_gui,
-            gui_status_tx,
-            runtime_handle,
-        )
-    });
-
-    #[cfg(all(feature = "iced-gui", not(feature = "slint-gui")))]
-    let _gui_handle = tokio::task::spawn_blocking(move || {
-        dictation_gui::run_integrated(
             gui_control_tx_gui,
             spectrum_tx_gui,
             gui_status_tx,

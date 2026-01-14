@@ -78,4 +78,4 @@ status:  ## Check if dictation is running
 	@pgrep -f dictation-engine >/dev/null && echo "Running" || echo "Not running"
 
 logs:  ## Tail live logs
-	tail -f /tmp/dictation-engine.log /tmp/dictation-gui.log
+	tail -f /tmp/dictation-engine.log
