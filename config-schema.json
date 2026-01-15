@@ -136,6 +136,28 @@
           "min": 0,
           "max": 2000,
           "ui_widget": "number_input"
+        },
+        {
+          "id": "audio_backend",
+          "label": "Audio Backend",
+          "description": "Audio capture backend: 'cpal' (cross-platform via ALSA). Future: 'pipewire' for native PipeWire support.",
+          "type": "enum",
+          "options_source": {
+            "type": "static",
+            "values": ["cpal"]
+          },
+          "default": "cpal",
+          "ui_widget": "dropdown"
+        },
+        {
+          "id": "idle_release_timeout_secs",
+          "label": "Idle Release Timeout",
+          "description": "Seconds to keep microphone open after recording stops (allows fast re-start). After timeout, mic is released for other apps. Set to 0 for immediate release.",
+          "type": "number",
+          "default": 30,
+          "min": 0,
+          "max": 300,
+          "ui_widget": "number_input"
         }
       ]
     },

@@ -1,6 +1,4 @@
 use anyhow::Result;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Stream, StreamConfig};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use serde::Deserialize;
 use std::fs;
@@ -11,6 +9,7 @@ use tracing::{debug, error, info, warn};
 #[cfg(feature = "vosk")]
 use vosk::Model;
 
+mod audio_backend;
 mod chunking;
 pub mod control_ipc;
 pub mod dbus_control;
@@ -23,7 +22,7 @@ mod model_selector;
 #[cfg(feature = "parakeet")]
 pub mod parakeet_engine;
 mod post_processing;
-mod stream_muxer;
+pub mod stream_muxer;
 mod window_detect;
 pub mod user_dictionary;
 pub mod vad;
@@ -33,12 +32,13 @@ mod whisper_engine;
 
 pub use dictation_types::{GuiControl, GuiState, GuiStatus};
 
+use audio_backend::{AudioBackend, AudioBackendConfig, BackendType};
 use dbus_control::DaemonCommand;
 use engine::TranscriptionEngine;
 use keyboard::KeyboardInjector;
 use model_selector::ModelSpec;
 use post_processing::{Pipeline, SanitizationProcessor, TextProcessor};
-use stream_muxer::{MuxerConfig, StreamMuxer};
+use stream_muxer::MuxerConfig;
 use user_dictionary::UserDictionary;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
@@ -108,6 +108,16 @@ struct DaemonConfig {
     // Trailing audio buffer after stop command (captures final words)
     #[serde(default = "default_trailing_buffer_ms")]
     trailing_buffer_ms: u64,
+
+    // Audio backend selection: "cpal" (default) or "pipewire" (future)
+    #[serde(default = "default_audio_backend")]
+    audio_backend: String,
+
+    // Idle release timeout: how long to keep mic open after stop before releasing (seconds)
+    // Only applies to backends with releases_on_stop() == true (e.g., cpal)
+    // Set to 0 to release immediately (current behavior)
+    #[serde(default = "default_idle_release_timeout_secs")]
+    idle_release_timeout_secs: u64,
 }
 
 fn default_language() -> String { "en".to_string() }
@@ -126,6 +136,8 @@ fn default_muxer_cooldown_ms() -> u64 { 200 }
 fn default_muxer_switch_threshold() -> f32 { 0.15 }
 fn default_muxer_scoring_window_ms() -> u64 { 100 }
 fn default_trailing_buffer_ms() -> u64 { 750 }
+fn default_audio_backend() -> String { "cpal".to_string() }
+fn default_idle_release_timeout_secs() -> u64 { 30 }
 
 /// Convert decibels to linear amplitude (RMS threshold).
 fn db_to_linear(db: f32) -> f32 {
@@ -307,326 +319,85 @@ impl AccurateModelConfig {
     }
 }
 
-struct AudioCapture {
-    streams: Vec<Stream>,
-    #[allow(dead_code)] // Kept alive for stream selection; may be used for debug finalization
-    muxer: Arc<std::sync::Mutex<StreamMuxer>>,
-    /// Tracks stream IDs that have errored (for log-once behavior)
-    errored_streams: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
-}
-
-impl AudioCapture {
-    /// Check if a device name indicates it's a real input device (not a monitor/loopback)
-    fn is_real_input_device(name: &str) -> bool {
-        let name_lower = name.to_lowercase();
-        // Skip output monitors (loopback devices)
-        if name_lower.contains(".monitor") || name_lower.contains("monitor") {
-            return false;
-        }
-        // Skip HDMI outputs (usually no mic)
-        if name_lower.contains("hdmi") {
-            return false;
-        }
-        true
-    }
-
-    fn new(
-        tx: mpsc::UnboundedSender<Vec<i16>>,
-        device_name: Option<&str>,
-        sample_rate: u32,
-        silence_threshold: f32,
-        muxer_config: MuxerConfig,
-    ) -> Result<Self> {
-        let host = cpal::default_host();
-
-        // Determine which devices to use
-        // Fast path: for "default" mode, skip slow device enumeration
-        let devices_to_use: Vec<_> = match device_name {
-            // "default" or None: use system default directly (fast path)
-            None | Some("default") => {
-                info!("Using system default audio device (fast path)");
-                let mut found = Vec::new();
-                if let Some(default) = host.default_input_device() {
-                    if let Ok(name) = default.name() {
-                        info!("Default device: '{}'", name);
-                    }
-                    found.push(default);
-                }
-                found
-            }
-            // "all" mode: capture from pipewire + all hardware devices (slow path)
-            // StreamMuxer selects the best stream in real-time
-            Some("all") => {
-                info!("Multi-device mode: enumerating audio devices...");
-                let mut real_devices = Vec::new();
-                if let Ok(devices) = host.input_devices() {
-                    for device in devices {
-                        if let Ok(name) = device.name() {
-                            let is_real = Self::is_real_input_device(&name);
-                            info!("  - '{}' {}", name, if is_real { "(will capture)" } else { "(skipped)" });
-                            if is_real {
-                                real_devices.push(device);
-                            }
-                        }
-                    }
-                }
-
-                let mut devices = Vec::new();
-                for device in real_devices {
-                    if let Ok(name) = device.name() {
-                        // Include pipewire (routes to default) and all hardware devices
-                        if name == "pipewire" || name.starts_with("sysdefault:CARD=") {
-                            devices.push(device);
-                        }
-                    }
-                }
-
-                if devices.is_empty() {
-                    if let Some(default) = host.default_input_device() {
-                        devices.push(default);
-                    }
-                }
-
-                info!("Multi-device mode: capturing from {} device(s) with StreamMuxer selection", devices.len());
-                devices
-            }
-            // Specific device requested (need to enumerate to find it)
-            Some(name) => {
-                info!("Searching for device '{}'...", name);
-                let mut found = Vec::new();
-                if let Ok(devices) = host.input_devices() {
-                    for device in devices {
-                        if let Ok(device_name) = device.name() {
-                            if device_name == name {
-                                found.push(device);
-                                break;
-                            }
-                        }
-                    }
-                }
-                if found.is_empty() {
-                    warn!("Device '{}' not found, using default", name);
-                    if let Some(default) = host.default_input_device() {
-                        found.push(default);
-                    }
-                }
-                found
-            }
-        };
-
-        if devices_to_use.is_empty() {
-            return Err(anyhow::anyhow!("No input devices available"));
-        }
-
-        // Create crossbeam channel for muxer output (lock-free, for audio callback)
-        let (muxer_tx, muxer_rx) = crossbeam_channel::bounded(100);
-
-        // Create StreamMuxer
-        let muxer = StreamMuxer::new(muxer_tx, muxer_config)?;
-        let muxer = Arc::new(std::sync::Mutex::new(muxer));
-
-        let config = StreamConfig {
-            channels: 1,
-            sample_rate: cpal::SampleRate(sample_rate),
-            buffer_size: cpal::BufferSize::Default,
-        };
-
-        let errored_streams: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
-            Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-
-        let mut streams = Vec::new();
-        for device in devices_to_use {
-            let stream_id = device.name().unwrap_or_else(|_| "unknown".to_string());
-            let muxer_clone = Arc::clone(&muxer);
-            let stream_id_clone = stream_id.clone();
-            let threshold = silence_threshold;
-
-            // Clone for error callback
-            let error_stream_id = stream_id.clone();
-            let errored_streams_clone = Arc::clone(&errored_streams);
-
-            match device.build_input_stream(
-                &config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    // Pre-filter obviously silent chunks to reduce muxer load
-                    let rms: f32 = (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
-                    if rms < threshold {
-                        return; // Skip completely silent chunks
-                    }
-
-                    // Convert to i16
-                    let samples: Vec<i16> =
-                        data.iter().map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16).collect();
-
-                    // Push to muxer for quality-based stream selection
-                    if let Ok(mut muxer) = muxer_clone.lock() {
-                        muxer.push_samples(&stream_id_clone, &samples);
-                    }
-                },
-                move |err| {
-                    // Log once per stream - insert returns true if value was not present
-                    if let Ok(mut errored) = errored_streams_clone.lock() {
-                        if errored.insert(error_stream_id.clone()) {
-                            error!("Audio stream '{}' error: {} (will retry on device reconnection)", error_stream_id, err);
-                        }
-                    }
-                },
-                None,
-            ) {
-                Ok(stream) => {
-                    info!("Created audio stream for: {}", stream_id);
-                    streams.push(stream);
-                }
-                Err(e) => {
-                    warn!("Failed to create stream for '{}': {}", stream_id, e);
-                }
-            }
-        }
-
-        if streams.is_empty() {
-            return Err(anyhow::anyhow!("Failed to create any audio streams"));
-        }
-
-        // Spawn thread to forward muxer output to async channel
-        let tx_clone = tx;
-        std::thread::spawn(move || {
-            while let Ok(samples) = muxer_rx.recv() {
-                if tx_clone.send(samples).is_err() {
-                    break; // Channel closed
-                }
-            }
-        });
-
-        info!("Audio capture initialized with {} stream(s) and StreamMuxer", streams.len());
-        Ok(Self { streams, muxer, errored_streams })
-    }
-
-    fn start(&self) -> Result<()> {
-        for stream in &self.streams {
-            stream.play()?;
-        }
-        info!("Audio capture started ({} streams)", self.streams.len());
-        Ok(())
-    }
-
-    fn stop(&self) -> Result<()> {
-        for stream in &self.streams {
-            stream.pause()?;
-        }
-        info!("Audio capture stopped ({} streams)", self.streams.len());
-        Ok(())
-    }
-
-    /// Finalize the muxer (flush debug recordings).
-    #[allow(dead_code)] // Available for future use
-    fn finalize_muxer(&self) -> Result<()> {
-        // Note: We can't take ownership of muxer here, so debug recordings
-        // will be finalized when the muxer is dropped. For explicit finalization,
-        // the caller should drop the AudioCapture.
-        if let Ok(muxer) = self.muxer.lock() {
-            if let Some(stream_id) = muxer.current_stream() {
-                info!("Final selected stream: {}", stream_id);
-            }
-        }
-        Ok(())
-    }
-
-    /// Returns true if at least one stream is healthy (not errored)
-    #[allow(dead_code)] // Available for future use
-    fn has_healthy_streams(&self) -> bool {
-        if let Ok(errored) = self.errored_streams.lock() {
-            errored.len() < self.streams.len()
-        } else {
-            false // Assume unhealthy if lock fails
-        }
-    }
-
-    /// Returns list of errored stream IDs
-    #[allow(dead_code)] // Available for future use
-    fn errored_stream_ids(&self) -> Vec<String> {
-        if let Ok(errored) = self.errored_streams.lock() {
-            errored.iter().cloned().collect()
-        } else {
-            Vec::new()
-        }
-    }
-}
-
 /// Configuration for DeviceManager
 #[derive(Clone)]
 struct DeviceManagerConfig {
-    device_name: Option<String>,
-    sample_rate: u32,
-    silence_threshold: f32,
-    muxer_config: MuxerConfig,
+    backend_type: BackendType,
+    backend_config: AudioBackendConfig,
+    /// Idle timeout before releasing microphone (seconds). 0 = release immediately.
+    idle_release_timeout_secs: u64,
 }
 
-/// Manages audio devices with eager loading and hotplug support.
-/// Streams are pre-created at startup and only started/stopped on recording.
+/// Manages audio devices with idle timeout and hotplug support.
+///
+/// The idle timeout allows fast startup when rapidly toggling dictation,
+/// while still releasing the microphone for other apps (browsers) after
+/// a period of inactivity.
 struct DeviceManager {
     config: DeviceManagerConfig,
-    capture: Option<AudioCapture>,
+    backend: Option<Box<dyn AudioBackend>>,
     audio_tx: mpsc::UnboundedSender<Vec<i16>>,
     needs_recreate: Arc<std::sync::atomic::AtomicBool>,
+    /// When the audio was last stopped (for idle timeout tracking)
+    stopped_at: Option<Instant>,
 }
 
 impl DeviceManager {
-    /// Create a new DeviceManager with pre-created audio streams.
+    /// Create a new DeviceManager with pre-created audio backend.
     fn new(
         config: DeviceManagerConfig,
         audio_tx: mpsc::UnboundedSender<Vec<i16>>,
     ) -> Result<Self> {
-        // Create initial capture (streams created but paused)
-        info!("DeviceManager: Pre-creating audio streams...");
-        let capture = Self::create_capture(&config, audio_tx.clone())?;
+        // Create initial backend (streams created but paused)
+        info!("DeviceManager: Pre-creating audio backend ({:?})...", config.backend_type);
+        let backend = Self::create_backend(&config, audio_tx.clone())?;
 
         Ok(Self {
             config,
-            capture: Some(capture),
+            backend: Some(backend),
             audio_tx,
             needs_recreate: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stopped_at: None,
         })
     }
 
-    /// Create an AudioCapture with the given config
-    fn create_capture(
+    /// Create an audio backend with the given config
+    fn create_backend(
         config: &DeviceManagerConfig,
         tx: mpsc::UnboundedSender<Vec<i16>>,
-    ) -> Result<AudioCapture> {
-        let device_name = config.device_name.as_deref();
-        AudioCapture::new(
-            tx,
-            device_name,
-            config.sample_rate,
-            config.silence_threshold,
-            config.muxer_config.clone(),
-        )
+    ) -> Result<Box<dyn AudioBackend>> {
+        audio_backend::create_backend(config.backend_type, tx, &config.backend_config)
     }
 
-    /// Start recording - recreates audio capture if needed
+    /// Start recording - recreates audio backend if needed.
     /// Includes retry logic for transient device failures.
     fn start(&mut self) -> Result<()> {
         const MAX_RETRIES: u32 = 3;
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
-        // Clear the needs_recreate flag (we'll recreate anyway if capture is None)
+        // Clear stopped_at - we're starting again, so no longer idle
+        if self.stopped_at.take().is_some() {
+            debug!("DeviceManager: Cleared idle timer (restarting before timeout)");
+        }
+
+        // Clear the needs_recreate flag (we'll recreate anyway if backend is None)
         self.needs_recreate.swap(false, std::sync::atomic::Ordering::SeqCst);
 
-        // Recreate capture if it was released (dropped on stop) or device changed
-        if self.capture.is_none() {
-            info!("DeviceManager: Creating audio streams...");
+        // Recreate backend if it was released (dropped after idle) or device changed
+        if self.backend.is_none() {
+            info!("DeviceManager: Creating audio backend...");
 
-            // Retry stream creation with backoff
+            // Retry backend creation with backoff
             let mut last_error = None;
             for attempt in 1..=MAX_RETRIES {
-                match Self::create_capture(&self.config, self.audio_tx.clone()) {
-                    Ok(capture) => {
-                        self.capture = Some(capture);
-                        info!("DeviceManager: Audio streams created");
+                match Self::create_backend(&self.config, self.audio_tx.clone()) {
+                    Ok(backend) => {
+                        self.backend = Some(backend);
+                        info!("DeviceManager: Audio backend created");
                         break;
                     }
                     Err(e) if attempt < MAX_RETRIES => {
-                        warn!("DeviceManager: Stream creation failed (attempt {}): {}, retrying...", attempt, e);
+                        warn!("DeviceManager: Backend creation failed (attempt {}): {}, retrying...", attempt, e);
                         last_error = Some(e);
                         std::thread::sleep(RETRY_DELAY);
                     }
@@ -636,27 +407,83 @@ impl DeviceManager {
                 }
             }
 
-            if self.capture.is_none() {
-                return Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Failed to create audio capture")));
+            if self.backend.is_none() {
+                return Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Failed to create audio backend")));
             }
         }
 
-        if let Some(ref capture) = self.capture {
-            capture.start()?;
+        if let Some(ref backend) = self.backend {
+            backend.start()?;
         } else {
-            return Err(anyhow::anyhow!("No audio capture available"));
+            return Err(anyhow::anyhow!("No audio backend available"));
         }
         Ok(())
     }
 
-    /// Stop recording and release the microphone
+    /// Stop recording. For backends that release on stop, sets stopped_at timestamp
+    /// to track idle time for deferred release.
     fn stop(&mut self) -> Result<()> {
-        if let Some(capture) = self.capture.take() {
-            capture.stop()?;
-            // capture is dropped here, releasing microphone
-            info!("DeviceManager: Audio capture released");
+        if let Some(ref backend) = self.backend {
+            backend.stop()?;
+
+            // Check if this backend needs to release the mic
+            if backend.releases_on_stop() {
+                let timeout_secs = self.config.idle_release_timeout_secs;
+                if timeout_secs == 0 {
+                    // Immediate release (old behavior)
+                    self.backend = None;
+                    self.stopped_at = None;
+                    info!("DeviceManager: Audio backend released immediately");
+                } else {
+                    // Mark when we stopped for idle timeout tracking
+                    self.stopped_at = Some(Instant::now());
+                    info!("DeviceManager: Audio stopped, will release after {}s idle", timeout_secs);
+                }
+            } else {
+                // Backend supports sharing, keep it open indefinitely
+                self.stopped_at = None;
+                info!("DeviceManager: Audio stopped (backend kept open for sharing)");
+            }
         }
         Ok(())
+    }
+
+    /// Check if idle timeout has expired and release backend if so.
+    /// Returns true if backend was released.
+    fn check_idle_timeout(&mut self) -> bool {
+        if let Some(stopped_at) = self.stopped_at {
+            let idle_duration = stopped_at.elapsed();
+            let timeout = Duration::from_secs(self.config.idle_release_timeout_secs);
+            if idle_duration >= timeout {
+                self.release();
+                self.stopped_at = None;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Release the audio backend (drop streams, release microphone).
+    /// Called by idle timer when timeout expires.
+    fn release(&mut self) {
+        if self.backend.take().is_some() {
+            info!("DeviceManager: Audio backend released after idle timeout");
+        }
+    }
+
+    /// Check if a release is pending (backend exists but not recording)
+    fn has_backend(&self) -> bool {
+        self.backend.is_some()
+    }
+
+    /// Get the idle release timeout
+    fn idle_release_timeout(&self) -> Duration {
+        Duration::from_secs(self.config.idle_release_timeout_secs)
+    }
+
+    /// Check if this backend should release on stop
+    fn should_release_on_stop(&self) -> bool {
+        self.backend.as_ref().map_or(false, |b| b.releases_on_stop())
     }
 
     /// Spawn a background task to watch for device changes
@@ -741,6 +568,8 @@ pub async fn run() -> Result<()> {
                 muxer_switch_threshold: default_muxer_switch_threshold(),
                 muxer_scoring_window_ms: default_muxer_scoring_window_ms(),
                 trailing_buffer_ms: default_trailing_buffer_ms(),
+                audio_backend: default_audio_backend(),
+                idle_release_timeout_secs: default_idle_release_timeout_secs(),
             }
         }
     });
@@ -832,13 +661,24 @@ pub async fn run() -> Result<()> {
         debug_audio: config.daemon.debug_audio,
     };
 
-    // Create DeviceManager with eager-loaded audio streams
-    info!("Creating DeviceManager with pre-loaded audio streams...");
+    // Parse audio backend type
+    let backend_type = BackendType::from_str(&config.daemon.audio_backend)
+        .unwrap_or_else(|| {
+            warn!("Unknown audio backend '{}', using cpal", config.daemon.audio_backend);
+            BackendType::Cpal
+        });
+
+    // Create DeviceManager with eager-loaded audio backend
+    info!("Creating DeviceManager with pre-loaded audio backend...");
     let device_manager_config = DeviceManagerConfig {
-        device_name: audio_device_name,
-        sample_rate,
-        silence_threshold,
-        muxer_config,
+        backend_type,
+        backend_config: AudioBackendConfig {
+            device_name: audio_device_name,
+            sample_rate,
+            silence_threshold,
+            muxer_config,
+        },
+        idle_release_timeout_secs: config.daemon.idle_release_timeout_secs,
     };
     let mut device_manager = DeviceManager::new(device_manager_config, audio_tx)?;
 
@@ -944,6 +784,11 @@ pub async fn run() -> Result<()> {
     loop {
         match daemon_state {
             DaemonState::Idle => {
+                // Check for idle timeout (release mic if idle too long)
+                if device_manager.check_idle_timeout() {
+                    debug!("Idle timeout expired, mic released");
+                }
+
                 // Wait for D-Bus commands with timeout
                 match tokio::time::timeout(Duration::from_millis(100), command_rx.recv()).await {
                     Ok(Some(cmd)) => match cmd {
