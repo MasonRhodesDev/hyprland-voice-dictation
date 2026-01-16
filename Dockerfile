@@ -22,6 +22,7 @@ RUN dnf install -y \
     mesa-libGL-devel \
     fontconfig-devel \
     google-carlito-fonts \
+    pipewire-devel \
     && dnf clean all
 
 # Download and install libvosk
@@ -52,9 +53,9 @@ RUN echo 'prefix=/opt/vosk' > /opt/vosk/vosk.pc && \
 WORKDIR /build
 COPY . .
 
-# Build with all features (vosk + parakeet + slint-gui)
+# Build with all features (vosk + parakeet + slint-gui + pipewire)
 # Note: GPU feature requires CUDA which isn't in this image
-RUN cargo build --release --features "vosk,parakeet,slint-gui"
+RUN cargo build --release --features "vosk,parakeet,slint-gui,pipewire"
 
 # Create output directory with binary and required libraries
 RUN mkdir -p /output/lib \

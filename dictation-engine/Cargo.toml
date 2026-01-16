@@ -7,11 +7,12 @@ edition = "2021"
 # All engines compiled by default - runtime detection determines availability
 # Vosk requires libvosk.so at runtime (checked dynamically)
 # GPU requires CUDA at build time
-default = ["vosk", "parakeet", "slint-gui"]
+default = ["vosk", "parakeet", "slint-gui", "pipewire"]
 vosk = ["dep:vosk"]
 gpu = ["whisper-rs/cuda"]
 parakeet = ["dep:parakeet-rs", "dep:tempfile"]
 slint-gui = ["dep:slint-gui"]
+pipewire = ["dep:pipewire"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -47,6 +48,8 @@ tempfile = { version = "3", optional = true }
 # SHA256 verification for downloaded models
 sha2 = "0.10"
 hex = "0.4"
+# PipeWire native audio backend
+pipewire = { version = "0.8", optional = true }
 
 [dev-dependencies]
 

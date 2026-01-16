@@ -140,13 +140,13 @@
         {
           "id": "audio_backend",
           "label": "Audio Backend",
-          "description": "Audio capture backend: 'cpal' (cross-platform via ALSA). Future: 'pipewire' for native PipeWire support.",
+          "description": "Audio capture backend: 'auto' (prefer PipeWire, fallback to cpal), 'pipewire' (native PipeWire for mic sharing), 'cpal' (cross-platform via ALSA).",
           "type": "enum",
           "options_source": {
             "type": "static",
-            "values": ["cpal"]
+            "values": ["auto", "pipewire", "cpal"]
           },
-          "default": "cpal",
+          "default": "auto",
           "ui_widget": "dropdown"
         },
         {

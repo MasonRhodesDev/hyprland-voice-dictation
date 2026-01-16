@@ -136,7 +136,7 @@ fn default_muxer_cooldown_ms() -> u64 { 200 }
 fn default_muxer_switch_threshold() -> f32 { 0.15 }
 fn default_muxer_scoring_window_ms() -> u64 { 100 }
 fn default_trailing_buffer_ms() -> u64 { 750 }
-fn default_audio_backend() -> String { "cpal".to_string() }
+fn default_audio_backend() -> String { "auto".to_string() }
 fn default_idle_release_timeout_secs() -> u64 { 30 }
 
 /// Convert decibels to linear amplitude (RMS threshold).
@@ -664,8 +664,8 @@ pub async fn run() -> Result<()> {
     // Parse audio backend type
     let backend_type = BackendType::from_str(&config.daemon.audio_backend)
         .unwrap_or_else(|| {
-            warn!("Unknown audio backend '{}', using cpal", config.daemon.audio_backend);
-            BackendType::Cpal
+            warn!("Unknown audio backend '{}', using auto", config.daemon.audio_backend);
+            BackendType::Auto
         });
 
     // Create DeviceManager with eager-loaded audio backend

@@ -5,11 +5,12 @@ edition = "2021"
 
 [features]
 # All engines always compiled - runtime detection determines availability
-default = ["vosk", "parakeet", "slint-gui"]
+default = ["vosk", "parakeet", "slint-gui", "pipewire"]
 vosk = ["dictation-engine/vosk"]
 parakeet = ["dictation-engine/parakeet"]
 gpu = ["dictation-engine/gpu"]  # Requires CUDA at build time
 slint-gui = ["dictation-engine/slint-gui", "dep:slint-gui"]
+pipewire = ["dictation-engine/pipewire"]  # Native PipeWire audio backend
 
 [dependencies]
 dictation-engine = { path = "dictation-engine", default-features = false }

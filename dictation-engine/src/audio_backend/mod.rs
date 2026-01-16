@@ -5,8 +5,12 @@
 
 pub mod cpal_backend;
 
+#[cfg(feature = "pipewire")]
+pub mod pipewire_backend;
+
 use anyhow::Result;
 use tokio::sync::mpsc;
+use tracing::{info, warn};
 
 use crate::stream_muxer::MuxerConfig;
 
@@ -80,40 +84,89 @@ pub trait AudioBackendFactory {
 /// Supported audio backend types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BackendType {
-    /// cpal backend (cross-platform, uses ALSA on Linux).
+    /// Auto-detect: prefer PipeWire, fall back to cpal.
     #[default]
+    Auto,
+    /// cpal backend (cross-platform, uses ALSA on Linux).
     Cpal,
-    // PipeWire backend (native Linux PipeWire, future implementation).
-    // Pipewire,
+    /// PipeWire backend (native Linux PipeWire, supports mic sharing).
+    #[cfg(feature = "pipewire")]
+    Pipewire,
 }
 
 impl BackendType {
     /// Parse backend type from string.
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
             "cpal" | "alsa" => Some(Self::Cpal),
-            // "pipewire" | "pw" => Some(Self::Pipewire),
+            #[cfg(feature = "pipewire")]
+            "pipewire" | "pw" => Some(Self::Pipewire),
             _ => None,
         }
     }
 }
 
 /// Create an audio backend of the specified type.
+///
+/// For `BackendType::Auto`, tries PipeWire first and falls back to cpal.
 pub fn create_backend(
     backend_type: BackendType,
     tx: mpsc::UnboundedSender<Vec<i16>>,
     config: &AudioBackendConfig,
 ) -> Result<Box<dyn AudioBackend>> {
     match backend_type {
-        BackendType::Cpal => cpal_backend::CpalBackend::create(tx, config),
-        // BackendType::Pipewire => pipewire_backend::PipewireBackend::create(tx, config),
+        BackendType::Auto => create_backend_auto(tx, config),
+        BackendType::Cpal => {
+            info!("Using cpal audio backend");
+            cpal_backend::CpalBackend::create(tx, config)
+        }
+        #[cfg(feature = "pipewire")]
+        BackendType::Pipewire => {
+            info!("Using PipeWire audio backend");
+            pipewire_backend::PipewireBackend::create(tx, config)
+        }
     }
+}
+
+/// Create a backend with auto-detection: prefer PipeWire, fall back to cpal.
+fn create_backend_auto(
+    tx: mpsc::UnboundedSender<Vec<i16>>,
+    config: &AudioBackendConfig,
+) -> Result<Box<dyn AudioBackend>> {
+    #[cfg(feature = "pipewire")]
+    {
+        // Try PipeWire first
+        if pipewire_backend::PipewireBackend::is_available() {
+            match pipewire_backend::PipewireBackend::create(tx.clone(), config) {
+                Ok(backend) => {
+                    info!("Using PipeWire audio backend (auto-detected)");
+                    return Ok(backend);
+                }
+                Err(e) => {
+                    warn!("PipeWire backend creation failed: {e}, falling back to cpal");
+                }
+            }
+        } else {
+            info!("PipeWire not available, using cpal backend");
+        }
+    }
+
+    #[cfg(not(feature = "pipewire"))]
+    {
+        info!("PipeWire feature not enabled, using cpal backend");
+    }
+
+    // Fall back to cpal
+    info!("Using cpal audio backend (fallback)");
+    cpal_backend::CpalBackend::create(tx, config)
 }
 
 /// List devices for the specified backend type.
 pub fn list_devices(backend_type: BackendType) -> Result<Vec<DeviceInfo>> {
     match backend_type {
-        BackendType::Cpal => cpal_backend::CpalBackend::list_devices(),
-        // BackendType::Pipewire => pipewire_backend::PipewireBackend::list_devices(),
+        BackendType::Auto | BackendType::Cpal => cpal_backend::CpalBackend::list_devices(),
+        #[cfg(feature = "pipewire")]
+        BackendType::Pipewire => pipewire_backend::PipewireBackend::list_devices(),
     }
 }
