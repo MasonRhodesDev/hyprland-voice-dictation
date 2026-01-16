@@ -32,10 +32,12 @@ enum PwCommand {
 /// Information about a discovered audio source node.
 #[derive(Clone, Debug)]
 struct AudioSourceInfo {
-    /// PipeWire node ID
+    /// PipeWire node ID (for logging only)
     id: u32,
     /// Node name (e.g., "alsa_input.usb-...")
     name: String,
+    /// Object serial number (for stream targeting)
+    object_serial: u32,
     /// Description (e.g., "USB Microphone")
     description: String,
     /// Media class (should be "Audio/Source")
@@ -246,16 +248,23 @@ fn enumerate_audio_sources() -> Result<Vec<AudioSourceInfo>> {
                             .unwrap_or(&name)
                             .to_string();
 
+                        // Get object.serial for reliable stream targeting
+                        let object_serial = props
+                            .get("object.serial")
+                            .and_then(|s| s.parse::<u32>().ok())
+                            .unwrap_or(global.id); // Fallback to id
+
                         // Skip monitor/loopback sources
                         if !name.contains(".monitor") && !description.to_lowercase().contains("monitor") {
                             debug!(
-                                "Found audio source: id={}, name='{}', desc='{}'",
-                                global.id, name, description
+                                "Found audio source: id={}, serial={}, name='{}', desc='{}'",
+                                global.id, object_serial, name, description
                             );
 
                             sources_clone.borrow_mut().push(AudioSourceInfo {
                                 id: global.id,
                                 name,
+                                object_serial,
                                 description,
                                 media_class: media_class.to_string(),
                             });
@@ -376,7 +385,7 @@ fn run_pipewire_thread_multidevice(
 
             match create_capture_stream(
                 &core,
-                Some(source.id),
+                Some(source.object_serial),
                 &source.name,
                 &format_buffer,
                 sample_rate,
@@ -385,8 +394,8 @@ fn run_pipewire_thread_multidevice(
             ) {
                 Ok((stream, listener)) => {
                     info!(
-                        "Created PipeWire stream for: {} (id={})",
-                        source.description, source.id
+                        "Created PipeWire stream for: {} (id={}, serial={})",
+                        source.description, source.id, source.object_serial
                     );
                     streams.push(stream);
                     _listeners.push(listener);
@@ -454,10 +463,11 @@ fn run_pipewire_thread_multidevice(
 
 /// Create a capture stream for a specific audio source.
 ///
-/// If `target_id` is None, connects to the default source.
+/// If `target_serial` is None, connects to the default source.
+/// Uses object.serial for reliable PipeWire stream targeting.
 fn create_capture_stream(
     core: &pw::core::Core,
-    target_id: Option<u32>,
+    target_serial: Option<u32>,
     stream_name: &str,
     format_buffer: &[u8],
     _sample_rate: u32,
@@ -473,9 +483,9 @@ fn create_capture_stream(
         *pw::keys::APP_NAME => "Voice Dictation",
     };
 
-    // Target specific node if provided
-    if let Some(id) = target_id {
-        props.insert("target.object", id.to_string());
+    // Target specific node by object.serial (not node.id)
+    if let Some(serial) = target_serial {
+        props.insert("target.object", serial.to_string());
     }
 
     let stream = pw::stream::Stream::new(core, stream_name, props)
