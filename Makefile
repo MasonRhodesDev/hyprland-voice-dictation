@@ -23,7 +23,13 @@ docker-build:  ## Build release binary with all features using Docker
 	@echo "Build complete. Output in $(DOCKER_OUTPUT)/"
 	@ls -la $(DOCKER_OUTPUT)/
 
-docker-install: docker-build  ## Build via Docker and install to ~/.local
+docker-install:  ## Build via Docker (if needed) and install to ~/.local
+	@if [ ! -f $(DOCKER_OUTPUT)/voice-dictation ]; then \
+		echo "Build output not found, building..."; \
+		$(MAKE) docker-build; \
+	else \
+		echo "Using existing build from $(DOCKER_OUTPUT)/"; \
+	fi
 	@echo "Installing to ~/.local/bin and ~/.local/lib..."
 	@mkdir -p ~/.local/bin ~/.local/lib
 	@pkill -x voice-dictation 2>/dev/null || true
