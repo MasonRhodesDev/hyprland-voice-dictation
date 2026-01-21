@@ -29,8 +29,9 @@ pub fn get_active_monitor_sync() -> Option<String> {
 }
 
 /// Spawn a background thread to track active monitor changes
-pub fn spawn_active_monitor_listener() {
+pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::AtomicBool>>) {
     use hyprland::event_listener::{EventListener, MonitorEventData};
+    use std::sync::atomic::Ordering;
 
     // Initialize global state
     let monitor = Arc::new(RwLock::new(
@@ -41,12 +42,22 @@ pub fn spawn_active_monitor_listener() {
     thread::spawn(move || {
         loop {
             let monitor_clone = monitor.clone();
+            let reload_flag_clone = reload_flag.clone();
             let mut listener = EventListener::new();
 
             listener.add_active_monitor_changed_handler(move |data: MonitorEventData| {
                 if let Ok(mut m) = monitor_clone.write() {
-                    debug!("Active monitor changed to: {}", data.monitor_name);
+                    let old_monitor = m.clone();
+                    debug!("Active monitor changed from '{}' to '{}'", old_monitor, data.monitor_name);
                     *m = data.monitor_name.clone();
+
+                    // Trigger GUI reload if flag provided and monitor actually changed
+                    if let Some(ref flag) = reload_flag_clone {
+                        if old_monitor != data.monitor_name {
+                            debug!("Setting reload flag for monitor switch");
+                            flag.store(true, Ordering::SeqCst);
+                        }
+                    }
                 }
             });
 

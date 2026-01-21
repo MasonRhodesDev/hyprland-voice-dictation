@@ -149,8 +149,8 @@ pub fn run_integrated(
         runtime_handle.clone(),
     );
 
-    // Spawn active monitor listener
-    monitor::spawn_active_monitor_listener();
+    // Spawn active monitor listener (updates global state on monitor change)
+    monitor::spawn_active_monitor_listener(None);
 
     // Spawn UI file watcher for hot-reload
     spawn_ui_file_watcher(reload_flag.clone());
@@ -311,6 +311,7 @@ fn run_shell(shared_state: Arc<RwLock<SharedState>>, reload_flag: Arc<AtomicBool
 
     // Build the shell with the unified component
     // Use max dimensions to accommodate all modes
+    // Create surfaces on all monitors, control visibility in timer callback
     let mut runtime = Shell::from_file(&ui_file)
         .surface("Dictation")
         .width(380)  // Listening mode is widest
@@ -319,7 +320,7 @@ fn run_shell(shared_state: Arc<RwLock<SharedState>>, reload_flag: Arc<AtomicBool
         .margin((0, 0, 50, 0))
         .layer(Layer::Overlay)
         .keyboard_interactivity(KeyboardInteractivity::None)
-        .output_policy(OutputPolicy::PrimaryOnly)
+        .output_policy(OutputPolicy::AllOutputs)  // Surfaces on all monitors
         .build()
         .map_err(|e| format!("Failed to create shell: {}", e))?;
 
@@ -332,60 +333,88 @@ fn run_shell(shared_state: Arc<RwLock<SharedState>>, reload_flag: Arc<AtomicBool
 
     event_loop
         .add_timer(update_interval, move |_deadline: Instant, app_state| {
-            // Check for UI reload request
+            // Check for UI file reload request (dev workflow)
             if reload_flag.load(Ordering::SeqCst) {
-                info!("UI reload requested, restarting daemon...");
+                info!("UI file changed, reloading shell...");
+                reload_flag.store(false, Ordering::SeqCst);
                 std::process::exit(EXIT_CODE_RELOAD);
             }
 
-            if let Ok(state) = shared_state.read() {
-                // Get all surfaces named "Dictation" and update their properties
-                for surface in app_state.surfaces_by_name("Dictation") {
-                    let component = surface.component_instance();
+            // Get active monitor from Hyprland
+            let active_monitor = monitor::get_active_monitor();
 
-                    // Update mode
-                    let mode = state_to_mode(state.gui_state);
+            if let Ok(state) = shared_state.read() {
+                // Iterate all surfaces with their output handles
+                for (key, surface_state) in app_state.surfaces_with_keys() {
+                    let component = surface_state.component_instance();
+
+                    // Determine if this surface is on the active monitor
+                    let is_active = if let Some(ref active_name) = active_monitor {
+                        if let Some(output_info) = app_state.get_output_info(key.output_handle) {
+                            output_info.name()
+                                .map(|name| name == active_name)
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    } else {
+                        // Fallback: show on primary if can't determine active
+                        app_state.get_output_info(key.output_handle)
+                            .map(|info| info.is_primary())
+                            .unwrap_or(false)
+                    };
+
+                    // If not on active monitor, hide by setting mode=0
+                    let mode = if is_active {
+                        state_to_mode(state.gui_state)
+                    } else {
+                        0  // Hidden
+                    };
+
                     if let Err(e) = component.set_property("mode", Value::Number(mode as f64)) {
                         debug!("Failed to set mode: {}", e);
                     }
 
-                    // Update spectrum for listening mode
-                    if state.gui_state == GuiState::Listening || state.gui_state == GuiState::PreListening {
-                        // Convert spectrum values to a model
-                        let spectrum_values: [Value; 8] = [
-                            Value::Number(state.spectrum_values.get(0).copied().unwrap_or(0.0) as f64),
-                            Value::Number(state.spectrum_values.get(1).copied().unwrap_or(0.0) as f64),
-                            Value::Number(state.spectrum_values.get(2).copied().unwrap_or(0.0) as f64),
-                            Value::Number(state.spectrum_values.get(3).copied().unwrap_or(0.0) as f64),
-                            Value::Number(state.spectrum_values.get(4).copied().unwrap_or(0.0) as f64),
-                            Value::Number(state.spectrum_values.get(5).copied().unwrap_or(0.0) as f64),
-                            Value::Number(state.spectrum_values.get(6).copied().unwrap_or(0.0) as f64),
-                            Value::Number(state.spectrum_values.get(7).copied().unwrap_or(0.0) as f64),
-                        ];
-                        if let Err(e) = component.set_property("spectrum", Value::Model(spectrum_values.into())) {
-                            debug!("Failed to set spectrum: {}", e);
+                    // Only update other properties for active surface
+                    if is_active {
+                        // Update spectrum for listening mode
+                        if state.gui_state == GuiState::Listening || state.gui_state == GuiState::PreListening {
+                            // Convert spectrum values to a model
+                            let spectrum_values: [Value; 8] = [
+                                Value::Number(state.spectrum_values.get(0).copied().unwrap_or(0.0) as f64),
+                                Value::Number(state.spectrum_values.get(1).copied().unwrap_or(0.0) as f64),
+                                Value::Number(state.spectrum_values.get(2).copied().unwrap_or(0.0) as f64),
+                                Value::Number(state.spectrum_values.get(3).copied().unwrap_or(0.0) as f64),
+                                Value::Number(state.spectrum_values.get(4).copied().unwrap_or(0.0) as f64),
+                                Value::Number(state.spectrum_values.get(5).copied().unwrap_or(0.0) as f64),
+                                Value::Number(state.spectrum_values.get(6).copied().unwrap_or(0.0) as f64),
+                                Value::Number(state.spectrum_values.get(7).copied().unwrap_or(0.0) as f64),
+                            ];
+                            if let Err(e) = component.set_property("spectrum", Value::Model(spectrum_values.into())) {
+                                debug!("Failed to set spectrum: {}", e);
+                            }
+
+                            // Update transcription text
+                            if let Err(e) = component.set_property("text", Value::String(state.transcription.clone().into())) {
+                                debug!("Failed to set text: {}", e);
+                            }
+
+                            // Update pre-listening flag
+                            if let Err(e) = component.set_property("pre-listening", Value::Bool(state.pre_listening)) {
+                                debug!("Failed to set pre-listening: {}", e);
+                            }
                         }
 
-                        // Update transcription text
-                        if let Err(e) = component.set_property("text", Value::String(state.transcription.clone().into())) {
-                            debug!("Failed to set text: {}", e);
+                        // Update fade
+                        if let Err(e) = component.set_property("fade", Value::Number(state.fade as f64)) {
+                            debug!("Failed to set fade: {}", e);
                         }
 
-                        // Update pre-listening flag
-                        if let Err(e) = component.set_property("pre-listening", Value::Bool(state.pre_listening)) {
-                            debug!("Failed to set pre-listening: {}", e);
-                        }
-                    }
-
-                    // Update fade
-                    if let Err(e) = component.set_property("fade", Value::Number(state.fade as f64)) {
-                        debug!("Failed to set fade: {}", e);
-                    }
-
-                    // Update closing progress
-                    if state.gui_state == GuiState::Closing {
-                        if let Err(e) = component.set_property("closing-progress", Value::Number(state.closing_progress as f64)) {
-                            debug!("Failed to set closing-progress: {}", e);
+                        // Update closing progress
+                        if state.gui_state == GuiState::Closing {
+                            if let Err(e) = component.set_property("closing-progress", Value::Number(state.closing_progress as f64)) {
+                                debug!("Failed to set closing-progress: {}", e);
+                            }
                         }
                     }
                 }
