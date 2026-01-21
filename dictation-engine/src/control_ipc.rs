@@ -154,7 +154,9 @@ mod tests {
                 assert_eq!(text, "hello world");
                 assert!(!is_final);
             }
-            _ => panic!("Wrong variant"),
+            other => {
+                panic!("Expected TranscriptionUpdate variant, got {:?}", other);
+            }
         }
     }
 
