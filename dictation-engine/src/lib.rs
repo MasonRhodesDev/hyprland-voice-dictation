@@ -1133,8 +1133,25 @@ pub async fn run() -> Result<()> {
                 gui_control_tx.send(GuiControl::SetProcessing)
                     .map_err(|e| anyhow::anyhow!("Failed to send SetProcessing: {}", e))?;
 
-                // Signal tasks to stop gracefully (may block 50-200ms)
+                // 1. Stop audio backends (pause streams)
+                let _ = device_manager.stop();
+
+                // 2. Flush backend buffers and muxer
+                let _ = device_manager.flush();
+
+                // 3. Signal audio task to start trailing period
                 let _ = cancel_tx.send(true);
+
+                // 4. Get engine reference before awaiting tasks
+                let session_engine_ref = session.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("No active session in Processing state"))?;
+                let session_engine = session_engine_ref.engine.clone();
+
+                // 5. Drain any remaining samples from channel
+                let drain_timeout = config.daemon.trailing_buffer_ms + 100; // +100ms margin
+                drain_audio_channel(&audio_rx_shared, &session_engine, drain_timeout).await;
+
+                // 6. Wait for tasks to finish
                 if let Some(task) = audio_task.take() {
                     let _ = task.await;
                 }
