@@ -266,6 +266,19 @@ impl AudioBackend for CpalBackend {
         Ok(())
     }
 
+    fn flush(&self) -> Result<()> {
+        // Wait for cpal callbacks to complete (10-20ms buffers, 2x safety)
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Flush the muxer to forward any buffered samples
+        if let Ok(mut muxer) = self.muxer.lock() {
+            muxer.flush();
+        }
+
+        info!("CpalBackend flushed");
+        Ok(())
+    }
+
     fn releases_on_stop(&self) -> bool {
         // cpal/ALSA backend should release mic after idle to allow browsers to use it
         true

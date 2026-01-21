@@ -175,6 +175,16 @@ impl AudioBackend for PipewireBackend {
         Ok(())
     }
 
+    fn flush(&self) -> Result<()> {
+        // Wait for PipeWire process callbacks to drain (timer checks every 10ms)
+        // The muxer is owned by the PipeWire thread, so we can't flush it directly
+        // The sleep allows time for any buffered samples to be forwarded
+        std::thread::sleep(std::time::Duration::from_millis(30));
+
+        info!("PipewireBackend: flushed");
+        Ok(())
+    }
+
     fn releases_on_stop(&self) -> bool {
         // PipeWire supports native mic sharing - no need to release
         false

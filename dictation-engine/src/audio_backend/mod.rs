@@ -50,6 +50,16 @@ pub trait AudioBackend {
     /// Stop capturing audio (pause streams).
     fn stop(&self) -> Result<()>;
 
+    /// Flush any buffered audio data.
+    ///
+    /// Called after stop() to ensure all in-flight samples are delivered.
+    /// Default implementation waits for typical buffer to drain.
+    fn flush(&self) -> Result<()> {
+        // Default: wait for typical buffer to drain
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        Ok(())
+    }
+
     /// Whether this backend should release the microphone after an idle timeout.
     ///
     /// - `true`: Backend uses exclusive-ish access (cpal/ALSA), should release after idle

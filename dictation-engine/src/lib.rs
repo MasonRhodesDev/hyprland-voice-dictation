@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::fs;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 #[cfg(feature = "vosk")]
 use vosk::Model;
@@ -448,6 +448,16 @@ impl DeviceManager {
         Ok(())
     }
 
+    /// Flush any buffered audio data from the backend.
+    ///
+    /// Called after stop() to ensure all in-flight samples are delivered.
+    fn flush(&self) -> Result<()> {
+        if let Some(ref backend) = self.backend {
+            backend.flush()?;
+        }
+        Ok(())
+    }
+
     /// Check if idle timeout has expired and release backend if so.
     /// Returns true if backend was released.
     fn check_idle_timeout(&mut self) -> bool {
@@ -530,6 +540,43 @@ impl DeviceManager {
             }
         });
     }
+}
+
+/// Drain remaining samples from audio channel with timeout.
+///
+/// Ensures all in-flight audio reaches the engine before finalization.
+async fn drain_audio_channel(
+    audio_rx: &Arc<Mutex<mpsc::UnboundedReceiver<Vec<i16>>>>,
+    engine: &Arc<dyn TranscriptionEngine>,
+    timeout_ms: u64,
+) -> usize {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let mut drained = 0;
+
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+
+        match tokio::time::timeout(Duration::from_millis(10), async {
+            let mut rx = audio_rx.lock().await;
+            rx.recv().await
+        })
+        .await
+        {
+            Ok(Some(samples)) => {
+                if let Err(e) = engine.process_audio(&samples) {
+                    error!("Processing error during drain: {}", e);
+                }
+                drained += 1;
+            }
+            Ok(None) => break,  // Channel closed
+            Err(_) => break,    // Timeout - no more data
+        }
+    }
+
+    debug!("Drained {} audio chunks from channel", drained);
+    drained
 }
 
 #[tokio::main]
@@ -999,12 +1046,25 @@ pub async fn run() -> Result<()> {
                         DaemonCommand::StopRecording => {
                             info!("Received StopRecording (cancel)");
 
-                            // Stop audio capture (streams paused but kept alive)
+                            // 1. Stop audio backends (pause streams)
                             let _ = device_manager.stop();
 
-                            // Signal tasks to stop gracefully
+                            // 2. Flush backend buffers and muxer
+                            let _ = device_manager.flush();
+
+                            // 3. Signal audio task to start trailing period
                             let _ = cancel_tx.send(true);
-                            // Wait for tasks to finish
+
+                            // 4. Get engine reference before awaiting tasks
+                            let session_engine = session.as_ref().map(|s| Arc::clone(&s.engine));
+
+                            // 5. Drain any remaining samples from channel
+                            let drain_timeout = config.daemon.trailing_buffer_ms + 100; // +100ms margin
+                            if let Some(engine) = session_engine {
+                                drain_audio_channel(&audio_rx_shared, &engine, drain_timeout).await;
+                            }
+
+                            // 6. Wait for tasks to finish
                             if let Some(task) = audio_task.take() {
                                 let _ = task.await;
                             }
@@ -1022,16 +1082,33 @@ pub async fn run() -> Result<()> {
                         }
                         DaemonCommand::Shutdown => {
                             info!("Shutdown during recording");
-                            // Stop audio capture
+
+                            // 1. Stop audio backends (pause streams)
                             let _ = device_manager.stop();
-                            // Signal tasks to stop gracefully
+
+                            // 2. Flush backend buffers and muxer
+                            let _ = device_manager.flush();
+
+                            // 3. Signal audio task to start trailing period
                             let _ = cancel_tx.send(true);
+
+                            // 4. Get engine reference before awaiting tasks
+                            let session_engine = session.as_ref().map(|s| Arc::clone(&s.engine));
+
+                            // 5. Drain any remaining samples from channel
+                            let drain_timeout = config.daemon.trailing_buffer_ms + 100; // +100ms margin
+                            if let Some(engine) = session_engine {
+                                drain_audio_channel(&audio_rx_shared, &engine, drain_timeout).await;
+                            }
+
+                            // 6. Wait for tasks to finish
                             if let Some(task) = audio_task.take() {
                                 let _ = task.await;
                             }
                             if let Some(task) = preview_task.take() {
                                 let _ = task.await;
                             }
+
                             let _ = gui_control_tx.send(GuiControl::Exit);
                             break;
                         }

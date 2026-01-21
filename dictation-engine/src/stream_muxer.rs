@@ -470,6 +470,27 @@ impl StreamMuxer {
         self.selector.current()
     }
 
+    /// Flush all buffered samples from all streams.
+    ///
+    /// Called during stop to ensure no audio is lost.
+    /// Forces all per-stream buffers to be forwarded, regardless of selection.
+    pub fn flush(&mut self) {
+        debug!("StreamMuxer: flushing all stream buffers");
+
+        for (stream_id, buffer) in &mut self.streams {
+            if buffer.len() > 0 {
+                let samples = buffer.as_contiguous_slice().to_vec();
+                // Use blocking send to ensure delivery
+                if let Err(e) = self.output_tx.send(samples) {
+                    warn!("Failed to flush stream '{}': {}", stream_id, e);
+                }
+            }
+        }
+
+        self.streams.clear();
+        debug!("StreamMuxer: flush complete");
+    }
+
     /// Finalize debug recording (call at end of session).
     #[allow(dead_code)] // Called when debug recording is enabled
     pub fn finalize(self) -> Result<()> {
