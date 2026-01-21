@@ -457,10 +457,15 @@ fn run_pipewire_thread_multidevice(
                 }
                 PwCommand::Flush => {
                     // Flush muxer buffers to forward any remaining samples
-                    if let Ok(mut muxer) = muxer_for_flush.try_borrow_mut() {
-                        muxer.flush();
+                    match muxer_for_flush.try_borrow_mut() {
+                        Ok(mut muxer) => {
+                            muxer.flush();
+                            debug!("PipeWire: muxer flushed successfully");
+                        }
+                        Err(_) => {
+                            warn!("PipeWire: could not flush muxer (borrowed by callback)");
+                        }
                     }
-                    debug!("PipeWire: buffers flushed");
                 }
                 PwCommand::Quit => {
                     if let Some(ml) = mainloop_weak.upgrade() {

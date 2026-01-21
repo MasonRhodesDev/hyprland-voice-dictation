@@ -888,6 +888,14 @@ pub async fn run() -> Result<()> {
                                 let mut trailing_deadline: Option<tokio::time::Instant> = None;
 
                                 loop {
+                                    // Check if trailing period has elapsed FIRST
+                                    if let Some(deadline) = trailing_deadline {
+                                        if tokio::time::Instant::now() >= deadline {
+                                            debug!("Audio task: trailing capture complete");
+                                            break;
+                                        }
+                                    }
+
                                     // Use select to allow graceful cancellation
                                     tokio::select! {
                                         biased;
@@ -919,13 +927,8 @@ pub async fn run() -> Result<()> {
                                                 None => break,
                                             }
                                         }
-                                    }
-
-                                    // Check if trailing period has elapsed
-                                    if let Some(deadline) = trailing_deadline {
-                                        if tokio::time::Instant::now() >= deadline {
-                                            debug!("Audio task: trailing capture complete");
-                                            break;
+                                        _ = tokio::time::sleep(Duration::from_millis(10)), if trailing_deadline.is_some() => {
+                                            // Periodic wake-up during trailing period to check deadline
                                         }
                                     }
                                 }
