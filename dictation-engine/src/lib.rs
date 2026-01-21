@@ -1049,22 +1049,14 @@ pub async fn run() -> Result<()> {
                             // 1. Stop audio backends (pause streams)
                             let _ = device_manager.stop();
 
-                            // 2. Flush backend buffers and muxer
+                            // 2. Flush backend buffers and muxer to forward any buffered samples
                             let _ = device_manager.flush();
 
                             // 3. Signal audio task to start trailing period
+                            // The audio task will continue processing for trailing_buffer_ms
                             let _ = cancel_tx.send(true);
 
-                            // 4. Get engine reference before awaiting tasks
-                            let session_engine = session.as_ref().map(|s| Arc::clone(&s.engine));
-
-                            // 5. Drain any remaining samples from channel
-                            let drain_timeout = config.daemon.trailing_buffer_ms + 100; // +100ms margin
-                            if let Some(engine) = session_engine {
-                                drain_audio_channel(&audio_rx_shared, &engine, drain_timeout).await;
-                            }
-
-                            // 6. Wait for tasks to finish
+                            // 4. Wait for tasks to finish (includes trailing buffer period)
                             if let Some(task) = audio_task.take() {
                                 let _ = task.await;
                             }
@@ -1086,22 +1078,14 @@ pub async fn run() -> Result<()> {
                             // 1. Stop audio backends (pause streams)
                             let _ = device_manager.stop();
 
-                            // 2. Flush backend buffers and muxer
+                            // 2. Flush backend buffers and muxer to forward any buffered samples
                             let _ = device_manager.flush();
 
                             // 3. Signal audio task to start trailing period
+                            // The audio task will continue processing for trailing_buffer_ms
                             let _ = cancel_tx.send(true);
 
-                            // 4. Get engine reference before awaiting tasks
-                            let session_engine = session.as_ref().map(|s| Arc::clone(&s.engine));
-
-                            // 5. Drain any remaining samples from channel
-                            let drain_timeout = config.daemon.trailing_buffer_ms + 100; // +100ms margin
-                            if let Some(engine) = session_engine {
-                                drain_audio_channel(&audio_rx_shared, &engine, drain_timeout).await;
-                            }
-
-                            // 6. Wait for tasks to finish
+                            // 4. Wait for tasks to finish (includes trailing buffer period)
                             if let Some(task) = audio_task.take() {
                                 let _ = task.await;
                             }
@@ -1136,22 +1120,15 @@ pub async fn run() -> Result<()> {
                 // 1. Stop audio backends (pause streams)
                 let _ = device_manager.stop();
 
-                // 2. Flush backend buffers and muxer
+                // 2. Flush backend buffers and muxer to forward any buffered samples
                 let _ = device_manager.flush();
 
                 // 3. Signal audio task to start trailing period
+                // The audio task will continue processing for trailing_buffer_ms
                 let _ = cancel_tx.send(true);
 
-                // 4. Get engine reference before awaiting tasks
-                let session_engine_ref = session.as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("No active session in Processing state"))?;
-                let session_engine = session_engine_ref.engine.clone();
-
-                // 5. Drain any remaining samples from channel
-                let drain_timeout = config.daemon.trailing_buffer_ms + 100; // +100ms margin
-                drain_audio_channel(&audio_rx_shared, &session_engine, drain_timeout).await;
-
-                // 6. Wait for tasks to finish
+                // 4. Wait for audio task to finish (includes trailing buffer period)
+                // The task continues consuming from audio_rx and processing samples
                 if let Some(task) = audio_task.take() {
                     let _ = task.await;
                 }

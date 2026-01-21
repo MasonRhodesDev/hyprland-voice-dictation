@@ -26,6 +26,7 @@ use super::{AudioBackend, AudioBackendConfig, AudioBackendFactory, DeviceInfo};
 enum PwCommand {
     Start,
     Stop,
+    Flush,
     Quit,
 }
 
@@ -176,10 +177,14 @@ impl AudioBackend for PipewireBackend {
     }
 
     fn flush(&self) -> Result<()> {
-        // Wait for PipeWire process callbacks to drain (timer checks every 10ms)
-        // The muxer is owned by the PipeWire thread, so we can't flush it directly
-        // The sleep allows time for any buffered samples to be forwarded
-        std::thread::sleep(std::time::Duration::from_millis(30));
+        // Send flush command to PipeWire thread to flush muxer buffers
+        self.control_tx
+            .send(PwCommand::Flush)
+            .map_err(|_| anyhow!("PipeWire thread not responding"))?;
+
+        // Wait a bit for the flush to complete
+        // Timer checks every 10ms, so 20ms should be enough
+        std::thread::sleep(std::time::Duration::from_millis(20));
 
         info!("PipewireBackend: flushed");
         Ok(())
@@ -435,6 +440,7 @@ fn run_pipewire_thread_multidevice(
     // Add a timer to poll for commands
     let control_rx = std::sync::Arc::new(std::sync::Mutex::new(control_rx));
     let is_running_for_timer = is_running.clone();
+    let muxer_for_flush = muxer.clone();
     let mainloop_weak = mainloop.downgrade();
 
     let _timer = loop_clone.add_timer(move |_| {
@@ -448,6 +454,13 @@ fn run_pipewire_thread_multidevice(
                 PwCommand::Stop => {
                     is_running_for_timer.store(false, Ordering::Relaxed);
                     debug!("PipeWire: recording stopped");
+                }
+                PwCommand::Flush => {
+                    // Flush muxer buffers to forward any remaining samples
+                    if let Ok(mut muxer) = muxer_for_flush.try_borrow_mut() {
+                        muxer.flush();
+                    }
+                    debug!("PipeWire: buffers flushed");
                 }
                 PwCommand::Quit => {
                     if let Some(ml) = mainloop_weak.upgrade() {
