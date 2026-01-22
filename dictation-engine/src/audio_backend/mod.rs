@@ -148,27 +148,36 @@ fn create_backend_auto(
     {
         // Try PipeWire first
         if pipewire_backend::PipewireBackend::is_available() {
+            info!("PipeWire availability check passed, attempting to create backend...");
             match pipewire_backend::PipewireBackend::create(tx.clone(), config) {
                 Ok(backend) => {
-                    info!("Using PipeWire audio backend (auto-detected)");
+                    info!("✓ Using PipeWire audio backend (auto-detected)");
+                    info!("  → Supports concurrent mic access (no browser conflicts)");
                     return Ok(backend);
                 }
                 Err(e) => {
-                    warn!("PipeWire backend creation failed: {e}, falling back to cpal");
+                    warn!("✗ PipeWire backend creation failed: {e}");
+                    warn!("  → Falling back to cpal/ALSA (will hold exclusive mic access)");
+                    warn!("  → Check: systemctl --user status pipewire");
                 }
             }
         } else {
-            info!("PipeWire not available, using cpal backend");
+            warn!("✗ PipeWire not available on system");
+            warn!("  → Check: systemctl --user status pipewire");
+            warn!("  → Using cpal/ALSA backend (will hold exclusive mic access)");
         }
     }
 
     #[cfg(not(feature = "pipewire"))]
     {
-        info!("PipeWire feature not enabled, using cpal backend");
+        warn!("✗ PipeWire feature not enabled at compile time");
+        warn!("  → Rebuild with: cargo build --features pipewire");
+        warn!("  → Using cpal/ALSA backend (will hold exclusive mic access)");
     }
 
     // Fall back to cpal
-    info!("Using cpal audio backend (fallback)");
+    info!("Using cpal/ALSA audio backend");
+    info!("  → Will release mic after idle timeout (default: 30s)");
     cpal_backend::CpalBackend::create(tx, config)
 }
 
