@@ -101,9 +101,8 @@ voice-dictation stop      # Stop without typing
 # Configure settings
 voice-dictation config
 
-# Advanced: Run daemon and GUI manually
-voice-dictation daemon    # Run engine daemon
-voice-dictation gui       # Run GUI overlay
+# Advanced: Run daemon manually
+voice-dictation daemon    # Run engine daemon (GUI starts automatically)
 ```
 
 ## Configuration
@@ -249,7 +248,6 @@ voice-dictation-rust/
 ## Known Issues
 
 - Whisper can be slow on CPU (~3-10s for final processing depending on model/speech length)
-- First few words may be cut off if speech starts immediately
 - Post-processing adds ~20ms overhead (can be disabled in config)
 
 ## License
