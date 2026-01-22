@@ -129,7 +129,9 @@ impl ModelSpec {
                     .ok_or_else(|| anyhow!("Models directory path contains invalid UTF-8"))?;
                 let model_path =
                     model_manager::ensure_whisper_model(&self.model_name, models_dir_str)?;
-                let engine = WhisperEngine::new(model_path.to_str().unwrap(), sample_rate)?;
+                let model_path_str = model_path.to_str()
+                    .ok_or_else(|| anyhow!("Model path contains invalid UTF-8"))?;
+                let engine = WhisperEngine::new(model_path_str, sample_rate)?;
                 Ok(Arc::new(engine))
             }
 
@@ -142,7 +144,9 @@ impl ModelSpec {
                         model_path
                     ));
                 }
-                let engine = VoskEngine::new(model_path.to_str().unwrap(), sample_rate)?;
+                let model_path_str = model_path.to_str()
+                    .ok_or_else(|| anyhow!("Model path contains invalid UTF-8"))?;
+                let engine = VoskEngine::new(model_path_str, sample_rate)?;
                 Ok(Arc::new(engine))
             }
 

@@ -444,7 +444,13 @@ fn run_pipewire_thread_multidevice(
     let mainloop_weak = mainloop.downgrade();
 
     let _timer = loop_clone.add_timer(move |_| {
-        let rx = control_rx.lock().unwrap();
+        let rx = match control_rx.lock() {
+            Ok(rx) => rx,
+            Err(e) => {
+                error!("PipeWire: Failed to lock control_rx: {}", e);
+                return;
+            }
+        };
         while let Ok(cmd) = rx.try_recv() {
             match cmd {
                 PwCommand::Start => {

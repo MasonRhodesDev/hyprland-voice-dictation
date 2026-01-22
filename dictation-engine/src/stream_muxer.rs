@@ -317,7 +317,8 @@ impl DebugRecorder {
             self.writers.insert(stream_id.clone(), writer);
         }
 
-        Ok(self.writers.get_mut(stream_id).unwrap())
+        self.writers.get_mut(stream_id)
+            .ok_or_else(|| anyhow::anyhow!("Failed to get WAV writer for stream '{}'", stream_id))
     }
 
     /// Record samples from a stream.
