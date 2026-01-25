@@ -75,22 +75,34 @@ echo ""
 echo "=== Step 7: Installing systemd service ==="
 mkdir -p "$HOME/.config/systemd/user"
 
-# Create service file with library path
+# Create service file with library path and Wayland environment
 cat > "$HOME/.config/systemd/user/voice-dictation.service" << EOF
 [Unit]
-Description=Voice Dictation Daemon
-After=graphical-session.target
+Description=Voice Dictation Persistent Daemon with Integrated GUI
+After=pipewire.service graphical-session.target
+PartOf=graphical-session.target
 
 [Service]
 Type=simple
-Environment="LD_LIBRARY_PATH=$INSTALL_LIB_DIR"
 ExecStart=%h/.local/bin/voice-dictation daemon
 Restart=on-failure
-RestartSec=3
+RestartSec=5
+# Exit code 64 = UI reload requested, should trigger restart
+RestartForceExitStatus=64
+Environment="RUST_LOG=info"
+Environment="GUI_LOG=info"
+Environment="LD_LIBRARY_PATH=$INSTALL_LIB_DIR"
+# Import Wayland/graphical environment
+ImportEnvironment=WAYLAND_DISPLAY XDG_RUNTIME_DIR DISPLAY
+StandardOutput=journal
+StandardError=journal
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 EOF
+
+# Import current graphical environment for systemd
+systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR DISPLAY
 
 systemctl --user daemon-reload
 echo "  ✓ Service installed"

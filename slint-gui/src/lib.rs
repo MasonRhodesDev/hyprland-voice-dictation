@@ -128,7 +128,8 @@ pub fn run_integrated(
 ) -> GuiResult<()> {
     info!("Starting slint-gui (integrated mode)");
 
-    env::set_var("SLINT_BACKEND", "winit-femtovg");
+    // Don't set SLINT_BACKEND - layer-shika uses slint-interpreter which doesn't need it
+    // env::set_var("SLINT_BACKEND", "winit-femtovg");
 
     // Create shared state
     let shared_state = Arc::new(RwLock::new(SharedState::default()));
@@ -312,6 +313,7 @@ fn run_shell(shared_state: Arc<RwLock<SharedState>>, reload_flag: Arc<AtomicBool
     // Build the shell with the unified component
     // Use max dimensions to accommodate all modes
     // Create surfaces on all monitors, control visibility in timer callback
+    info!("Creating Shell from UI file...");
     let mut runtime = Shell::from_file(&ui_file)
         .surface("Dictation")
         .width(380)  // Listening mode is widest
@@ -323,6 +325,8 @@ fn run_shell(shared_state: Arc<RwLock<SharedState>>, reload_flag: Arc<AtomicBool
         .output_policy(OutputPolicy::AllOutputs)  // Surfaces on all monitors
         .build()
         .map_err(|e| format!("Failed to create shell: {}", e))?;
+
+    info!("Shell created successfully");
 
     // Get event loop handle for scheduling updates
     let event_loop = runtime.event_loop_handle();
