@@ -752,28 +752,43 @@ pub async fn run() -> Result<()> {
         )
     });
 
-    // Wait for GUI to initialize
+    // Wait for GUI to initialize (with timeout)
     info!("Waiting for GUI to initialize...");
-    match tokio::time::timeout(
+    let gui_available = match tokio::time::timeout(
         Duration::from_secs(5),
         gui_status_rx.recv()
     ).await {
-        Ok(Some(GuiStatus::Ready)) => info!("GUI ready"),
+        Ok(Some(GuiStatus::Ready)) => {
+            info!("GUI ready");
+            true
+        }
         Ok(Some(GuiStatus::Error(e))) => {
-            return Err(anyhow::anyhow!("GUI initialization failed: {}", e));
+            warn!("GUI initialization failed: {}", e);
+            warn!("Continuing without GUI overlay - daemon will operate in headless mode");
+            false
         }
         Ok(Some(GuiStatus::TransitionComplete { .. })) => {
-            warn!("Unexpected TransitionComplete during init, continuing");
+            warn!("Unexpected TransitionComplete during init, assuming GUI unavailable");
+            false
         }
         Ok(Some(GuiStatus::ShuttingDown)) => {
-            return Err(anyhow::anyhow!("GUI is shutting down during init"));
+            warn!("GUI is shutting down during init, continuing without GUI");
+            false
         }
         Ok(None) => {
-            return Err(anyhow::anyhow!("GUI status channel closed"));
+            warn!("GUI status channel closed, continuing without GUI");
+            false
         }
         Err(_) => {
-            return Err(anyhow::anyhow!("GUI failed to start within 5 seconds"));
+            warn!("GUI failed to start within 5 seconds (possible compositor compatibility issue)");
+            warn!("Continuing without GUI overlay - daemon will operate in headless mode");
+            info!("You can still use voice-dictation start/stop/confirm commands normally");
+            false
         }
+    };
+
+    if !gui_available {
+        info!("Running in headless mode (no visual overlay)");
     }
 
     // Pre-load preview engine at startup for instant recording start

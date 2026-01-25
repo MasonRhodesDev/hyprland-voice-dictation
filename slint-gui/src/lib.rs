@@ -156,17 +156,16 @@ pub fn run_integrated(
     // Spawn UI file watcher for hot-reload
     spawn_ui_file_watcher(reload_flag.clone());
 
-    // Send ready signal
-    if let Err(e) = gui_status_tx.blocking_send(GuiStatus::Ready) {
-        error!("Failed to send ready status: {}", e);
-    } else {
-        info!("Sent Ready status to daemon");
-    }
-
     // Run the single persistent shell with reload support
-    run_shell(shared_state, reload_flag)?;
-
-    Ok(())
+    // Send Ready signal AFTER Shell is created but BEFORE event loop starts
+    info!("Creating Wayland layer shell (this may take a few seconds)...");
+    match run_shell(shared_state, reload_flag, gui_status_tx) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            error!("Failed to create/run shell: {}", e);
+            Err(e)
+        }
+    }
 }
 
 /// Spawn channel listener that updates shared state
@@ -306,7 +305,11 @@ fn state_to_mode(state: GuiState) -> i32 {
 const EXIT_CODE_RELOAD: i32 = 64;
 
 /// Run the single persistent shell with dynamic property updates
-fn run_shell(shared_state: Arc<RwLock<SharedState>>, reload_flag: Arc<AtomicBool>) -> GuiResult<()> {
+fn run_shell(
+    shared_state: Arc<RwLock<SharedState>>,
+    reload_flag: Arc<AtomicBool>,
+    gui_status_tx: mpsc::Sender<GuiStatus>,
+) -> GuiResult<()> {
     let ui_file = resolve_ui_path("dictation");
     info!("Loading UI from: {}", ui_file);
 
@@ -324,9 +327,23 @@ fn run_shell(shared_state: Arc<RwLock<SharedState>>, reload_flag: Arc<AtomicBool
         .keyboard_interactivity(KeyboardInteractivity::None)
         .output_policy(OutputPolicy::AllOutputs)  // Surfaces on all monitors
         .build()
-        .map_err(|e| format!("Failed to create shell: {}", e))?;
+        .map_err(|e| {
+            let _ = gui_status_tx.blocking_send(GuiStatus::Error(format!(
+                "Wayland layer shell initialization failed: {}. \
+                This may indicate a compositor compatibility issue.",
+                e
+            )));
+            format!("Failed to create shell: {}", e)
+        })?;
 
     info!("Shell created successfully");
+
+    // Send Ready signal BEFORE starting the event loop
+    if let Err(e) = gui_status_tx.blocking_send(GuiStatus::Ready) {
+        error!("Failed to send ready status: {}", e);
+    } else {
+        info!("Sent Ready status to daemon - GUI is operational");
+    }
 
     // Get event loop handle for scheduling updates
     info!("Getting event loop handle...");

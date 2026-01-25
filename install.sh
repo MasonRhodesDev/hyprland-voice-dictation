@@ -68,6 +68,14 @@ echo "  ✓ Scripts installed"
 echo ""
 echo "=== Step 6: Setting up configuration ==="
 mkdir -p "$HOME/.config/voice-dictation/models"
+mkdir -p "$HOME/.config/voice-dictation/ui"
+
+# Install UI files for GUI overlay
+if [ -d "$SCRIPT_DIR/slint-gui/ui" ]; then
+    cp "$SCRIPT_DIR/slint-gui/ui/"*.slint "$HOME/.config/voice-dictation/ui/" 2>/dev/null || true
+    echo "  ✓ GUI UI files installed"
+fi
+
 echo "  ✓ Config directory ready"
 
 # Install systemd service with LD_LIBRARY_PATH
