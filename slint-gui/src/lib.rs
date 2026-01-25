@@ -329,7 +329,9 @@ fn run_shell(shared_state: Arc<RwLock<SharedState>>, reload_flag: Arc<AtomicBool
     info!("Shell created successfully");
 
     // Get event loop handle for scheduling updates
+    info!("Getting event loop handle...");
     let event_loop = runtime.event_loop_handle();
+    info!("Got event loop handle");
 
     // Set up periodic timer to sync shared state to component properties
     // This runs inside the event loop and can safely access the component
@@ -429,8 +431,11 @@ fn run_shell(shared_state: Arc<RwLock<SharedState>>, reload_flag: Arc<AtomicBool
         })
         .map_err(|e| format!("Failed to add timer: {}", e))?;
 
+    info!("Timer added successfully, about to start shell event loop");
     info!("Starting shell event loop");
     runtime.run().map_err(|e| format!("Shell run error: {}", e))?;
+
+    info!("Shell event loop exited");
 
     Ok(())
 }
