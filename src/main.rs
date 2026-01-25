@@ -121,6 +121,64 @@ fn is_daemon_running() -> bool {
     }
 }
 
+fn check_command_available(cmd: &str) -> bool {
+    Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn check_runtime_dependencies(require_wtype: bool, require_wayland: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let mut missing = Vec::new();
+    let mut warnings = Vec::new();
+
+    // Check for wtype (critical for keyboard typing)
+    if require_wtype && !check_command_available("wtype") {
+        missing.push("wtype - required for keyboard input injection");
+    }
+
+    // Check for Wayland display (critical for GUI)
+    if require_wayland {
+        if std::env::var("WAYLAND_DISPLAY").is_err() {
+            if std::env::var("DISPLAY").is_ok() {
+                missing.push("Wayland compositor - X11 detected but Wayland is required");
+            } else {
+                missing.push("Wayland compositor - no display server detected");
+            }
+        }
+    }
+
+    // Check for audio tools (warn if missing)
+    if !check_command_available("pactl") && !check_command_available("pw-cli") {
+        warnings.push("pactl or pw-cli - audio device enumeration may not work");
+    }
+
+    // Print warnings (non-fatal)
+    if !warnings.is_empty() {
+        eprintln!("⚠️  Warnings:");
+        for warning in warnings {
+            eprintln!("  - {}", warning);
+        }
+        eprintln!();
+    }
+
+    // Print errors and fail if any critical dependencies missing
+    if !missing.is_empty() {
+        eprintln!("❌ Missing required runtime dependencies:");
+        for dep in missing {
+            eprintln!("  - {}", dep);
+        }
+        eprintln!();
+        eprintln!("Install missing dependencies:");
+        eprintln!("  Arch: sudo pacman -S wtype pipewire");
+        eprintln!("  Fedora: sudo dnf install wtype pipewire");
+        return Err("Missing runtime dependencies".into());
+    }
+
+    Ok(())
+}
+
 fn start_recording() -> Result<(), Box<dyn std::error::Error>> {
     // Check if daemon is running
     if !is_daemon_running() {
@@ -602,18 +660,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Daemon => {
+            // Daemon requires both wtype (for typing) and Wayland (for GUI)
+            check_runtime_dependencies(true, true)?;
             dictation_engine::run()?;
         }
         Commands::Start => {
+            // Start requires wtype for eventual typing (daemon handles Wayland)
+            check_runtime_dependencies(true, false)?;
             start_recording()?;
         }
         Commands::Stop => {
             stop_recording()?;
         }
         Commands::Confirm => {
+            // Confirm requires wtype for typing (daemon handles Wayland)
+            check_runtime_dependencies(true, false)?;
             confirm_recording()?;
         }
         Commands::Toggle => {
+            // Toggle may start or confirm, so require wtype
+            check_runtime_dependencies(true, false)?;
             toggle_recording()?;
         }
         Commands::Status => {

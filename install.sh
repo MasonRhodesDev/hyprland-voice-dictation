@@ -9,8 +9,17 @@ INSTALL_LIB_DIR="$HOME/.local/lib"
 echo "=== Installing Voice Dictation System ==="
 echo ""
 
+# Check dependencies first
+echo "Checking dependencies..."
+if ! bash "$SCRIPT_DIR/scripts/check-deps.sh"; then
+    echo ""
+    echo "❌ Dependency check failed. Please install missing dependencies and try again."
+    exit 1
+fi
+echo ""
+
 # Download libvosk if needed
-echo "1. Checking libvosk..."
+echo "=== Step 1: Checking libvosk ==="
 if [ ! -f "$VOSK_DIR/libvosk.so" ]; then
     echo "  Downloading libvosk $VOSK_VERSION..."
     mkdir -p "$VOSK_DIR"
@@ -32,24 +41,24 @@ export LD_LIBRARY_PATH="$VOSK_DIR:$LD_LIBRARY_PATH"
 
 # Build release binary with all features
 echo ""
-echo "2. Building binary (all features)..."
+echo "=== Step 2: Building binary (all features) ==="
 cargo build --release
 
 # Install libvosk to user lib directory
 echo ""
-echo "3. Installing libvosk..."
+echo "=== Step 3: Installing libvosk ==="
 mkdir -p "$INSTALL_LIB_DIR"
 cp "$VOSK_DIR/libvosk.so" "$INSTALL_LIB_DIR/"
 echo "  ✓ libvosk installed to $INSTALL_LIB_DIR"
 
 # Install binary
 echo ""
-echo "4. Installing binary to ~/.local/bin..."
+echo "=== Step 4: Installing binary to ~/.local/bin ==="
 cargo install --path . --root ~/.local --force
 
 # Copy control scripts
 echo ""
-echo "5. Installing scripts..."
+echo "=== Step 5: Installing scripts ==="
 mkdir -p ~/scripts
 cp scripts/dictation-control ~/scripts/
 chmod +x ~/scripts/dictation-control
@@ -57,13 +66,13 @@ echo "  ✓ Scripts installed"
 
 # Setup config directory
 echo ""
-echo "6. Setting up configuration..."
+echo "=== Step 6: Setting up configuration ==="
 mkdir -p "$HOME/.config/voice-dictation/models"
 echo "  ✓ Config directory ready"
 
 # Install systemd service with LD_LIBRARY_PATH
 echo ""
-echo "7. Installing systemd service..."
+echo "=== Step 7: Installing systemd service ==="
 mkdir -p "$HOME/.config/systemd/user"
 
 # Create service file with library path
@@ -88,7 +97,7 @@ echo "  ✓ Service installed"
 
 # Cleanup old state
 echo ""
-echo "8. Cleaning up old state files..."
+echo "=== Step 8: Cleaning up old state files ==="
 pkill -9 -f "voice-dictation daemon" 2>/dev/null || true
 rm -f /tmp/voice-dictation-active /tmp/voice-dictation-state
 rm -f /tmp/voice-dictation*.sock
@@ -96,7 +105,7 @@ rm -f /tmp/voice-dictation*.sock
 # Restart daemon if it was enabled
 if systemctl --user is-enabled voice-dictation &>/dev/null; then
     echo ""
-    echo "9. Restarting daemon..."
+    echo "=== Step 9: Restarting daemon ==="
     systemctl --user restart voice-dictation
     echo "  ✓ Daemon restarted"
 fi
