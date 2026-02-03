@@ -81,6 +81,32 @@ impl VoiceDictationService {
         Ok((state.to_string(), session_active))
     }
 
+    /// Get health status of all subsystems
+    async fn health_check(&self) -> zbus::fdo::Result<(String, String, String)> {
+        info!("D-Bus: HealthCheck called");
+
+        // TODO: Implement actual health tracking for each subsystem
+        // For now, return basic status based on daemon state
+        let state = *self.state_receiver.borrow();
+
+        // GUI health: if daemon is responsive, GUI is healthy
+        let gui_status = if state != DaemonState::Idle {
+            "healthy"
+        } else {
+            "idle"
+        };
+
+        // Monitor detection: would need actual circuit breaker state
+        // For now, assume healthy if daemon is running
+        let monitor_status = "unknown";
+
+        // Audio backend: would need actual backend state
+        // For now, assume healthy if daemon is running
+        let audio_status = "unknown";
+
+        Ok((gui_status.to_string(), monitor_status.to_string(), audio_status.to_string()))
+    }
+
     /// Shutdown the daemon gracefully
     async fn shutdown(&self) -> zbus::fdo::Result<()> {
         info!("D-Bus: Shutdown called");

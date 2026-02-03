@@ -20,6 +20,7 @@ clap = { version = "4", features = ["derive"] }
 zbus = "4.1"
 tokio = { workspace = true }
 cpal = "0.15"
+systemd = "0.10"
 
 [workspace]
 members = [

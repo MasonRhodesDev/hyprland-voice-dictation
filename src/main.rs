@@ -96,6 +96,23 @@ fn send_confirm() -> Result<(), Box<dyn std::error::Error>> {
     tokio::runtime::Runtime::new()?.block_on(call_dbus_method("Confirm"))
 }
 
+async fn call_health_check() -> Result<(String, String, String), Box<dyn std::error::Error>> {
+    let connection = Connection::session().await?;
+    let proxy = zbus::Proxy::new(
+        &connection,
+        DBUS_SERVICE_NAME,
+        DBUS_OBJECT_PATH,
+        DBUS_INTERFACE_NAME,
+    ).await?;
+
+    let result: (String, String, String) = proxy.call("HealthCheck", &()).await?;
+    Ok(result)
+}
+
+fn get_health_check() -> Result<(String, String, String), Box<dyn std::error::Error>> {
+    tokio::runtime::Runtime::new()?.block_on(call_health_check())
+}
+
 fn is_daemon_running() -> bool {
     // Check if D-Bus service name is registered
     if let Ok(rt) = tokio::runtime::Runtime::new() {
@@ -297,11 +314,26 @@ fn toggle_recording() -> Result<(), Box<dyn std::error::Error>> {
 
 fn show_status() {
     // Always show daemon status first
-    let daemon_running = is_process_running("voice-dictation daemon");
+    let daemon_running = is_daemon_running();
     println!("Daemon: {}", if daemon_running { "running" } else { "NOT running" });
 
-    let state = get_state();
-    println!("State: {}", state);
+    if daemon_running {
+        let state = get_state();
+        println!("State: {}", state);
+
+        // Try to get health check info
+        match get_health_check() {
+            Ok((gui, monitor, audio)) => {
+                println!("\nSubsystem Health:");
+                println!("  GUI:     {}", gui);
+                println!("  Monitor: {}", monitor);
+                println!("  Audio:   {}", audio);
+            }
+            Err(e) => {
+                println!("Health check unavailable: {}", e);
+            }
+        }
+    }
 }
 
 /// Parse model spec format: "engine:model_name"

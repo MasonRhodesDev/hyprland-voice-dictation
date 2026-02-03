@@ -367,12 +367,22 @@ fn run_shell(
             let active_monitor = monitor::get_active_monitor();
 
             if let Ok(state) = shared_state.read() {
+                // Graceful degradation: show on all monitors when detection unavailable
+                let use_all_monitors = active_monitor.is_none();
+                if use_all_monitors && state.gui_state != GuiState::Hidden {
+                    debug!("Monitor detection unavailable, showing GUI on all monitors");
+                }
+
                 // Iterate all surfaces with their output handles
                 for (key, surface_state) in app_state.surfaces_with_keys() {
                     let component = surface_state.component_instance();
 
                     // Determine if this surface is on the active monitor
-                    let is_active = if let Some(ref active_name) = active_monitor {
+                    let is_active = if use_all_monitors {
+                        // Show on all monitors when detection unavailable
+                        state.gui_state != GuiState::Hidden
+                    } else if let Some(ref active_name) = active_monitor {
+                        // Normal behavior: only show on active monitor
                         if let Some(output_info) = app_state.get_output_info(key.output_handle) {
                             output_info.name()
                                 .map(|name| name == active_name)

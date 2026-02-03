@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::fs;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use systemd::daemon::{notify, STATE_READY, STATE_WATCHDOG};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 #[cfg(feature = "vosk")]
@@ -834,6 +835,11 @@ pub async fn run() -> Result<()> {
 
     info!("Daemon initialized - entering idle state (GUI hidden)");
 
+    // Notify systemd that we're ready
+    if let Err(e) = notify(false, [(STATE_READY, "1")].iter()) {
+        warn!("Failed to notify systemd (Ready): {}", e);
+    }
+
     // State machine variables
     let mut daemon_state = DaemonState::Idle;
     let mut session: Option<RecordingSession> = None;
@@ -842,8 +848,20 @@ pub async fn run() -> Result<()> {
     // Cancellation channel for graceful task shutdown (keeps spectrum channel alive)
     let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
 
+    // Watchdog keepalive: send every 15 seconds
+    let mut last_watchdog = Instant::now();
+    let watchdog_interval = Duration::from_secs(15);
+
     // ===== PERSISTENT STATE MACHINE LOOP =====
     loop {
+        // Send systemd watchdog keepalive if interval elapsed
+        if last_watchdog.elapsed() >= watchdog_interval {
+            if let Err(e) = notify(false, [(STATE_WATCHDOG, "1")].iter()) {
+                debug!("Failed to send watchdog keepalive: {}", e);
+            }
+            last_watchdog = Instant::now();
+        }
+
         match daemon_state {
             DaemonState::Idle => {
                 // Check for idle timeout (release mic if idle too long)
