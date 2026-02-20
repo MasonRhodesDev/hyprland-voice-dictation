@@ -31,6 +31,9 @@ members = [
 ]
 resolver = "2"
 
+[patch.crates-io]
+layer-shika-adapters = { path = "vendor/layer-shika-adapters" }
+
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

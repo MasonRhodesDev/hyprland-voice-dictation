@@ -1,0 +1,26 @@
+[package]
+name = "layer-shika-adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Adapters layer for layer-shika (internal implementation crate)"
+readme = "../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+glutin.workspace = true
+layer-shika-domain.workspace = true
+log.workspace = true
+raw-window-handle.workspace = true
+slint.workspace = true
+slint-interpreter.workspace = true
+smithay-client-toolkit.workspace = true
+thiserror.workspace = true
+wayland-client.workspace = true
+wayland-protocols.workspace = true
