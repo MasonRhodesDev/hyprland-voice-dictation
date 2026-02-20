@@ -163,10 +163,13 @@ impl VoskEngine {
         if let Some(final_chunk) = result.single() {
             let text = final_chunk.text.to_string().trim().to_string();
             if !text.is_empty() {
-                if !accumulated.is_empty() {
-                    accumulated.push(' ');
+                let deduplicated = remove_duplicate_suffix(&accumulated, &text);
+                if !deduplicated.is_empty() {
+                    if !accumulated.is_empty() {
+                        accumulated.push(' ');
+                    }
+                    accumulated.push_str(&deduplicated);
                 }
-                accumulated.push_str(&text);
             }
         }
 

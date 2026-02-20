@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
+use serde_json::Value;
 use schema_tui::SchemaTUIBuilder;
 use zbus::Connection;
 
@@ -52,6 +53,24 @@ enum Commands {
     },
     #[command(about = "List available audio input devices")]
     ListAudioDevices,
+    #[command(about = "Debug recording tools (requires VOICE_DICTATION_DEBUG_AUDIO=1)")]
+    Debug {
+        #[command(subcommand)]
+        command: DebugCommands,
+    },
+    #[command(about = "Show audio backend diagnostics and configuration")]
+    Diagnose,
+}
+
+#[derive(Subcommand)]
+enum DebugCommands {
+    #[command(about = "List debug recordings in /tmp/voice-dictation-debug")]
+    List,
+    #[command(about = "Play a debug recording WAV file")]
+    Play {
+        #[arg(help = "WAV filename to play (from 'debug list' output)")]
+        filename: String,
+    },
 }
 
 fn get_state() -> String {
@@ -86,14 +105,24 @@ async fn call_dbus_method(method: &str) -> Result<(), Box<dyn std::error::Error>
 
 fn send_start_recording() -> Result<(), Box<dyn std::error::Error>> {
     tokio::runtime::Runtime::new()?.block_on(call_dbus_method("StartRecording"))
+        .map_err(dbus_error_with_hint)
 }
 
 fn send_stop_recording() -> Result<(), Box<dyn std::error::Error>> {
     tokio::runtime::Runtime::new()?.block_on(call_dbus_method("StopRecording"))
+        .map_err(dbus_error_with_hint)
 }
 
 fn send_confirm() -> Result<(), Box<dyn std::error::Error>> {
     tokio::runtime::Runtime::new()?.block_on(call_dbus_method("Confirm"))
+        .map_err(dbus_error_with_hint)
+}
+
+fn dbus_error_with_hint(e: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
+    format!(
+        "Failed to communicate with daemon: {}\nTry: systemctl --user status voice-dictation",
+        e
+    ).into()
 }
 
 async fn call_health_check() -> Result<(String, String, String), Box<dyn std::error::Error>> {
@@ -275,7 +304,9 @@ fn confirm_recording() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !is_daemon_running() {
-        eprintln!("Daemon not running");
+        eprintln!("Error: Daemon not running");
+        eprintln!("Start the daemon with: systemctl --user start voice-dictation");
+        eprintln!("Or run manually: voice-dictation daemon");
         return Err("Daemon not running".into());
     }
 
@@ -687,6 +718,158 @@ fn open_config() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+const DEBUG_DIR: &str = "/tmp/voice-dictation-debug";
+
+fn debug_list() -> Result<(), Box<dyn std::error::Error>> {
+    let debug_dir = std::path::Path::new(DEBUG_DIR);
+    if !debug_dir.exists() {
+        println!("No debug recordings found (directory does not exist)");
+        println!("Enable debug audio with: VOICE_DICTATION_DEBUG_AUDIO=1 voice-dictation daemon");
+        return Ok(());
+    }
+
+    let mut entries: Vec<_> = fs::read_dir(debug_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|ext| ext == "json").unwrap_or(false))
+        .collect();
+
+    entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+
+    if entries.is_empty() {
+        println!("No debug recordings found");
+        println!("Enable debug audio with: VOICE_DICTATION_DEBUG_AUDIO=1 voice-dictation daemon");
+        return Ok(());
+    }
+
+    println!("{:<35} {:>8} {:>6}  {}", "File", "Duration", "Device", "Text preview");
+    println!("{}", "-".repeat(80));
+
+    for entry in entries {
+        let json_path = entry.path();
+        let wav_name = json_path.with_extension("wav")
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        if let Ok(content) = fs::read_to_string(&json_path) {
+            if let Ok(meta) = serde_json::from_str::<Value>(&content) {
+                let duration_ms = meta["duration_ms"].as_u64().unwrap_or(0);
+                let device = meta["active_device"].as_str().unwrap_or("?");
+                let device_short = if device.len() > 6 { &device[..6] } else { device };
+                let text = meta["final_text"].as_str()
+                    .or_else(|| meta["preview_text"].as_str())
+                    .unwrap_or("(no text)");
+                let text_preview = if text.len() > 35 {
+                    format!("{}...", &text[..32])
+                } else {
+                    text.to_string()
+                };
+                println!("{:<35} {:>6}ms {:>6}  {}", wav_name, duration_ms, device_short, text_preview);
+            } else {
+                println!("{:<35} (unreadable metadata)", wav_name);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn debug_play(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let wav_path = if filename.contains('/') {
+        PathBuf::from(filename)
+    } else {
+        PathBuf::from(DEBUG_DIR).join(filename)
+    };
+
+    if !wav_path.exists() {
+        return Err(format!("File not found: {}", wav_path.display()).into());
+    }
+
+    let player = if Command::new("which").arg("paplay").output().map(|o| o.status.success()).unwrap_or(false) {
+        "paplay"
+    } else if Command::new("which").arg("aplay").output().map(|o| o.status.success()).unwrap_or(false) {
+        "aplay"
+    } else {
+        return Err("No audio player found. Install pipewire-utils (paplay) or alsa-utils (aplay).".into());
+    };
+
+    println!("Playing: {}", wav_path.display());
+    let status = Command::new(player).arg(&wav_path).status()?;
+    if !status.success() {
+        return Err(format!("{} failed with status: {}", player, status).into());
+    }
+
+    Ok(())
+}
+
+fn diagnose() -> Result<(), Box<dyn std::error::Error>> {
+    let home = std::env::var("HOME")?;
+    let config_path = PathBuf::from(&home).join(".config/voice-dictation/config.toml");
+
+    println!("=== Voice Dictation Diagnostics ===\n");
+
+    // Audio devices
+    println!("Audio Input Devices:");
+    for device in utils::list_audio_devices() {
+        println!("  {}", device);
+    }
+
+    // Backend and config
+    println!("\nConfiguration ({}):", config_path.display());
+    if config_path.exists() {
+        let config = fs::read_to_string(&config_path)?;
+        let mut shown_any = false;
+        for line in config.lines() {
+            let t = line.trim();
+            if t.starts_with("audio_backend")
+                || t.starts_with("muxer_")
+                || t.starts_with("preview_model")
+                || t.starts_with("final_model")
+                || t.starts_with("audio_device")
+            {
+                println!("  {}", t);
+                shown_any = true;
+            }
+        }
+        if !shown_any {
+            println!("  (using defaults — no relevant settings found)");
+        }
+    } else {
+        println!("  (config file not found — using defaults)");
+    }
+
+    // Muxer defaults
+    println!("\nStreamMuxer defaults (overridden by config above):");
+    println!("  muxer_sticky_duration_ms = 500");
+    println!("  muxer_cooldown_ms = 200");
+    println!("  muxer_switch_threshold = 0.15");
+    println!("  muxer_scoring_window_ms = 100");
+
+    // Engine availability
+    println!("\nAvailable engines: {}", utils::get_engine_summary());
+
+    // Debug audio status
+    let debug_enabled = std::env::var("VOICE_DICTATION_DEBUG_AUDIO")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
+    let rust_log_debug = std::env::var("RUST_LOG")
+        .map(|v| v.contains("debug") || v.contains("trace"))
+        .unwrap_or(false);
+    println!("\nDebug audio recording: {}", if debug_enabled || rust_log_debug { "enabled" } else { "disabled" });
+    if !debug_enabled && !rust_log_debug {
+        println!("  Enable with: VOICE_DICTATION_DEBUG_AUDIO=1 voice-dictation daemon");
+    } else {
+        println!("  Recordings saved to: {}", DEBUG_DIR);
+        let count = fs::read_dir(DEBUG_DIR).ok()
+            .map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().extension().map(|x| x == "wav").unwrap_or(false)).count())
+            .unwrap_or(0);
+        println!("  Current recordings: {} (use 'voice-dictation debug list' to view)", count);
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -735,6 +918,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", device);
             }
         }
+        Commands::Debug { command } => match command {
+            DebugCommands::List => debug_list()?,
+            DebugCommands::Play { filename } => debug_play(&filename)?,
+        },
+        Commands::Diagnose => diagnose()?,
     }
 
     Ok(())

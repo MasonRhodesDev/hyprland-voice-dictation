@@ -21,6 +21,7 @@ zbus = "4.1"
 tokio = { workspace = true }
 cpal = "0.15"
 systemd = "0.10"
+serde_json = { workspace = true }
 
 [workspace]
 members = [
