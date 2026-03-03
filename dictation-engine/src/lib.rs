@@ -110,6 +110,10 @@ struct DaemonConfig {
     // Delay before resuming media playback after recording stops (milliseconds)
     #[serde(default = "default_media_resume_delay_ms")]
     media_resume_delay_ms: u64,
+
+    // Engine idle timeout: drop ORT sessions after N seconds idle to reclaim BFCArena memory (seconds)
+    #[serde(default = "default_engine_idle_timeout_secs")]
+    engine_idle_timeout_secs: u64,
 }
 
 fn default_model() -> String { "parakeet:default".to_string() }
@@ -122,6 +126,7 @@ fn default_trailing_buffer_ms() -> u64 { 750 }
 fn default_audio_backend() -> String { "auto".to_string() }
 fn default_idle_release_timeout_secs() -> u64 { 30 }
 fn default_media_resume_delay_ms() -> u64 { 25 }
+fn default_engine_idle_timeout_secs() -> u64 { 300 }  // 5 minutes
 
 /// Convert decibels to linear amplitude (RMS threshold).
 fn db_to_linear(db: f32) -> f32 {
@@ -498,6 +503,7 @@ pub async fn run() -> Result<()> {
                 audio_backend: default_audio_backend(),
                 idle_release_timeout_secs: default_idle_release_timeout_secs(),
                 media_resume_delay_ms: default_media_resume_delay_ms(),
+                engine_idle_timeout_secs: default_engine_idle_timeout_secs(),
             }
         }
     });
@@ -648,7 +654,8 @@ pub async fn run() -> Result<()> {
 
     // Pre-load engine at startup for instant recording start
     info!("Pre-loading Parakeet engine (blocking call before D-Bus)...");
-    let preview_engine: Arc<dyn TranscriptionEngine> = model_spec.create_engine(sample_rate)?;
+    let mut preview_engine: Option<Arc<dyn TranscriptionEngine>> = Some(model_spec.create_engine(sample_rate)?);
+    let mut engine_stopped_at: Option<Instant> = None;
     info!("Parakeet engine loaded and ready");
 
     // Mark engine as healthy after successful load
@@ -717,6 +724,17 @@ pub async fn run() -> Result<()> {
                     debug!("Idle timeout expired, mic released");
                 }
 
+                // Check engine idle timeout (release ORT sessions to reclaim BFCArena memory)
+                if let Some(stopped_at) = engine_stopped_at {
+                    let timeout = Duration::from_secs(config.daemon.engine_idle_timeout_secs);
+                    if stopped_at.elapsed() >= timeout && preview_engine.is_some() {
+                        info!("Engine idle timeout expired, releasing ORT sessions to free memory");
+                        preview_engine = None;
+                        engine_stopped_at = None;
+                        health_state.engine_healthy.store(false, Ordering::Relaxed);
+                    }
+                }
+
                 // Wait for D-Bus commands with timeout
                 match tokio::time::timeout(Duration::from_millis(100), command_rx.recv()).await {
                     Ok(Some(cmd)) => match cmd {
@@ -748,9 +766,19 @@ pub async fn run() -> Result<()> {
                             // Mark audio as healthy at start
                             health_state.audio_healthy.store(true, Ordering::Relaxed);
 
+                            // Recreate engine if it was released due to idle timeout
+                            if preview_engine.is_none() {
+                                info!("Recreating transcription engine (was released for idle memory savings)...");
+                                preview_engine = Some(model_spec.create_engine(sample_rate)?);
+                                health_state.engine_healthy.store(true, Ordering::Relaxed);
+                                info!("Engine recreated and ready");
+                            }
+                            engine_stopped_at = None;
+
                             // Reset the pre-loaded engine for new session
-                            preview_engine.reset();
-                            let session_engine = Arc::clone(&preview_engine);
+                            let engine = preview_engine.as_ref().unwrap();
+                            engine.reset();
+                            let session_engine = Arc::clone(engine);
 
                             // Signal UI to show
                             gui_control_tx.send(GuiControl::SetListening)
@@ -1177,6 +1205,7 @@ pub async fn run() -> Result<()> {
                 let _ = device_manager.stop();
 
                 session = None;
+                engine_stopped_at = Some(Instant::now());
                 daemon_state = DaemonState::Idle;
                 let _ = state_tx.send(daemon_state);
                 info!("Processing complete - returned to Idle state");
