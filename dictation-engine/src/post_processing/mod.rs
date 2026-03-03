@@ -10,7 +10,7 @@ use std::sync::Arc;
 pub use acronym::AcronymProcessor;
 pub use grammar::GrammarProcessor;
 pub use punctuation::PunctuationProcessor;
-pub use sanitize::{SanitizationProcessor, SanitizationRules};
+pub use sanitize::SanitizationProcessor;
 
 /// Trait for text post-processors.
 ///

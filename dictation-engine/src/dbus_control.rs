@@ -1,15 +1,18 @@
 use anyhow::Result;
 use zbus::{interface, ConnectionBuilder};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tokio::sync::{Mutex, watch};
 use tracing::info;
+
+use crate::HealthState;
 
 /// Daemon state enum shared between lib.rs and dbus_control.rs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonState {
     Idle,        // Waiting for StartRecording command, GUI hidden
     Recording,   // Actively recording audio and transcribing, GUI visible
-    Processing,  // Running accurate model and typing, GUI visible with spinner
+    Processing,  // Running transcription and typing, GUI visible with spinner
 }
 
 impl std::fmt::Display for DaemonState {
@@ -26,6 +29,7 @@ impl std::fmt::Display for DaemonState {
 pub struct VoiceDictationService {
     command_sender: Arc<Mutex<tokio::sync::mpsc::Sender<DaemonCommand>>>,
     state_receiver: watch::Receiver<DaemonState>,
+    health_state: Arc<HealthState>,
 }
 
 /// Commands that can be sent from D-Bus to the daemon
@@ -85,26 +89,30 @@ impl VoiceDictationService {
     async fn health_check(&self) -> zbus::fdo::Result<(String, String, String)> {
         info!("D-Bus: HealthCheck called");
 
-        // TODO: Implement actual health tracking for each subsystem
-        // For now, return basic status based on daemon state
-        let state = *self.state_receiver.borrow();
-
-        // GUI health: if daemon is responsive, GUI is healthy
-        let gui_status = if state != DaemonState::Idle {
+        let gui_status = if self.health_state.gui_healthy.load(Ordering::Relaxed) {
             "healthy"
         } else {
-            "idle"
+            "unavailable"
         };
 
-        // Monitor detection: would need actual circuit breaker state
-        // For now, assume healthy if daemon is running
-        let monitor_status = "unknown";
+        let engine_status = if self.health_state.engine_healthy.load(Ordering::Relaxed) {
+            "healthy"
+        } else {
+            "not loaded"
+        };
 
-        // Audio backend: would need actual backend state
-        // For now, assume healthy if daemon is running
-        let audio_status = "unknown";
+        let audio_status = if self.health_state.audio_healthy.load(Ordering::Relaxed) {
+            "healthy"
+        } else {
+            let state = *self.state_receiver.borrow();
+            if state == DaemonState::Recording {
+                "unhealthy"
+            } else {
+                "idle"
+            }
+        };
 
-        Ok((gui_status.to_string(), monitor_status.to_string(), audio_status.to_string()))
+        Ok((gui_status.to_string(), engine_status.to_string(), audio_status.to_string()))
     }
 
     /// Shutdown the daemon gracefully
@@ -120,6 +128,7 @@ impl VoiceDictationService {
 /// Create and register D-Bus service
 pub async fn create_dbus_service(
     state_receiver: watch::Receiver<DaemonState>,
+    health_state: Arc<HealthState>,
 ) -> Result<(
     zbus::Connection,
     Arc<Mutex<tokio::sync::mpsc::Sender<DaemonCommand>>>,
@@ -131,6 +140,7 @@ pub async fn create_dbus_service(
     let service = VoiceDictationService {
         command_sender: Arc::clone(&command_sender),
         state_receiver,
+        health_state,
     };
 
     let connection = ConnectionBuilder::session()?

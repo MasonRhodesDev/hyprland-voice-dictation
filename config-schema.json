@@ -66,42 +66,40 @@
         {
           "id": "language",
           "label": "Language",
-          "description": "Language for speech recognition",
+          "description": "Language for speech recognition (Parakeet supports English only)",
           "type": "enum",
           "options_source": {
             "type": "static",
-            "values": ["en", "es", "fr", "de", "ar", "cn", "ja", "ru", "pt", "it", "nl", "hi"]
+            "values": ["en"]
           },
           "default": "en",
           "ui_widget": "dropdown"
         },
         {
           "id": "preview_model",
-          "label": "Preview Model (Fast)",
-          "description": "Model for real-time GUI feedback during recording. Format: engine:model_name",
+          "label": "Model",
+          "description": "Transcription model. Parakeet is used for both preview and final transcription.",
           "type": "enum",
           "options_source": {
             "type": "script",
-            "command": "voice-dictation list-preview-models ${daemon.language}",
-            "depends_on": ["daemon.language"],
+            "command": "voice-dictation list-models",
             "cache_duration": 3600
           },
-          "default": "vosk:vosk-model-en-us-daanzu-20200905-lgraph",
-          "ui_widget": "dropdown_searchable"
+          "default": "parakeet:default",
+          "ui_widget": "dropdown"
         },
         {
           "id": "final_model",
-          "label": "Final Model (Accurate)",
-          "description": "Model for final accurate transcription. Format: engine:model_name",
+          "label": "Final Model",
+          "description": "Final transcription model (same as preview for Parakeet).",
           "type": "enum",
           "options_source": {
             "type": "script",
-            "command": "voice-dictation list-final-models ${daemon.language}",
-            "depends_on": ["daemon.language"],
+            "command": "voice-dictation list-models",
             "cache_duration": 3600
           },
-          "default": "whisper:ggml-small.en.bin",
-          "ui_widget": "dropdown_searchable"
+          "default": "parakeet:default",
+          "ui_widget": "dropdown"
         },
         {
           "id": "enable_acronyms",

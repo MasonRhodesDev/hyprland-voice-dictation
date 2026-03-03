@@ -4,13 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-# All engines compiled by default - runtime detection determines availability
-# Vosk requires libvosk.so at runtime (checked dynamically)
-# GPU requires CUDA at build time
-default = ["vosk", "parakeet", "slint-gui", "pipewire"]
-vosk = ["dep:vosk"]
-gpu = ["whisper-rs/cuda"]
-parakeet = ["dep:parakeet-rs", "dep:tempfile"]
+default = ["slint-gui", "pipewire"]
 slint-gui = ["dep:slint-gui"]
 pipewire = ["dep:pipewire"]
 
@@ -25,13 +19,9 @@ serde_json = { workspace = true }
 slint-gui = { path = "../slint-gui", optional = true }
 dictation-types = { path = "../dictation-types" }
 shellexpand = "3"
-vosk = { version = "0.3.1", optional = true }
 cpal = "0.15"
 toml = "0.8"
 harper-core = "0.68"
-whisper-rs = "0.15"
-reqwest = { version = "0.12", features = ["blocking"] }
-indicatif = "0.17"
 zbus = "4.1"
 systemd = "0.10"
 dirs = "5"
@@ -44,11 +34,13 @@ chrono = { version = "0.4", features = ["serde"] }
 ort = "=2.0.0-rc.10"
 ndarray = "=0.16.1"
 # Parakeet engine
-parakeet-rs = { version = "0.2", optional = true }
-tempfile = { version = "3", optional = true }
-# SHA256 verification for downloaded models
+parakeet-rs = "0.2"
+tempfile = "3"
+# SHA256 verification for VAD model
 sha2 = "0.10"
 hex = "0.4"
+# VAD model download
+reqwest = { version = "0.12", features = ["blocking"] }
 # PipeWire native audio backend
 pipewire = { version = "0.8", optional = true }
 

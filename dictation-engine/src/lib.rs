@@ -2,13 +2,12 @@ use anyhow::Result;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use serde::Deserialize;
 use std::fs;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use systemd::daemon::{notify, STATE_READY, STATE_WATCHDOG};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
-#[cfg(feature = "vosk")]
-use vosk::Model;
 
 mod audio_backend;
 mod chunking;
@@ -16,20 +15,13 @@ pub mod control_ipc;
 pub mod dbus_control;
 mod debug_audio;
 mod engine;
-mod gpu_detect;
 mod keyboard;
-mod model_manager;
 mod model_selector;
-#[cfg(feature = "parakeet")]
 pub mod parakeet_engine;
 mod post_processing;
-pub mod stream_muxer;
 mod window_detect;
 pub mod user_dictionary;
 pub mod vad;
-#[cfg(feature = "vosk")]
-mod vosk_engine;
-mod whisper_engine;
 
 pub use dictation_types::{GuiControl, GuiState, GuiStatus};
 
@@ -39,9 +31,7 @@ use engine::TranscriptionEngine;
 use keyboard::KeyboardInjector;
 use model_selector::ModelSpec;
 use post_processing::{Pipeline, SanitizationProcessor, TextProcessor};
-use stream_muxer::MuxerConfig;
 use user_dictionary::UserDictionary;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 // Re-export DaemonState from dbus_control
 use dbus_control::DaemonState;
@@ -59,6 +49,7 @@ struct Config {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct DaemonConfig {
     audio_device: String,
     sample_rate: String,
@@ -69,11 +60,10 @@ struct DaemonConfig {
     #[serde(default = "default_activation_mode")]
     activation_mode: String,
 
-    // Unified model selection (format: "engine:model_name")
-    // e.g., "vosk:vosk-model-en-us-daanzu-20200905-lgraph" or "whisper:ggml-small.en.bin"
-    #[serde(default = "default_preview_model")]
+    // Model selection (format: "parakeet:model_name")
+    #[serde(default = "default_model")]
     preview_model: String,
-    #[serde(default = "default_final_model")]
+    #[serde(default = "default_model")]
     final_model: String,
 
     // Post-processing
@@ -96,35 +86,22 @@ struct DaemonConfig {
     #[serde(default = "default_vad_threshold")]
     vad_threshold: f32,
 
-    // Stream muxer (for multi-device capture)
-    #[serde(default = "default_muxer_sticky_duration_ms")]
-    muxer_sticky_duration_ms: u64,
-    #[serde(default = "default_muxer_cooldown_ms")]
-    muxer_cooldown_ms: u64,
-    #[serde(default = "default_muxer_switch_threshold")]
-    muxer_switch_threshold: f32,
-    #[serde(default = "default_muxer_scoring_window_ms")]
-    muxer_scoring_window_ms: u64,
-
     // Trailing audio buffer after stop command (captures final words)
     #[serde(default = "default_trailing_buffer_ms")]
     trailing_buffer_ms: u64,
 
-    // Audio backend selection: "cpal" (default) or "pipewire" (future)
+    // Audio backend selection: "auto" (default), "cpal", or "pipewire"
     #[serde(default = "default_audio_backend")]
     audio_backend: String,
 
     // Idle release timeout: how long to keep mic open after stop before releasing (seconds)
-    // Only applies to backends with releases_on_stop() == true (e.g., cpal)
-    // Set to 0 to release immediately (current behavior)
     #[serde(default = "default_idle_release_timeout_secs")]
     idle_release_timeout_secs: u64,
 }
 
 fn default_language() -> String { "en".to_string() }
 fn default_activation_mode() -> String { "toggle".to_string() }
-fn default_preview_model() -> String { "vosk:vosk-model-en-us-daanzu-20200905-lgraph".to_string() }
-fn default_final_model() -> String { "whisper:ggml-small.en.bin".to_string() }
+fn default_model() -> String { "parakeet:default".to_string() }
 fn default_enable_acronyms() -> bool { true }
 fn default_enable_punctuation() -> bool { true }
 fn default_enable_grammar() -> bool { true }
@@ -132,10 +109,6 @@ fn default_silence_threshold_db() -> f32 { -60.0 }
 fn default_debug_audio() -> bool { false }
 fn default_vad_enabled() -> bool { true }
 fn default_vad_threshold() -> f32 { 0.5 }
-fn default_muxer_sticky_duration_ms() -> u64 { 500 }
-fn default_muxer_cooldown_ms() -> u64 { 200 }
-fn default_muxer_switch_threshold() -> f32 { 0.15 }
-fn default_muxer_scoring_window_ms() -> u64 { 100 }
 fn default_trailing_buffer_ms() -> u64 { 750 }
 fn default_audio_backend() -> String { "auto".to_string() }
 fn default_idle_release_timeout_secs() -> u64 { 30 }
@@ -216,107 +189,36 @@ async fn watch_dictionary_files(user_dict: Arc<UserDictionary>) -> Result<()> {
     Ok(())
 }
 
-
-/// Accurate model wrapper for correction pass.
-enum AccurateModel {
-    #[cfg(feature = "vosk")]
-    Vosk(Model),
-    Whisper(WhisperContext),
-    #[cfg(feature = "parakeet")]
-    Parakeet(Arc<dyn TranscriptionEngine>),
+/// Health state shared between subsystems and D-Bus service.
+pub struct HealthState {
+    /// Whether audio is flowing (updated by audio forwarding thread)
+    pub audio_healthy: AtomicBool,
+    /// Whether the engine has produced a successful transcription
+    pub engine_healthy: AtomicBool,
+    /// Whether the GUI is available
+    pub gui_healthy: AtomicBool,
+    /// Timestamp (ms since epoch) of last audio received
+    pub last_audio_timestamp_ms: AtomicU64,
+    /// Last error message (if any)
+    pub last_error: RwLock<Option<String>>,
 }
 
-/// Configuration for lazy-loading the accurate model using ModelSpec
-#[derive(Clone)]
-struct AccurateModelConfig {
-    /// The model specification (e.g., "whisper:ggml-small.en.bin")
-    spec: ModelSpec,
-}
-
-impl AccurateModelConfig {
-    /// Load the accurate model (blocking operation, run in spawn_blocking)
-    fn load(&self) -> Option<AccurateModel> {
-        use model_selector::EngineType;
-
-        match self.spec.engine {
-            #[cfg(feature = "vosk")]
-            EngineType::Vosk => {
-                let model_path = self.spec.model_path();
-                info!("Loading Vosk accurate model from: {:?}", model_path);
-                if !model_path.exists() {
-                    error!("Vosk model not found at {:?}", model_path);
-                    return None;
-                }
-                Model::new(model_path.to_str()?).map(AccurateModel::Vosk)
-            }
-            #[cfg(not(feature = "vosk"))]
-            EngineType::Vosk => {
-                error!("Vosk support not compiled in. Select a whisper or parakeet model.");
-                None
-            }
-            EngineType::Whisper => {
-                info!("Ensuring Whisper model available: {}", self.spec.model_name);
-
-                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                let whisper_model_dir = format!("{}/.config/voice-dictation/models/whisper", home);
-
-                // Ensure model exists, download if necessary
-                let model_path = match model_manager::ensure_whisper_model(
-                    &self.spec.model_name,
-                    &whisper_model_dir,
-                ) {
-                    Ok(path) => path,
-                    Err(e) => {
-                        error!("Failed to obtain Whisper model: {}", e);
-                        error!("Try running: ./scripts/download-whisper-models.sh");
-                        return None;
-                    }
-                };
-
-                info!("Loading Whisper model from: {}", model_path.display());
-
-                let model_path_str = match model_path.to_str() {
-                    Some(s) => s,
-                    None => {
-                        error!("Whisper model path contains invalid UTF-8");
-                        return None;
-                    }
-                };
-
-                // Auto-detect GPU and use if available
-                let params = if gpu_detect::cuda_available() {
-                    info!("CUDA detected, enabling GPU acceleration for Whisper");
-                    WhisperContextParameters::default()
-                } else {
-                    WhisperContextParameters::default()
-                };
-
-                WhisperContext::new_with_params(model_path_str, params)
-                    .map(AccurateModel::Whisper)
-                    .map_err(|e| {
-                        error!("Whisper model load failed: {:?}", e);
-                        e
-                    })
-                    .ok()
-            }
-            #[cfg(feature = "parakeet")]
-            EngineType::Parakeet => {
-                // Create Parakeet engine for accurate transcription
-                info!("Loading Parakeet as accurate model...");
-                match self.spec.create_engine(16000) {
-                    Ok(engine) => Some(AccurateModel::Parakeet(engine)),
-                    Err(e) => {
-                        error!("Failed to load Parakeet accurate model: {:?}", e);
-                        None
-                    }
-                }
-            }
-            #[cfg(not(feature = "parakeet"))]
-            EngineType::Parakeet => {
-                error!("Parakeet support not compiled in.");
-                None
-            }
+impl HealthState {
+    fn new() -> Self {
+        Self {
+            audio_healthy: AtomicBool::new(false),
+            engine_healthy: AtomicBool::new(false),
+            gui_healthy: AtomicBool::new(false),
+            last_audio_timestamp_ms: AtomicU64::new(0),
+            last_error: RwLock::new(None),
         }
+    }
+
+    /// Check if all subsystems are healthy enough to send watchdog keepalive
+    pub fn is_healthy(&self) -> bool {
+        // Engine health is the critical check - if it loaded, we're functional
+        // Audio health is only relevant during recording
+        self.engine_healthy.load(Ordering::Relaxed)
     }
 }
 
@@ -330,10 +232,6 @@ struct DeviceManagerConfig {
 }
 
 /// Manages audio devices with idle timeout and hotplug support.
-///
-/// The idle timeout allows fast startup when rapidly toggling dictation,
-/// while still releasing the microphone for other apps (browsers) after
-/// a period of inactivity.
 struct DeviceManager {
     config: DeviceManagerConfig,
     backend: Option<Box<dyn AudioBackend>>,
@@ -421,27 +319,22 @@ impl DeviceManager {
         Ok(())
     }
 
-    /// Stop recording. For backends that release on stop, sets stopped_at timestamp
-    /// to track idle time for deferred release.
+    /// Stop recording.
     fn stop(&mut self) -> Result<()> {
         if let Some(ref backend) = self.backend {
             backend.stop()?;
 
-            // Check if this backend needs to release the mic
             if backend.releases_on_stop() {
                 let timeout_secs = self.config.idle_release_timeout_secs;
                 if timeout_secs == 0 {
-                    // Immediate release (old behavior)
                     self.backend = None;
                     self.stopped_at = None;
                     info!("DeviceManager: Audio backend released immediately");
                 } else {
-                    // Mark when we stopped for idle timeout tracking
                     self.stopped_at = Some(Instant::now());
                     info!("DeviceManager: Audio stopped, will release after {}s idle", timeout_secs);
                 }
             } else {
-                // Backend supports sharing, keep it open indefinitely
                 self.stopped_at = None;
                 info!("DeviceManager: Audio stopped (backend kept open for sharing)");
             }
@@ -450,8 +343,6 @@ impl DeviceManager {
     }
 
     /// Flush any buffered audio data from the backend.
-    ///
-    /// Called after stop() to ensure all in-flight samples are delivered.
     fn flush(&self) -> Result<()> {
         if let Some(ref backend) = self.backend {
             backend.flush()?;
@@ -460,7 +351,6 @@ impl DeviceManager {
     }
 
     /// Check if idle timeout has expired and release backend if so.
-    /// Returns true if backend was released.
     fn check_idle_timeout(&mut self) -> bool {
         if let Some(stopped_at) = self.stopped_at {
             let idle_duration = stopped_at.elapsed();
@@ -475,26 +365,10 @@ impl DeviceManager {
     }
 
     /// Release the audio backend (drop streams, release microphone).
-    /// Called by idle timer when timeout expires.
     fn release(&mut self) {
         if self.backend.take().is_some() {
             info!("DeviceManager: Audio backend released after idle timeout");
         }
-    }
-
-    /// Check if a release is pending (backend exists but not recording)
-    fn has_backend(&self) -> bool {
-        self.backend.is_some()
-    }
-
-    /// Get the idle release timeout
-    fn idle_release_timeout(&self) -> Duration {
-        Duration::from_secs(self.config.idle_release_timeout_secs)
-    }
-
-    /// Check if this backend should release on stop
-    fn should_release_on_stop(&self) -> bool {
-        self.backend.as_ref().map_or(false, |b| b.releases_on_stop())
     }
 
     /// Spawn a background task to watch for device changes
@@ -502,7 +376,6 @@ impl DeviceManager {
         let needs_recreate = Arc::clone(&self.needs_recreate);
 
         std::thread::spawn(move || {
-            // Watch /dev/snd for device changes (Linux-specific)
             let snd_path = std::path::Path::new("/dev/snd");
             if !snd_path.exists() {
                 warn!("DeviceManager: /dev/snd not found, device hotplug detection disabled");
@@ -544,8 +417,7 @@ impl DeviceManager {
 }
 
 /// Drain remaining samples from audio channel with timeout.
-///
-/// Ensures all in-flight audio reaches the engine before finalization.
+#[allow(dead_code)]
 async fn drain_audio_channel(
     audio_rx: &Arc<Mutex<mpsc::UnboundedReceiver<Vec<i16>>>>,
     engine: &Arc<dyn TranscriptionEngine>,
@@ -589,10 +461,7 @@ pub async fn run() -> Result<()> {
         )
         .init();
 
-    #[cfg(feature = "vosk")]
-    info!("Starting preview-based Vosk dictation engine");
-    #[cfg(not(feature = "vosk"))]
-    info!("Starting Whisper-only dictation engine");
+    info!("Starting Parakeet dictation engine");
 
     let config = load_config().unwrap_or_else(|e| {
         warn!("Failed to load config: {}, using defaults", e);
@@ -602,8 +471,8 @@ pub async fn run() -> Result<()> {
                 sample_rate: "16000".to_string(),
                 language: default_language(),
                 activation_mode: default_activation_mode(),
-                preview_model: default_preview_model(),
-                final_model: default_final_model(),
+                preview_model: default_model(),
+                final_model: default_model(),
                 enable_acronyms: default_enable_acronyms(),
                 enable_punctuation: default_enable_punctuation(),
                 enable_grammar: default_enable_grammar(),
@@ -611,10 +480,6 @@ pub async fn run() -> Result<()> {
                 debug_audio: default_debug_audio(),
                 vad_enabled: default_vad_enabled(),
                 vad_threshold: default_vad_threshold(),
-                muxer_sticky_duration_ms: default_muxer_sticky_duration_ms(),
-                muxer_cooldown_ms: default_muxer_cooldown_ms(),
-                muxer_switch_threshold: default_muxer_switch_threshold(),
-                muxer_scoring_window_ms: default_muxer_scoring_window_ms(),
                 trailing_buffer_ms: default_trailing_buffer_ms(),
                 audio_backend: default_audio_backend(),
                 idle_release_timeout_secs: default_idle_release_timeout_secs(),
@@ -638,7 +503,6 @@ pub async fn run() -> Result<()> {
     // Initialize user dictionary
     let user_dict = Arc::new(UserDictionary::new().unwrap_or_else(|e| {
         warn!("Failed to initialize user dictionary: {}, spell checking will use defaults only", e);
-        // Create empty dictionary that won't load any words
         UserDictionary::empty()
     }));
     info!("User dictionary initialized");
@@ -651,37 +515,23 @@ pub async fn run() -> Result<()> {
         }
     });
 
-    // Parse model specifications (format: "engine:model_name")
-    let preview_spec = ModelSpec::parse(&config.daemon.preview_model)
+    // Parse model specification (Parakeet only)
+    let model_spec = ModelSpec::parse(&config.daemon.preview_model)
         .map_err(|e| anyhow::anyhow!("Invalid preview_model '{}': {}", config.daemon.preview_model, e))?;
-    let final_spec = ModelSpec::parse(&config.daemon.final_model)
-        .map_err(|e| anyhow::anyhow!("Invalid final_model '{}': {}", config.daemon.final_model, e))?;
 
-    info!("Preview model: {} ({})", preview_spec.model_name, preview_spec.engine);
-    info!("Final model: {} ({})", final_spec.model_name, final_spec.engine);
+    info!("Model: {}", model_spec);
 
-    // Check if preview and final models are identical (skip accurate pass if same)
-    let same_model_for_preview_and_final = preview_spec.engine == final_spec.engine
-        && preview_spec.model_name == final_spec.model_name;
-    if same_model_for_preview_and_final {
-        info!("Preview and final models are identical - accurate pass will be skipped");
-    }
-
-    // Validate that configured models are available
-    if !preview_spec.is_available() {
+    // Validate that configured model is available
+    if !model_spec.is_available() {
         return Err(anyhow::anyhow!(
-            "Preview model '{}' not found at {:?}. Check that the model is installed.",
+            "Model '{}' not found at {:?}. Check that the model is installed.",
             config.daemon.preview_model,
-            preview_spec.model_path()
+            model_spec.model_path()
         ));
     }
-    if !final_spec.is_available() {
-        return Err(anyhow::anyhow!(
-            "Final model '{}' not found at {:?}. Check that the model is installed.",
-            config.daemon.final_model,
-            final_spec.model_path()
-        ));
-    }
+
+    // Create shared health state
+    let health_state = Arc::new(HealthState::new());
 
     // Create audio channel (shared between DeviceManager and processing)
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
@@ -699,16 +549,6 @@ pub async fn run() -> Result<()> {
         Some(config.daemon.audio_device.clone())
     };
 
-    // Create muxer config
-    let muxer_config = MuxerConfig {
-        sticky_duration_ms: config.daemon.muxer_sticky_duration_ms,
-        cooldown_ms: config.daemon.muxer_cooldown_ms,
-        switch_threshold: config.daemon.muxer_switch_threshold,
-        scoring_window_ms: config.daemon.muxer_scoring_window_ms,
-        sample_rate,
-        debug_audio: config.daemon.debug_audio,
-    };
-
     // Parse audio backend type
     let backend_type = BackendType::from_str(&config.daemon.audio_backend)
         .unwrap_or_else(|| {
@@ -724,7 +564,6 @@ pub async fn run() -> Result<()> {
             device_name: audio_device_name,
             sample_rate,
             silence_threshold,
-            muxer_config,
         },
         idle_release_timeout_secs: config.daemon.idle_release_timeout_secs,
     };
@@ -738,10 +577,8 @@ pub async fn run() -> Result<()> {
 
     // Spawn integrated GUI
     info!("Spawning integrated GUI...");
-    // Pass sender clones to GUI - it will subscribe there and keep senders alive for channel lifetime
     let gui_control_tx_gui = gui_control_tx.clone();
     let spectrum_tx_gui = spectrum_tx.clone();
-    // Get runtime handle to pass to GUI for spawning async tasks
     let runtime_handle = tokio::runtime::Handle::current();
 
     let _gui_handle = tokio::task::spawn_blocking(move || {
@@ -788,50 +625,27 @@ pub async fn run() -> Result<()> {
         }
     };
 
+    health_state.gui_healthy.store(gui_available, Ordering::Relaxed);
+
     if !gui_available {
         info!("Running in headless mode (no visual overlay)");
     }
 
-    // Pre-load preview engine at startup for instant recording start
-    // This runs before D-Bus registration so blocking is acceptable
-    info!("Pre-loading preview engine (blocking call before D-Bus)...");
-    let preview_engine: Arc<dyn TranscriptionEngine> = preview_spec.create_engine(sample_rate)?;
-    info!("Preview engine loaded and ready");
+    // Pre-load engine at startup for instant recording start
+    info!("Pre-loading Parakeet engine (blocking call before D-Bus)...");
+    let preview_engine: Arc<dyn TranscriptionEngine> = model_spec.create_engine(sample_rate)?;
+    info!("Parakeet engine loaded and ready");
 
-    // Lazy model loading: store config, load on first confirm
-    let accurate_model_config = AccurateModelConfig {
-        spec: final_spec.clone(),
-    };
-    let accurate_model: Arc<RwLock<Option<AccurateModel>>> = Arc::new(RwLock::new(None));
+    // Mark engine as healthy after successful load
+    health_state.engine_healthy.store(true, Ordering::Relaxed);
 
     // Create watch channel for state sharing with D-Bus
     let (state_tx, state_rx) = tokio::sync::watch::channel(DaemonState::Idle);
 
-    // Create D-Bus service for control commands
-    // IMPORTANT: Must keep connection alive for D-Bus service to remain registered
-    let (dbus_conn, _command_sender, mut command_rx) = dbus_control::create_dbus_service(state_rx).await?;
-    let _dbus_conn = dbus_conn; // Keep alive but mark unused
-
-    // Pre-load accurate model in background (only if different from preview)
-    if !same_model_for_preview_and_final {
-        info!("Pre-loading accurate model in background...");
-        let config_clone = accurate_model_config.clone();
-        let accurate_model_clone = Arc::clone(&accurate_model);
-        tokio::task::spawn(async move {
-            let loaded = tokio::task::spawn_blocking(move || {
-                config_clone.load()
-            }).await.ok().flatten();
-
-            if let Some(model) = loaded {
-                *accurate_model_clone.write().await = Some(model);
-                info!("Accurate model pre-loaded successfully (background)");
-            } else {
-                tracing::warn!("Failed to pre-load accurate model (will retry on first use)");
-            }
-        });
-    } else {
-        info!("Same model for preview/final - no accurate model pre-load needed");
-    }
+    // Create D-Bus service for control commands with health state
+    let (dbus_conn, _command_sender, mut command_rx) =
+        dbus_control::create_dbus_service(state_rx, Arc::clone(&health_state)).await?;
+    let _dbus_conn = dbus_conn; // Keep alive
 
     info!("Daemon initialized - entering idle state (GUI hidden)");
 
@@ -845,19 +659,26 @@ pub async fn run() -> Result<()> {
     let mut session: Option<RecordingSession> = None;
     let mut audio_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut preview_task: Option<tokio::task::JoinHandle<()>> = None;
-    // Cancellation channel for graceful task shutdown (keeps spectrum channel alive)
+    // Cancellation channel for graceful task shutdown
     let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
 
     // Watchdog keepalive: send every 15 seconds
     let mut last_watchdog = Instant::now();
     let watchdog_interval = Duration::from_secs(15);
 
+    // Audio health monitoring constants
+    let _audio_health_timeout = Duration::from_secs(3);
+
     // ===== PERSISTENT STATE MACHINE LOOP =====
     loop {
         // Send systemd watchdog keepalive if interval elapsed
         if last_watchdog.elapsed() >= watchdog_interval {
-            if let Err(e) = notify(false, [(STATE_WATCHDOG, "1")].iter()) {
-                debug!("Failed to send watchdog keepalive: {}", e);
+            if health_state.is_healthy() {
+                if let Err(e) = notify(false, [(STATE_WATCHDOG, "1")].iter()) {
+                    debug!("Failed to send watchdog keepalive: {}", e);
+                }
+            } else {
+                warn!("Skipping watchdog keepalive - subsystem unhealthy, systemd will restart us");
             }
             last_watchdog = Instant::now();
         }
@@ -876,7 +697,6 @@ pub async fn run() -> Result<()> {
                             info!("Received StartRecording command");
 
                             // Drain any stale audio data from the channel before starting
-                            // This prevents audio captured before the user pressed record from being transcribed
                             {
                                 let mut rx = audio_rx_shared.lock().await;
                                 let mut drained = 0;
@@ -892,11 +712,14 @@ pub async fn run() -> Result<()> {
                             device_manager.start()?;
                             info!("Audio capture started (pre-loaded streams)");
 
+                            // Mark audio as healthy at start
+                            health_state.audio_healthy.store(true, Ordering::Relaxed);
+
                             // Reset the pre-loaded engine for new session
                             preview_engine.reset();
                             let session_engine = Arc::clone(&preview_engine);
 
-                            // Signal UI to show - after audio is ready so user can start talking immediately
+                            // Signal UI to show
                             gui_control_tx.send(GuiControl::SetListening)
                                 .map_err(|e| anyhow::anyhow!("Failed to send SetListening: {}", e))?;
 
@@ -915,6 +738,7 @@ pub async fn run() -> Result<()> {
                             let audio_rx_clone = Arc::clone(&audio_rx_shared);
                             let mut cancel_rx = cancel_tx.subscribe();
                             let trailing_buffer_ms = config.daemon.trailing_buffer_ms;
+                            let health_clone = Arc::clone(&health_state);
                             audio_task = Some(tokio::spawn(async move {
                                 let mut buffer = Vec::new();
                                 let trailing_duration = Duration::from_millis(trailing_buffer_ms);
@@ -934,7 +758,6 @@ pub async fn run() -> Result<()> {
                                         biased;
                                         _ = cancel_rx.changed() => {
                                             if *cancel_rx.borrow() && trailing_deadline.is_none() {
-                                                // Start trailing buffer period instead of stopping immediately
                                                 debug!("Audio task: cancellation received, starting trailing capture");
                                                 trailing_deadline = Some(tokio::time::Instant::now() + trailing_duration);
                                             }
@@ -945,6 +768,14 @@ pub async fn run() -> Result<()> {
                                         } => {
                                             match samples {
                                                 Some(samples) => {
+                                                    // Update health timestamp
+                                                    let now_ms = std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_millis() as u64;
+                                                    health_clone.last_audio_timestamp_ms.store(now_ms, Ordering::Relaxed);
+                                                    health_clone.audio_healthy.store(true, Ordering::Relaxed);
+
                                                     let samples_f32: Vec<f32> = samples.iter().map(|&s| s as f32 / 32768.0).collect();
                                                     buffer.extend_from_slice(&samples_f32);
 
@@ -973,11 +804,9 @@ pub async fn run() -> Result<()> {
                             let gui_control_tx_preview = gui_control_tx.clone();
                             let enable_acronyms = config.daemon.enable_acronyms;
                             let enable_punctuation = config.daemon.enable_punctuation;
-                            // Skip grammar checking in preview for speed (saves ~10-20ms per update)
                             let user_dict_preview = Arc::clone(&user_dict);
                             let mut cancel_rx_preview = cancel_tx.subscribe();
                             preview_task = Some(tokio::spawn(async move {
-                                // 100ms polling for responsive text updates (was 200ms)
                                 let mut check_interval = tokio::time::interval(std::time::Duration::from_millis(100));
                                 let pipeline = Pipeline::from_config_with_dict(
                                     enable_acronyms,
@@ -986,7 +815,6 @@ pub async fn run() -> Result<()> {
                                     Some(user_dict_preview),
                                 );
 
-                                // Track text changes for VAD state sync
                                 let mut last_text = String::new();
                                 let mut last_text_change = Instant::now();
                                 const TEXT_SETTLED_THRESHOLD_MS: u64 = 300;
@@ -1015,14 +843,12 @@ pub async fn run() -> Result<()> {
                                                         debug!("[Preview] Raw: '{}' -> Processed: '{}'", text_raw, text_processed);
                                                     }
 
-                                                    // Track text changes for VAD state
                                                     let text_changed = text_processed != last_text;
                                                     if text_changed {
                                                         last_text = text_processed.clone();
                                                         last_text_change = Instant::now();
                                                     }
 
-                                                    // Determine VAD state
                                                     let text_settled = last_text_change.elapsed().as_millis() >= TEXT_SETTLED_THRESHOLD_MS as u128;
                                                     let is_speaking = !text_processed.is_empty() && !text_settled;
 
@@ -1031,7 +857,6 @@ pub async fn run() -> Result<()> {
                                                         is_final: false,
                                                     });
 
-                                                    // Send VAD state for visual sync
                                                     let _ = gui_control_tx_preview.send(GuiControl::UpdateVadState {
                                                         is_speaking,
                                                         text_settled,
@@ -1051,7 +876,6 @@ pub async fn run() -> Result<()> {
                         }
                         DaemonCommand::Shutdown => {
                             info!("Received Shutdown command");
-                            // Send GUI exit
                             let _ = gui_control_tx.send(GuiControl::Exit);
                             break;
                         }
@@ -1060,7 +884,6 @@ pub async fn run() -> Result<()> {
                         }
                     }
                     Ok(None) => {
-                        // Channel closed
                         error!("D-Bus command channel closed");
                         break;
                     }
@@ -1071,6 +894,29 @@ pub async fn run() -> Result<()> {
             }
 
             DaemonState::Recording => {
+                // Audio health monitoring: check if audio task has crashed
+                if let Some(ref task) = audio_task {
+                    if task.is_finished() {
+                        error!("Audio task died unexpectedly - recovering to Idle");
+                        health_state.audio_healthy.store(false, Ordering::Relaxed);
+                        *health_state.last_error.write().await = Some("Audio task crashed during recording".to_string());
+
+                        // Clean up
+                        audio_task = None;
+                        if let Some(task) = preview_task.take() {
+                            let _ = cancel_tx.send(true);
+                            let _ = task.await;
+                        }
+                        let _ = device_manager.stop();
+                        let _ = gui_control_tx.send(GuiControl::SetHidden);
+                        session = None;
+                        daemon_state = DaemonState::Idle;
+                        let _ = state_tx.send(daemon_state);
+                        info!("Recovered to Idle state after audio task crash");
+                        continue;
+                    }
+                }
+
                 // Check for D-Bus commands while recording (non-blocking)
                 match tokio::time::timeout(Duration::from_millis(100), command_rx.recv()).await {
                     Ok(Some(cmd)) => match cmd {
@@ -1085,11 +931,10 @@ pub async fn run() -> Result<()> {
                             // 1. Stop audio backends (pause streams)
                             let _ = device_manager.stop();
 
-                            // 2. Flush backend buffers and muxer to forward any buffered samples
+                            // 2. Flush backend buffers
                             let _ = device_manager.flush();
 
                             // 3. Signal audio task to start trailing period
-                            // The audio task will continue processing for trailing_buffer_ms
                             let _ = cancel_tx.send(true);
 
                             // 4. Wait for tasks to finish (includes trailing buffer period)
@@ -1111,17 +956,10 @@ pub async fn run() -> Result<()> {
                         DaemonCommand::Shutdown => {
                             info!("Shutdown during recording");
 
-                            // 1. Stop audio backends (pause streams)
                             let _ = device_manager.stop();
-
-                            // 2. Flush backend buffers and muxer to forward any buffered samples
                             let _ = device_manager.flush();
-
-                            // 3. Signal audio task to start trailing period
-                            // The audio task will continue processing for trailing_buffer_ms
                             let _ = cancel_tx.send(true);
 
-                            // 4. Wait for tasks to finish (includes trailing buffer period)
                             if let Some(task) = audio_task.take() {
                                 let _ = task.await;
                             }
@@ -1156,15 +994,13 @@ pub async fn run() -> Result<()> {
                 // 1. Stop audio backends (pause streams)
                 let _ = device_manager.stop();
 
-                // 2. Flush backend buffers and muxer to forward any buffered samples
+                // 2. Flush backend buffers
                 let _ = device_manager.flush();
 
                 // 3. Signal audio task to start trailing period
-                // The audio task will continue processing for trailing_buffer_ms
                 let _ = cancel_tx.send(true);
 
                 // 4. Wait for audio task to finish (includes trailing buffer period)
-                // The task continues consuming from audio_rx and processing samples
                 if let Some(task) = audio_task.take() {
                     let _ = task.await;
                 }
@@ -1182,119 +1018,9 @@ pub async fn run() -> Result<()> {
                 info!("Audio buffer contains {} samples", audio_buffer_len);
 
                 if audio_buffer_len > 0 {
-                    // Get preview text (for debug logging and potential reuse)
+                    // Same model for preview and final - use cached text (no re-transcription)
                     let preview_text = session_engine.as_ref().get_cached_text();
-                    info!("Preview text: '{}'", preview_text);
-
-                    // Determine final text: skip accurate pass if models are identical
-                    let accurate_result = if same_model_for_preview_and_final {
-                        // Same model - use cached preview text (no re-transcription needed)
-                        info!("Same model mode - skipping re-transcription");
-                        preview_text.clone()
-                    } else {
-                        // Different model - run accurate transcription
-
-                        // Lazy load accurate model if not already loaded
-                        {
-                            let needs_load = accurate_model.read().await.is_none();
-                            if needs_load {
-                                info!("Loading accurate model (first use)...");
-                                let config_clone = accurate_model_config.clone();
-                                let loaded = tokio::task::spawn_blocking(move || {
-                                    config_clone.load()
-                                }).await.ok().flatten();
-
-                                if loaded.is_some() {
-                                    *accurate_model.write().await = loaded;
-                                    info!("Accurate model loaded successfully");
-                                } else {
-                                    return Err(anyhow::anyhow!("Failed to load accurate model"));
-                                }
-                            }
-                        }
-
-                        // Get read lock on the model for transcription
-                        let model_guard = accurate_model.read().await;
-                        let model_ref = model_guard.as_ref()
-                            .ok_or_else(|| anyhow::anyhow!("Accurate model not loaded"))?;
-
-                        info!("Running correction pass...");
-                        let result = match model_ref {
-                            #[cfg(feature = "vosk")]
-                            AccurateModel::Vosk(vosk_model) => {
-                                // Get audio buffer from session engine
-                                let audio_buffer = session_engine.get_audio_buffer();
-                                info!("Running Vosk accurate transcription on {:.2}s of audio...",
-                                    audio_buffer.len() as f32 / sample_rate as f32);
-
-                                // Create a new recognizer for this transcription
-                                let mut recognizer = vosk::Recognizer::new(vosk_model, sample_rate as f32)
-                                    .ok_or_else(|| anyhow::anyhow!("Failed to create Vosk recognizer"))?;
-
-                                // Process all audio in one go for accurate transcription
-                                recognizer.accept_waveform(&audio_buffer);
-                                let final_result = recognizer.final_result();
-
-                                // Extract text from result
-                                match final_result {
-                                    vosk::CompleteResult::Single(single) => single.text.to_string(),
-                                    vosk::CompleteResult::Multiple(multi) => {
-                                        multi.alternatives.first()
-                                            .map(|a| a.text.to_string())
-                                            .unwrap_or_default()
-                                    }
-                                }
-                            }
-                            AccurateModel::Whisper(whisper_context) => {
-                                let audio_buffer = session_engine.as_ref().get_audio_buffer();
-                                info!("Converting {} audio samples to float...", audio_buffer.len());
-                                let mut float_samples = vec![0.0f32; audio_buffer.len()];
-                                whisper_rs::convert_integer_to_float_audio(&audio_buffer, &mut float_samples)
-                                    .map_err(|e| anyhow::anyhow!("Audio conversion failed: {:?}", e))?;
-
-                                let mut state = whisper_context
-                                    .create_state()
-                                    .map_err(|e| anyhow::anyhow!("Failed to create Whisper state: {:?}", e))?;
-
-                                let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-                                params.set_language(Some("en"));
-                                params.set_print_special(false);
-                                params.set_print_progress(false);
-                                params.set_print_realtime(false);
-                                params.set_print_timestamps(false);
-
-                                info!("Running Whisper transcription on {:.2}s of audio...",
-                                    float_samples.len() as f32 / sample_rate as f32);
-
-                                state.full(params, &float_samples[..])
-                                    .map_err(|e| anyhow::anyhow!("Whisper transcription failed: {:?}", e))?;
-
-                                let segments: Vec<String> = state
-                                    .as_iter()
-                                    .filter_map(|segment| {
-                                        segment.to_str_lossy().ok().map(|text| text.trim().to_string())
-                                    })
-                                    .filter(|text| !text.is_empty())
-                                    .collect();
-
-                                segments.join(" ")
-                            }
-                            #[cfg(feature = "parakeet")]
-                            AccurateModel::Parakeet(parakeet_engine) => {
-                                // Feed audio to Parakeet and get final result
-                                let audio_buffer = session_engine.get_audio_buffer();
-                                info!("Running Parakeet accurate transcription on {:.2}s of audio...",
-                                    audio_buffer.len() as f32 / sample_rate as f32);
-
-                                // Reset and process audio through Parakeet
-                                parakeet_engine.reset();
-                                parakeet_engine.process_audio(&audio_buffer)?;
-                                parakeet_engine.get_final_result()?
-                            }
-                        };
-                        info!("[Accurate] Raw: '{}'", result);
-                        result
-                    };
+                    info!("Transcription: '{}'", preview_text);
 
                     // Apply post-processing pipeline
                     let pipeline = Pipeline::from_config_with_dict(
@@ -1303,10 +1029,10 @@ pub async fn run() -> Result<()> {
                         config.daemon.enable_grammar,
                         Some(Arc::clone(&user_dict)),
                     );
-                    let processed_result = pipeline.process(&accurate_result)?;
+                    let processed_result = pipeline.process(&preview_text)?;
 
-                    if !pipeline.is_empty() && accurate_result != processed_result {
-                        info!("[Accurate] Processed: '{}'", processed_result);
+                    if !pipeline.is_empty() && preview_text != processed_result {
+                        info!("[Final] Processed: '{}'", processed_result);
                     }
 
                     // Save debug audio if enabled
@@ -1321,9 +1047,9 @@ pub async fn run() -> Result<()> {
                             active_device: Some(config.daemon.audio_device.clone()),
                             preview_text: preview_text.clone(),
                             final_text: processed_result.clone(),
-                            preview_engine: format!("{}", preview_spec.engine),
-                            accurate_engine: format!("{}", final_spec.engine),
-                            same_model_used: same_model_for_preview_and_final,
+                            preview_engine: "parakeet".to_string(),
+                            accurate_engine: "parakeet".to_string(),
+                            same_model_used: true,
                         };
                         if let Err(e) = debug_audio::save_debug_audio(&audio_buffer, sample_rate, metadata) {
                             warn!("Failed to save debug audio: {}", e);
@@ -1336,7 +1062,6 @@ pub async fn run() -> Result<()> {
                     let sanitized_result = sanitizer.process(&processed_result)?;
 
                     // Copy to clipboard as backup (wl-copy for Wayland)
-                    // Use spawn() not output() - wl-copy stays running to serve clipboard
                     match tokio::process::Command::new("wl-copy")
                         .arg(&sanitized_result)
                         .stdin(std::process::Stdio::null())
@@ -1354,7 +1079,7 @@ pub async fn run() -> Result<()> {
 
                     info!("Typing final text ({:?} mode)...", app_category);
                     keyboard.type_text(&sanitized_result).await?;
-                    info!("✓ Typed!");
+                    info!("Typed!");
 
                     // Send to GUI via channel
                     gui_control_tx.send(GuiControl::SetClosing)

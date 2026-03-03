@@ -7,21 +7,22 @@ use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
-
-use crate::stream_muxer::StreamMuxer;
 
 use super::{AudioBackend, AudioBackendConfig, AudioBackendFactory, DeviceInfo};
 
 /// cpal-based audio capture backend.
 pub struct CpalBackend {
     streams: Vec<Stream>,
-    #[allow(dead_code)] // Kept alive for stream selection; may be used for debug finalization
-    muxer: Arc<Mutex<StreamMuxer>>,
     /// Tracks stream IDs that have errored (for log-once behavior)
     errored_streams: Arc<Mutex<HashSet<String>>>,
+    /// Timestamp (ms since epoch) of last successful audio send, for health monitoring
+    last_audio_timestamp: Arc<AtomicU64>,
+    /// Count of dropped samples due to channel backpressure
+    samples_dropped: Arc<AtomicU64>,
 }
 
 impl CpalBackend {
@@ -45,99 +46,52 @@ impl CpalBackend {
     ) -> Result<Self> {
         let host = cpal::default_host();
 
-        // Determine which devices to use
-        // Fast path: for "default" mode, skip slow device enumeration
+        // Determine which device to use (single device only)
         let device_name = config.device_name.as_deref();
-        let devices_to_use: Vec<_> = match device_name {
+        let device = match device_name {
             // "default" or None: use system default directly (fast path)
             None | Some("default") => {
                 info!("Using system default audio device (fast path)");
-                let mut found = Vec::new();
-                if let Some(default) = host.default_input_device() {
-                    if let Ok(name) = default.name() {
-                        info!("Default device: '{}'", name);
-                    }
-                    found.push(default);
+                let dev = host.default_input_device()
+                    .ok_or_else(|| anyhow::anyhow!("No default input device available"))?;
+                if let Ok(name) = dev.name() {
+                    info!("Default device: '{}'", name);
                 }
-                found
+                dev
             }
-            // "all" mode: capture from pipewire + all hardware devices (slow path)
-            // StreamMuxer selects the best stream in real-time
+            // "all" is no longer supported, fall back to default
             Some("all") => {
-                info!("Multi-device mode: enumerating audio devices...");
-                let mut real_devices = Vec::new();
-                if let Ok(devices) = host.input_devices() {
-                    for device in devices {
-                        if let Ok(name) = device.name() {
-                            let is_real = Self::is_real_input_device(&name);
-                            info!(
-                                "  - '{}' {}",
-                                name,
-                                if is_real { "(will capture)" } else { "(skipped)" }
-                            );
-                            if is_real {
-                                real_devices.push(device);
-                            }
-                        }
-                    }
-                }
-
-                let mut devices = Vec::new();
-                for device in real_devices {
-                    if let Ok(name) = device.name() {
-                        // Include pipewire (routes to default) and all hardware devices
-                        if name == "pipewire" || name.starts_with("sysdefault:CARD=") {
-                            devices.push(device);
-                        }
-                    }
-                }
-
-                if devices.is_empty() {
-                    if let Some(default) = host.default_input_device() {
-                        devices.push(default);
-                    }
-                }
-
-                info!(
-                    "Multi-device mode: capturing from {} device(s) with StreamMuxer selection",
-                    devices.len()
-                );
-                devices
+                warn!("Multi-device 'all' mode is no longer supported, using default device");
+                host.default_input_device()
+                    .ok_or_else(|| anyhow::anyhow!("No default input device available"))?
             }
             // Specific device requested (need to enumerate to find it)
             Some(name) => {
                 info!("Searching for device '{}'...", name);
-                let mut found = Vec::new();
+                let mut found = None;
                 if let Ok(devices) = host.input_devices() {
                     for device in devices {
                         if let Ok(device_name) = device.name() {
                             if device_name == name {
-                                found.push(device);
+                                found = Some(device);
                                 break;
                             }
                         }
                     }
                 }
-                if found.is_empty() {
-                    warn!("Device '{}' not found, using default", name);
-                    if let Some(default) = host.default_input_device() {
-                        found.push(default);
+                match found {
+                    Some(dev) => dev,
+                    None => {
+                        warn!("Device '{}' not found, using default", name);
+                        host.default_input_device()
+                            .ok_or_else(|| anyhow::anyhow!("No default input device available"))?
                     }
                 }
-                found
             }
         };
 
-        if devices_to_use.is_empty() {
-            return Err(anyhow::anyhow!("No input devices available"));
-        }
-
-        // Create crossbeam channel for muxer output (lock-free, for audio callback)
-        let (muxer_tx, muxer_rx) = crossbeam_channel::bounded(100);
-
-        // Create StreamMuxer
-        let muxer = StreamMuxer::new(muxer_tx, config.muxer_config.clone())?;
-        let muxer = Arc::new(Mutex::new(muxer));
+        // Create crossbeam channel for bridging audio callback to async channel
+        let (cb_tx, cb_rx) = crossbeam_channel::bounded::<Vec<i16>>(100);
 
         let stream_config = StreamConfig {
             channels: 1,
@@ -147,104 +101,107 @@ impl CpalBackend {
 
         let errored_streams: Arc<Mutex<HashSet<String>>> =
             Arc::new(Mutex::new(HashSet::new()));
+        let last_audio_timestamp = Arc::new(AtomicU64::new(0));
+        let samples_dropped = Arc::new(AtomicU64::new(0));
 
-        let mut streams = Vec::new();
-        for device in devices_to_use {
-            let stream_id = device.name().unwrap_or_else(|_| "unknown".to_string());
-            let muxer_clone = Arc::clone(&muxer);
-            let stream_id_clone = stream_id.clone();
-            let threshold = config.silence_threshold;
+        let stream_id = device.name().unwrap_or_else(|_| "unknown".to_string());
+        let threshold = config.silence_threshold;
 
-            // Clone for error callback
-            let error_stream_id = stream_id.clone();
-            let errored_streams_clone = Arc::clone(&errored_streams);
+        // Clone for error callback
+        let error_stream_id = stream_id.clone();
+        let errored_streams_clone = Arc::clone(&errored_streams);
+        let samples_dropped_clone = Arc::clone(&samples_dropped);
 
-            match device.build_input_stream(
-                &stream_config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    // Pre-filter obviously silent chunks to reduce muxer load
-                    let rms: f32 =
-                        (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
-                    if rms < threshold {
-                        return; // Skip completely silent chunks
-                    }
-
-                    // Convert to i16
-                    let samples: Vec<i16> = data
-                        .iter()
-                        .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
-                        .collect();
-
-                    // Push to muxer for quality-based stream selection
-                    if let Ok(mut muxer) = muxer_clone.lock() {
-                        muxer.push_samples(&stream_id_clone, &samples);
-                    }
-                },
-                move |err| {
-                    // Log once per stream - insert returns true if value was not present
-                    if let Ok(mut errored) = errored_streams_clone.lock() {
-                        if errored.insert(error_stream_id.clone()) {
-                            error!(
-                                "Audio stream '{}' error: {} (will retry on device reconnection)",
-                                error_stream_id, err
-                            );
-                        }
-                    }
-                },
-                None,
-            ) {
-                Ok(stream) => {
-                    info!("Created audio stream for: {}", stream_id);
-                    streams.push(stream);
+        let stream = device.build_input_stream(
+            &stream_config,
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                // Pre-filter obviously silent chunks
+                let rms: f32 =
+                    (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
+                if rms < threshold {
+                    return; // Skip completely silent chunks
                 }
-                Err(e) => {
-                    warn!("Failed to create stream for '{}': {}", stream_id, e);
+
+                // Convert to i16
+                let samples: Vec<i16> = data
+                    .iter()
+                    .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
+                    .collect();
+
+                // Send directly via crossbeam channel (no muxer)
+                if cb_tx.try_send(samples).is_err() {
+                    samples_dropped_clone.fetch_add(1, Ordering::Relaxed);
                 }
-            }
-        }
+            },
+            move |err| {
+                // Log once per stream
+                if let Ok(mut errored) = errored_streams_clone.lock() {
+                    if errored.insert(error_stream_id.clone()) {
+                        error!(
+                            "Audio stream '{}' error: {} (will retry on device reconnection)",
+                            error_stream_id, err
+                        );
+                    }
+                }
+            },
+            None,
+        ).map_err(|e| anyhow::anyhow!("Failed to create audio stream for '{}': {}", stream_id, e))?;
 
-        if streams.is_empty() {
-            return Err(anyhow::anyhow!("Failed to create any audio streams"));
-        }
+        info!("Created audio stream for: {}", stream_id);
 
-        // Spawn thread to forward muxer output to async channel
+        // Spawn thread to forward crossbeam channel to async mpsc channel
         let tx_clone = tx;
+        let last_ts_clone = Arc::clone(&last_audio_timestamp);
+        let drops_clone = Arc::clone(&samples_dropped);
         std::thread::spawn(move || {
-            while let Ok(samples) = muxer_rx.recv() {
+            let mut last_drop_log = 0u64;
+            while let Ok(samples) = cb_rx.recv() {
+                // Update last audio timestamp for health monitoring
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                last_ts_clone.store(now_ms, Ordering::Relaxed);
+
+                // Check and log drops periodically
+                let current_drops = drops_clone.load(Ordering::Relaxed);
+                if current_drops > last_drop_log && current_drops % 100 == 0 {
+                    warn!("Audio samples dropped: {} total", current_drops);
+                    last_drop_log = current_drops;
+                }
+
                 if tx_clone.send(samples).is_err() {
                     break; // Channel closed
                 }
             }
         });
 
-        info!(
-            "CpalBackend initialized with {} stream(s) and StreamMuxer",
-            streams.len()
-        );
+        info!("CpalBackend initialized with single stream (direct channel)");
         Ok(Self {
-            streams,
-            muxer,
+            streams: vec![stream],
             errored_streams,
+            last_audio_timestamp,
+            samples_dropped,
         })
     }
 
+    /// Get the timestamp (ms since epoch) of the last audio received
+    pub fn last_audio_timestamp_ms(&self) -> u64 {
+        self.last_audio_timestamp.load(Ordering::Relaxed)
+    }
+
+    /// Get the total number of dropped sample chunks
+    pub fn samples_dropped_count(&self) -> u64 {
+        self.samples_dropped.load(Ordering::Relaxed)
+    }
+
     /// Returns true if at least one stream is healthy (not errored)
-    #[allow(dead_code)] // Available for future use
+    #[allow(dead_code)]
     pub fn has_healthy_streams(&self) -> bool {
         if let Ok(errored) = self.errored_streams.lock() {
             errored.len() < self.streams.len()
         } else {
-            false // Assume unhealthy if lock fails
-        }
-    }
-
-    /// Returns list of errored stream IDs
-    #[allow(dead_code)] // Available for future use
-    pub fn errored_stream_ids(&self) -> Vec<String> {
-        if let Ok(errored) = self.errored_streams.lock() {
-            errored.iter().cloned().collect()
-        } else {
-            Vec::new()
+            false
         }
     }
 }
@@ -269,12 +226,6 @@ impl AudioBackend for CpalBackend {
     fn flush(&self) -> Result<()> {
         // Wait for cpal callbacks to complete (10-20ms buffers, 2x safety)
         std::thread::sleep(std::time::Duration::from_millis(50));
-
-        // Flush the muxer to forward any buffered samples
-        if let Ok(mut muxer) = self.muxer.lock() {
-            muxer.flush();
-        }
-
         info!("CpalBackend flushed");
         Ok(())
     }

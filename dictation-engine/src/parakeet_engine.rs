@@ -1,30 +1,20 @@
 //! Parakeet TDT transcription engine
 //!
 //! Fast CPU-optimized speech recognition using NVIDIA's Parakeet TDT model via ONNX.
-//! Requires `parakeet` feature to be enabled.
 //!
 //! Long audio is automatically chunked into segments to avoid context limits.
 
-#[cfg(feature = "parakeet")]
 use anyhow::Result;
-#[cfg(feature = "parakeet")]
 use parakeet_rs::{ParakeetTDT, Transcriber};
-#[cfg(feature = "parakeet")]
 use std::path::PathBuf;
-#[cfg(feature = "parakeet")]
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "parakeet")]
 use tracing::{debug, info};
 
-#[cfg(feature = "parakeet")]
 use crate::chunking::{transcribe_chunked, ChunkConfig};
-#[cfg(feature = "parakeet")]
 use crate::engine::TranscriptionEngine;
 
 // Audio thresholds (at 16kHz sample rate)
-#[cfg(feature = "parakeet")]
 const MIN_AUDIO_SAMPLES: usize = 2400; // 0.15s minimum for transcription
-#[cfg(feature = "parakeet")]
 const RETRANSCRIBE_THRESHOLD: usize = 4800; // 0.3s of new audio before re-transcribing
 
 /// Parakeet TDT-based transcription engine
@@ -35,7 +25,6 @@ const RETRANSCRIBE_THRESHOLD: usize = 4800; // 0.3s of new audio before re-trans
 ///
 /// Preview uses incremental transcription: only new audio since last call
 /// is transcribed and appended to cached results for rolling preview.
-#[cfg(feature = "parakeet")]
 pub struct ParakeetEngine {
     parakeet: Arc<Mutex<ParakeetTDT>>,
     audio_buffer: Arc<Mutex<Vec<i16>>>,
@@ -48,7 +37,6 @@ pub struct ParakeetEngine {
     chunk_config: ChunkConfig,
 }
 
-#[cfg(feature = "parakeet")]
 impl ParakeetEngine {
     /// Create a new Parakeet engine
     ///
@@ -76,25 +64,6 @@ impl ParakeetEngine {
             last_transcribed_len: Arc::new(Mutex::new(0)),
             chunk_config,
         })
-    }
-
-    /// Ensure the Parakeet model is downloaded
-    pub fn ensure_model(model_dir: &std::path::Path) -> Result<PathBuf> {
-        let model_path = model_dir.join("parakeet");
-        if model_path.exists() {
-            return Ok(model_path);
-        }
-
-        std::fs::create_dir_all(&model_path)?;
-
-        info!("Parakeet model not found at {:?}", model_path);
-        info!("Please download the model using:");
-        info!("  huggingface-cli download nvidia/parakeet-tdt-0.6b --local-dir {:?}", model_path);
-
-        anyhow::bail!(
-            "Parakeet model not found. Download with: huggingface-cli download nvidia/parakeet-tdt-0.6b --local-dir {}",
-            model_path.display()
-        )
     }
 
     /// Write audio buffer to a temporary WAV file for transcription
@@ -162,7 +131,6 @@ impl ParakeetEngine {
     }
 }
 
-#[cfg(feature = "parakeet")]
 impl TranscriptionEngine for ParakeetEngine {
     fn process_audio(&self, samples: &[i16]) -> Result<()> {
         // ONLY buffer audio here - never run transcription
@@ -267,16 +235,5 @@ impl TranscriptionEngine for ParakeetEngine {
         if let Ok(mut last_len) = self.last_transcribed_len.lock() {
             *last_len = 0;
         }
-    }
-}
-
-// Stub when feature not enabled
-#[cfg(not(feature = "parakeet"))]
-pub struct ParakeetEngine;
-
-#[cfg(not(feature = "parakeet"))]
-impl ParakeetEngine {
-    pub fn new(_model_path: std::path::PathBuf, _sample_rate: u32) -> anyhow::Result<Self> {
-        anyhow::bail!("Parakeet feature not enabled. Rebuild with --features parakeet")
     }
 }

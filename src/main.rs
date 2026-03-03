@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use std::fs;
-use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
@@ -19,7 +18,7 @@ const DBUS_INTERFACE_NAME: &str = "com.voicedictation.Control";
 
 #[derive(Parser)]
 #[command(name = "voice-dictation")]
-#[command(about = "Voice dictation system with speech recognition", long_about = None)]
+#[command(about = "Voice dictation system with Parakeet speech recognition", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -41,6 +40,8 @@ enum Commands {
     Status,
     #[command(about = "Open configuration TUI")]
     Config,
+    #[command(about = "List available models")]
+    ListModels,
     #[command(about = "List available preview (fast) models")]
     ListPreviewModels {
         #[arg(default_value = "en")]
@@ -79,15 +80,6 @@ fn get_state() -> String {
 
 fn set_state(state: &str) -> std::io::Result<()> {
     fs::write(STATE_FILE, state)
-}
-
-fn is_process_running(pattern: &str) -> bool {
-    Command::new("pgrep")
-        .arg("-f")
-        .arg(pattern)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
 }
 
 async fn call_dbus_method(method: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -143,7 +135,6 @@ fn get_health_check() -> Result<(String, String, String), Box<dyn std::error::Er
 }
 
 fn is_daemon_running() -> bool {
-    // Check if D-Bus service name is registered
     if let Ok(rt) = tokio::runtime::Runtime::new() {
         rt.block_on(async {
             if let Ok(conn) = Connection::session().await {
@@ -153,7 +144,6 @@ fn is_daemon_running() -> bool {
                     DBUS_OBJECT_PATH,
                     DBUS_INTERFACE_NAME,
                 ).await {
-                    // Try to introspect to verify service is alive
                     proxy.introspect().await.is_ok()
                 } else {
                     false
@@ -179,12 +169,10 @@ fn check_runtime_dependencies(require_wtype: bool, require_wayland: bool) -> Res
     let mut missing = Vec::new();
     let mut warnings = Vec::new();
 
-    // Check for wtype (critical for keyboard typing)
     if require_wtype && !check_command_available("wtype") {
         missing.push("wtype - required for keyboard input injection");
     }
 
-    // Check for Wayland display (critical for GUI)
     if require_wayland {
         if std::env::var("WAYLAND_DISPLAY").is_err() {
             if std::env::var("DISPLAY").is_ok() {
@@ -195,23 +183,20 @@ fn check_runtime_dependencies(require_wtype: bool, require_wayland: bool) -> Res
         }
     }
 
-    // Check for audio tools (warn if missing)
     if !check_command_available("pactl") && !check_command_available("pw-cli") {
         warnings.push("pactl or pw-cli - audio device enumeration may not work");
     }
 
-    // Print warnings (non-fatal)
     if !warnings.is_empty() {
-        eprintln!("⚠️  Warnings:");
+        eprintln!("Warnings:");
         for warning in warnings {
             eprintln!("  - {}", warning);
         }
         eprintln!();
     }
 
-    // Print errors and fail if any critical dependencies missing
     if !missing.is_empty() {
-        eprintln!("❌ Missing required runtime dependencies:");
+        eprintln!("Missing required runtime dependencies:");
         for dep in missing {
             eprintln!("  - {}", dep);
         }
@@ -226,7 +211,6 @@ fn check_runtime_dependencies(require_wtype: bool, require_wayland: bool) -> Res
 }
 
 fn start_recording() -> Result<(), Box<dyn std::error::Error>> {
-    // Check if daemon is running
     if !is_daemon_running() {
         eprintln!("Error: Daemon not running");
         eprintln!("Start the daemon with: systemctl --user start voice-dictation");
@@ -234,7 +218,6 @@ fn start_recording() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Daemon not running".into());
     }
 
-    // Check current state
     let state = get_state();
     if state == "recording" {
         println!("Already recording");
@@ -257,7 +240,6 @@ fn start_recording() -> Result<(), Box<dyn std::error::Error>> {
         fs::write(MEDIA_STATE_FILE, "stopped")?;
     }
 
-    // Send StartRecording command to daemon via D-Bus
     send_start_recording()?;
 
     set_state("recording")?;
@@ -279,10 +261,8 @@ fn stop_recording() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Send StopRecording command to daemon via D-Bus
     send_stop_recording()?;
 
-    // Resume media if it was playing
     if let Ok(media_state) = fs::read_to_string(MEDIA_STATE_FILE) {
         if media_state.trim() == "playing" {
             let _ = Command::new("playerctl").arg("play").output();
@@ -313,10 +293,8 @@ fn confirm_recording() -> Result<(), Box<dyn std::error::Error>> {
     println!("Confirming transcription...");
     send_confirm()?;
 
-    // Wait a moment for processing to complete
     thread::sleep(Duration::from_millis(500));
 
-    // Resume media if it was playing
     if let Ok(media_state) = fs::read_to_string(MEDIA_STATE_FILE) {
         if media_state.trim() == "playing" {
             let _ = Command::new("playerctl").arg("play").output();
@@ -344,7 +322,6 @@ fn toggle_recording() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn show_status() {
-    // Always show daemon status first
     let daemon_running = is_daemon_running();
     println!("Daemon: {}", if daemon_running { "running" } else { "NOT running" });
 
@@ -352,13 +329,12 @@ fn show_status() {
         let state = get_state();
         println!("State: {}", state);
 
-        // Try to get health check info
         match get_health_check() {
-            Ok((gui, monitor, audio)) => {
+            Ok((gui, engine, audio)) => {
                 println!("\nSubsystem Health:");
-                println!("  GUI:     {}", gui);
-                println!("  Monitor: {}", monitor);
-                println!("  Audio:   {}", audio);
+                println!("  GUI:    {}", gui);
+                println!("  Engine: {}", engine);
+                println!("  Audio:  {}", audio);
             }
             Err(e) => {
                 println!("Health check unavailable: {}", e);
@@ -367,82 +343,7 @@ fn show_status() {
     }
 }
 
-/// Parse model spec format: "engine:model_name"
-fn parse_model_spec(spec: &str) -> Option<(&str, &str)> {
-    let parts: Vec<&str> = spec.splitn(2, ':').collect();
-    if parts.len() == 2 {
-        Some((parts[0], parts[1]))
-    } else {
-        None
-    }
-}
-
-fn check_model_exists(model_spec: &str, models_dir: &PathBuf) -> bool {
-    if let Some((engine, model_name)) = parse_model_spec(model_spec) {
-        match engine {
-            "whisper" => {
-                // Whisper models are auto-downloaded, so always "available"
-                true
-            }
-            "parakeet" => {
-                // Parakeet uses a fixed model location
-                models_dir.join("parakeet").exists()
-            }
-            "vosk" => {
-                // Vosk models must be manually downloaded
-                models_dir.join(model_name).exists()
-            }
-            _ => false,
-        }
-    } else {
-        // Legacy format (just model name without engine prefix)
-        models_dir.join(model_spec).exists()
-    }
-}
-
-fn get_vosk_model_url(model_name: &str) -> String {
-    format!("https://alphacephei.com/vosk/models/{}.zip", model_name)
-}
-
-fn download_vosk_model(model_name: &str, models_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let url = get_vosk_model_url(model_name);
-    let zip_path = models_dir.join(format!("{}.zip", model_name));
-
-    println!("Downloading {} ({})...", model_name, url);
-    println!("This may take several minutes depending on model size...");
-
-    let status = Command::new("curl")
-        .arg("-L")
-        .arg("-o")
-        .arg(&zip_path)
-        .arg(&url)
-        .status()?;
-
-    if !status.success() {
-        return Err("Download failed".into());
-    }
-
-    println!("Extracting model...");
-    let status = Command::new("unzip")
-        .arg("-q")
-        .arg(&zip_path)
-        .arg("-d")
-        .arg(models_dir)
-        .status()?;
-
-    if !status.success() {
-        return Err("Extraction failed".into());
-    }
-
-    fs::remove_file(&zip_path)?;
-    println!("✓ Model installed successfully");
-
-    Ok(())
-}
-
-fn validate_and_prompt_models(config_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let config_content = fs::read_to_string(config_path)?;
-
+fn validate_and_prompt_models(_config_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let home = std::env::var("HOME")?;
     let models_dir = PathBuf::from(&home).join(".config/voice-dictation/models");
 
@@ -450,68 +351,12 @@ fn validate_and_prompt_models(config_path: &PathBuf) -> Result<(), Box<dyn std::
         fs::create_dir_all(&models_dir)?;
     }
 
-    let preview_model = config_content
-        .lines()
-        .find(|line| line.starts_with("preview_model"))
-        .and_then(|line| line.split('=').nth(1))
-        .map(|s| s.trim().trim_matches('"').to_string());
-
-    let final_model = config_content
-        .lines()
-        .find(|line| line.starts_with("final_model"))
-        .and_then(|line| line.split('=').nth(1))
-        .map(|s| s.trim().trim_matches('"').to_string());
-
-    // Collect missing Vosk models (whisper auto-downloads, parakeet bundled)
-    let mut missing_vosk_models = Vec::new();
-
-    if let Some(model_spec) = &preview_model {
-        if let Some(("vosk", model_name)) = parse_model_spec(model_spec) {
-            if !models_dir.join(model_name).exists() {
-                missing_vosk_models.push(("Preview", model_name.to_string()));
-            }
-        }
-    }
-
-    if let Some(model_spec) = &final_model {
-        if let Some(("vosk", model_name)) = parse_model_spec(model_spec) {
-            if !models_dir.join(model_name).exists() {
-                missing_vosk_models.push(("Final", model_name.to_string()));
-            }
-        }
-    }
-
-    if missing_vosk_models.is_empty() {
-        return Ok(());
-    }
-
-    println!("\n⚠️  Missing Vosk models detected:");
-    for (model_type, model_name) in &missing_vosk_models {
-        println!("  - {} model: {}", model_type, model_name);
-        println!("    URL: {}", get_vosk_model_url(model_name));
-    }
-
-    print!("\nWould you like to download missing models now? [y/N]: ");
-    io::stdout().flush()?;
-
-    let mut response = String::new();
-    io::stdin().read_line(&mut response)?;
-
-    if response.trim().to_lowercase() == "y" {
-        for (model_type, model_name) in &missing_vosk_models {
-            println!("\nDownloading {} model: {}", model_type, model_name);
-            if let Err(e) = download_vosk_model(model_name, &models_dir) {
-                eprintln!("✗ Failed to download {}: {}", model_name, e);
-                eprintln!("  Please download manually from: {}", get_vosk_model_url(model_name));
-            }
-        }
-    } else {
-        println!("\nSkipping download. You can download models manually with:");
-        println!("  cd ~/.config/voice-dictation/models");
-        for (_, model_name) in &missing_vosk_models {
-            println!("  curl -L -O {}", get_vosk_model_url(model_name));
-            println!("  unzip {}.zip", model_name);
-        }
+    // Check Parakeet model
+    let parakeet_dir = models_dir.join("parakeet");
+    if !parakeet_dir.join("encoder-model.onnx").exists() || !parakeet_dir.join("decoder_joint-model.onnx").exists() {
+        eprintln!("Parakeet model not found at {:?}", parakeet_dir);
+        eprintln!("The Parakeet model is required for speech recognition.");
+        eprintln!("Please install the model files to: {}", parakeet_dir.display());
     }
 
     Ok(())
@@ -525,7 +370,7 @@ const UI_STYLE1_EXAMPLE: &str = include_str!("../slint-gui/ui/examples/style1-de
 const UI_STYLE2_EXAMPLE: &str = include_str!("../slint-gui/ui/examples/style2-minimal.slint");
 const UI_EXAMPLES_README: &str = include_str!("../slint-gui/ui/examples/README.md");
 
-/// Migrate old config format to new unified model selection format
+/// Migrate old config format to Parakeet-only format
 fn migrate_config(config_path: &PathBuf) -> Result<bool, Box<dyn std::error::Error>> {
     if !config_path.exists() {
         return Ok(false);
@@ -533,7 +378,7 @@ fn migrate_config(config_path: &PathBuf) -> Result<bool, Box<dyn std::error::Err
 
     let content = fs::read_to_string(config_path)?;
 
-    // Check if migration is needed (old format has transcription_engine or model without engine prefix)
+    // Check if migration is needed (old format has vosk/whisper references or muxer fields)
     let has_old_format = content.lines().any(|line| {
         let line = line.trim();
         line.starts_with("transcription_engine")
@@ -542,81 +387,23 @@ fn migrate_config(config_path: &PathBuf) -> Result<bool, Box<dyn std::error::Err
             || line.starts_with("whisper_final_model")
             || line.starts_with("whisper_model_path")
             || line.starts_with("use_gpu")
+            || line.starts_with("muxer_")
     });
 
-    // Also check if preview_model/final_model are in old format (no colon)
-    let preview_model_old = content.lines()
-        .find(|line| line.trim().starts_with("preview_model") && !line.contains("custom_path"))
-        .and_then(|line| line.split('=').nth(1))
-        .map(|s| s.trim().trim_matches('"'))
-        .map(|s| !s.contains(':'))
-        .unwrap_or(false);
+    // Check if models reference vosk or whisper
+    let has_vosk_whisper_model = content.lines().any(|line| {
+        let line = line.trim();
+        (line.starts_with("preview_model") || line.starts_with("final_model"))
+            && (line.contains("vosk:") || line.contains("whisper:"))
+    });
 
-    let final_model_old = content.lines()
-        .find(|line| line.trim().starts_with("final_model") && !line.contains("custom_path"))
-        .and_then(|line| line.split('=').nth(1))
-        .map(|s| s.trim().trim_matches('"'))
-        .map(|s| !s.contains(':'))
-        .unwrap_or(false);
-
-    if !has_old_format && !preview_model_old && !final_model_old {
+    if !has_old_format && !has_vosk_whisper_model {
         return Ok(false);
     }
 
-    println!("Migrating config to new unified model selection format...");
+    println!("Migrating config to Parakeet-only format...");
 
-    // Parse old values
-    let engine = content.lines()
-        .find(|line| line.trim().starts_with("transcription_engine"))
-        .and_then(|line| line.split('=').nth(1))
-        .map(|s| s.trim().trim_matches('"').to_string())
-        .unwrap_or_else(|| "vosk".to_string());
-
-    let old_preview = content.lines()
-        .find(|line| line.trim().starts_with("preview_model") && !line.contains("custom_path"))
-        .and_then(|line| line.split('=').nth(1))
-        .map(|s| s.trim().trim_matches('"').to_string());
-
-    let old_final = content.lines()
-        .find(|line| line.trim().starts_with("final_model") && !line.contains("custom_path"))
-        .and_then(|line| line.split('=').nth(1))
-        .map(|s| s.trim().trim_matches('"').to_string());
-
-    let whisper_final = content.lines()
-        .find(|line| line.trim().starts_with("whisper_final_model"))
-        .and_then(|line| line.split('=').nth(1))
-        .map(|s| s.trim().trim_matches('"').to_string());
-
-    // Build new model specs
-    let new_preview = if let Some(model) = old_preview {
-        if model.contains(':') {
-            model // Already in new format
-        } else if model == "custom" {
-            "vosk:vosk-model-en-us-daanzu-20200905-lgraph".to_string() // Default
-        } else {
-            format!("{}:{}", engine, model)
-        }
-    } else {
-        "vosk:vosk-model-en-us-daanzu-20200905-lgraph".to_string()
-    };
-
-    let new_final = if let Some(model) = old_final {
-        if model.contains(':') {
-            model // Already in new format
-        } else if model == "custom" {
-            whisper_final.map(|m| format!("whisper:{}", m))
-                .unwrap_or_else(|| "whisper:ggml-small.en.bin".to_string())
-        } else {
-            format!("{}:{}", engine, model)
-        }
-    } else if engine == "whisper" {
-        whisper_final.map(|m| format!("whisper:{}", m))
-            .unwrap_or_else(|| "whisper:ggml-small.en.bin".to_string())
-    } else {
-        "whisper:ggml-small.en.bin".to_string()
-    };
-
-    // Remove old fields and update with new format
+    // Remove old fields and update model references
     let mut new_lines: Vec<String> = Vec::new();
     let mut updated_preview = false;
     let mut updated_final = false;
@@ -632,47 +419,40 @@ fn migrate_config(config_path: &PathBuf) -> Result<bool, Box<dyn std::error::Err
             || trimmed.starts_with("whisper_final_model")
             || trimmed.starts_with("whisper_model_path")
             || trimmed.starts_with("use_gpu")
+            || trimmed.starts_with("muxer_")
         {
             continue;
         }
 
-        // Update preview_model
+        // Update preview_model to parakeet
         if trimmed.starts_with("preview_model") && !trimmed.contains("custom_path") {
-            new_lines.push(format!("preview_model = \"{}\"", new_preview));
-            updated_preview = true;
-            continue;
+            if trimmed.contains("vosk:") || trimmed.contains("whisper:") {
+                new_lines.push("preview_model = \"parakeet:default\"".to_string());
+                updated_preview = true;
+                continue;
+            }
         }
 
-        // Update final_model
+        // Update final_model to parakeet
         if trimmed.starts_with("final_model") && !trimmed.contains("custom_path") {
-            new_lines.push(format!("final_model = \"{}\"", new_final));
-            updated_final = true;
-            continue;
+            if trimmed.contains("vosk:") || trimmed.contains("whisper:") {
+                new_lines.push("final_model = \"parakeet:default\"".to_string());
+                updated_final = true;
+                continue;
+            }
         }
 
         new_lines.push(line.to_string());
-    }
-
-    // Add fields if not already present
-    if !updated_preview {
-        // Find [daemon] section and add after it
-        if let Some(pos) = new_lines.iter().position(|l| l.trim() == "[daemon]") {
-            new_lines.insert(pos + 1, format!("preview_model = \"{}\"", new_preview));
-        }
-    }
-    if !updated_final {
-        if let Some(pos) = new_lines.iter().position(|l| l.trim() == "[daemon]") {
-            new_lines.insert(pos + 2, format!("final_model = \"{}\"", new_final));
-        }
     }
 
     // Write migrated config
     let new_content = new_lines.join("\n");
     fs::write(config_path, &new_content)?;
 
-    println!("✓ Config migrated successfully");
-    println!("  preview_model = \"{}\"", new_preview);
-    println!("  final_model = \"{}\"", new_final);
+    println!("Config migrated to Parakeet-only format");
+    if updated_preview || updated_final {
+        println!("  Models updated to parakeet:default");
+    }
 
     Ok(true)
 }
@@ -687,7 +467,7 @@ fn open_config() -> Result<(), Box<dyn std::error::Error>> {
         fs::create_dir_all(&config_dir)?;
     }
 
-    // Initialize UI examples directory (user can copy to ui/dictation.slint to activate)
+    // Initialize UI examples directory
     let ui_examples_dir = config_dir.join("ui/examples");
     if !ui_examples_dir.exists() {
         fs::create_dir_all(&ui_examples_dir)?;
@@ -712,7 +492,7 @@ fn open_config() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     tui.run()?;
-    
+
     validate_and_prompt_models(&config_path)?;
 
     Ok(())
@@ -823,7 +603,6 @@ fn diagnose() -> Result<(), Box<dyn std::error::Error>> {
         for line in config.lines() {
             let t = line.trim();
             if t.starts_with("audio_backend")
-                || t.starts_with("muxer_")
                 || t.starts_with("preview_model")
                 || t.starts_with("final_model")
                 || t.starts_with("audio_device")
@@ -833,21 +612,23 @@ fn diagnose() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         if !shown_any {
-            println!("  (using defaults — no relevant settings found)");
+            println!("  (using defaults - no relevant settings found)");
         }
     } else {
-        println!("  (config file not found — using defaults)");
+        println!("  (config file not found - using defaults)");
     }
-
-    // Muxer defaults
-    println!("\nStreamMuxer defaults (overridden by config above):");
-    println!("  muxer_sticky_duration_ms = 500");
-    println!("  muxer_cooldown_ms = 200");
-    println!("  muxer_switch_threshold = 0.15");
-    println!("  muxer_scoring_window_ms = 100");
 
     // Engine availability
     println!("\nAvailable engines: {}", utils::get_engine_summary());
+
+    // Check Parakeet model
+    let models_dir = PathBuf::from(&home).join(".config/voice-dictation/models/parakeet");
+    let encoder_exists = models_dir.join("encoder-model.onnx").exists();
+    let decoder_exists = models_dir.join("decoder_joint-model.onnx").exists();
+    println!("\nParakeet model:");
+    println!("  Directory: {}", models_dir.display());
+    println!("  Encoder:   {}", if encoder_exists { "found" } else { "MISSING" });
+    println!("  Decoder:   {}", if decoder_exists { "found" } else { "MISSING" });
 
     // Debug audio status
     let debug_enabled = std::env::var("VOICE_DICTATION_DEBUG_AUDIO")
@@ -875,12 +656,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Daemon => {
-            // Daemon requires both wtype (for typing) and Wayland (for GUI)
             check_runtime_dependencies(true, true)?;
             dictation_engine::run()?;
         }
         Commands::Start => {
-            // Start requires wtype for eventual typing (daemon handles Wayland)
             check_runtime_dependencies(true, false)?;
             start_recording()?;
         }
@@ -888,12 +667,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             stop_recording()?;
         }
         Commands::Confirm => {
-            // Confirm requires wtype for typing (daemon handles Wayland)
             check_runtime_dependencies(true, false)?;
             confirm_recording()?;
         }
         Commands::Toggle => {
-            // Toggle may start or confirm, so require wtype
             check_runtime_dependencies(true, false)?;
             toggle_recording()?;
         }
@@ -902,6 +679,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Config => {
             open_config()?;
+        }
+        Commands::ListModels => {
+            for model in utils::list_models() {
+                println!("{}", model);
+            }
         }
         Commands::ListPreviewModels { language } => {
             for model in utils::list_preview_models(&language) {
