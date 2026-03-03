@@ -4,18 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["slint-gui", "pipewire"]
-slint-gui = ["dictation-engine/slint-gui", "dep:slint-gui"]
+default = ["pipewire", "tray"]
 pipewire = ["dictation-engine/pipewire"]  # Native PipeWire audio backend
+tray = ["dictation-engine/tray"]
 
 [dependencies]
 dictation-engine = { path = "dictation-engine", default-features = false }
-slint-gui = { path = "slint-gui", optional = true }
+slint-gui = { path = "slint-gui" }
 schema-tui = { git = "https://github.com/MasonRhodesDev/schema-tui.git" }
 clap = { version = "4", features = ["derive"] }
-zbus = "4.1"
+zbus = "5"
 tokio = { workspace = true }
-cpal = "0.15"
 systemd = "0.10"
 serde_json = { workspace = true }
 

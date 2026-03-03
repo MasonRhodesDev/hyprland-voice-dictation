@@ -1,6 +1,6 @@
 //! Utility functions for model and device listing
 
-use cpal::traits::{DeviceTrait, HostTrait};
+use dictation_engine::audio_backend::{BackendType, DeviceInfo};
 
 /// List available models (Parakeet only)
 pub fn list_models() -> Vec<String> {
@@ -17,31 +17,9 @@ pub fn list_final_models(_language: &str) -> Vec<String> {
     list_models()
 }
 
-/// List available audio input devices
-pub fn list_audio_devices() -> Vec<String> {
-    let mut devices = Vec::new();
-
-    // Standard options
-    devices.push("default".to_string());
-
-    // Enumerate actual devices via cpal
-    let host = cpal::default_host();
-    if let Ok(input_devices) = host.input_devices() {
-        for device in input_devices {
-            if let Ok(name) = device.name() {
-                // Skip monitors and HDMI
-                let name_lower = name.to_lowercase();
-                if name_lower.contains(".monitor") || name_lower.contains("hdmi") {
-                    continue;
-                }
-                if !devices.contains(&name) {
-                    devices.push(name);
-                }
-            }
-        }
-    }
-
-    devices
+/// List available audio input devices with human-readable descriptions
+pub fn list_audio_devices() -> Vec<DeviceInfo> {
+    dictation_engine::audio_backend::list_devices(BackendType::Auto).unwrap_or_default()
 }
 
 /// Get a summary of available engines for display

@@ -5,12 +5,12 @@
 //! Long audio is automatically chunked into segments to avoid context limits.
 
 use anyhow::Result;
-use parakeet_rs::{ParakeetTDT, Transcriber};
+use parakeet_rs::{ParakeetTDT, TimestampMode, Transcriber};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
-use crate::chunking::{transcribe_chunked, ChunkConfig};
+use crate::chunking::{transcribe_chunked_with_timestamps, ChunkConfig, TimestampedChunkResult};
 use crate::engine::TranscriptionEngine;
 
 // Audio thresholds (at 16kHz sample rate)
@@ -58,7 +58,7 @@ impl ParakeetEngine {
 
         Ok(Self {
             parakeet: Arc::new(Mutex::new(parakeet)),
-            audio_buffer: Arc::new(Mutex::new(Vec::new())),
+            audio_buffer: Arc::new(Mutex::new(Vec::with_capacity(480_000))), // ~30s at 16kHz
             sample_rate,
             current_text: Arc::new(Mutex::new(String::new())),
             last_transcribed_len: Arc::new(Mutex::new(0)),
@@ -66,29 +66,9 @@ impl ParakeetEngine {
         })
     }
 
-    /// Write audio buffer to a temporary WAV file for transcription
-    fn write_temp_wav(&self, samples: &[i16]) -> Result<tempfile::NamedTempFile> {
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: self.sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-
-        let mut temp_file = tempfile::Builder::new()
-            .suffix(".wav")
-            .tempfile()?;
-
-        {
-            let mut writer = hound::WavWriter::new(&mut temp_file, spec)?;
-            for &sample in samples {
-                writer.write_sample(sample)?;
-            }
-            writer.finalize()?;
-        }
-
-        temp_file.as_file_mut().sync_all()?;
-        Ok(temp_file)
+    /// Convert i16 samples to f32 for parakeet-rs
+    fn samples_to_f32(samples: &[i16]) -> Vec<f32> {
+        samples.iter().map(|&s| s as f32 / 32768.0).collect()
     }
 
     /// Run transcription on a single chunk of audio
@@ -97,12 +77,29 @@ impl ParakeetEngine {
             return Ok(String::new());
         }
 
-        let temp_file = self.write_temp_wav(samples)?;
+        let f32_samples = Self::samples_to_f32(samples);
         let mut parakeet = self.parakeet.lock()
             .map_err(|e| anyhow::anyhow!("Parakeet model lock poisoned: {}", e))?;
-        let result = parakeet.transcribe_file(temp_file.path(), None)?;
+        let result = parakeet.transcribe_samples(f32_samples, self.sample_rate, 1, None)?;
 
         Ok(result.text)
+    }
+
+    /// Run transcription on a single chunk with word-level timestamps
+    fn transcribe_chunk_with_timestamps(&self, samples: &[i16]) -> Result<TimestampedChunkResult> {
+        if samples.is_empty() {
+            return Ok(TimestampedChunkResult { text: String::new(), words: Vec::new() });
+        }
+
+        let f32_samples = Self::samples_to_f32(samples);
+        let mut parakeet = self.parakeet.lock()
+            .map_err(|e| anyhow::anyhow!("Parakeet model lock poisoned: {}", e))?;
+        let result = parakeet.transcribe_samples(f32_samples, self.sample_rate, 1, Some(TimestampMode::Words))?;
+
+        Ok(TimestampedChunkResult {
+            text: result.text,
+            words: result.tokens,
+        })
     }
 
     /// Run transcription on accumulated audio, chunking if necessary
@@ -124,11 +121,54 @@ impl ParakeetEngine {
             duration_secs
         );
 
-        // Use the generalized chunking utility
-        transcribe_chunked(samples, &self.chunk_config, |chunk| {
-            self.transcribe_chunk(chunk)
-        })
+        // Normalize audio levels for consistent transcription quality
+        let normalized = normalize_audio(samples, 3000.0, 20.0);
+        let samples = &normalized;
+
+        // Use timestamped chunking for better merge accuracy when chunking is needed
+        if self.chunk_config.needs_chunking(samples) {
+            return transcribe_chunked_with_timestamps(samples, &self.chunk_config, |chunk| {
+                self.transcribe_chunk_with_timestamps(chunk)
+            });
+        }
+
+        // Short audio: single-pass transcription
+        self.transcribe_chunk(samples)
     }
+}
+
+/// Normalize audio to a target RMS level for consistent transcription quality.
+///
+/// Different microphones produce different volume levels. Normalizing ensures
+/// consistent SNR in the spectrogram regardless of input device.
+///
+/// Skips normalization when audio is near-silent (RMS < 1.0) or already
+/// near the target level (gain within 5%).
+fn normalize_audio(samples: &[i16], target_rms: f32, max_gain: f32) -> Vec<i16> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+
+    let rms = (samples.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / samples.len() as f64).sqrt() as f32;
+
+    // Skip if near-silent
+    if rms < 1.0 {
+        return samples.to_vec();
+    }
+
+    let gain = (target_rms / rms).min(max_gain);
+
+    // Skip if already near target (gain within 5%)
+    if (gain - 1.0).abs() < 0.05 {
+        return samples.to_vec();
+    }
+
+    debug!("normalize_audio: rms={:.1}, gain={:.2}x", rms, gain);
+
+    samples.iter().map(|&s| {
+        let amplified = s as f32 * gain;
+        amplified.clamp(i16::MIN as f32, i16::MAX as f32) as i16
+    }).collect()
 }
 
 impl TranscriptionEngine for ParakeetEngine {

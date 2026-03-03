@@ -11,7 +11,6 @@ use zbus::Connection;
 mod utils;
 
 const STATE_FILE: &str = "/tmp/voice-dictation-state";
-const MEDIA_STATE_FILE: &str = "/tmp/voice-dictation-media-state";
 const DBUS_SERVICE_NAME: &str = "com.voicedictation.Daemon";
 const DBUS_OBJECT_PATH: &str = "/com/voicedictation/Control";
 const DBUS_INTERFACE_NAME: &str = "com.voicedictation.Control";
@@ -224,22 +223,6 @@ fn start_recording() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Pause media
-    let media_playing = Command::new("playerctl")
-        .arg("status")
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|status| status.contains("Playing"))
-        .unwrap_or(false);
-
-    if media_playing {
-        fs::write(MEDIA_STATE_FILE, "playing")?;
-        let _ = Command::new("playerctl").arg("pause").output();
-    } else {
-        fs::write(MEDIA_STATE_FILE, "stopped")?;
-    }
-
     send_start_recording()?;
 
     set_state("recording")?;
@@ -262,13 +245,6 @@ fn stop_recording() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     send_stop_recording()?;
-
-    if let Ok(media_state) = fs::read_to_string(MEDIA_STATE_FILE) {
-        if media_state.trim() == "playing" {
-            let _ = Command::new("playerctl").arg("play").output();
-        }
-    }
-    let _ = fs::remove_file(MEDIA_STATE_FILE);
 
     set_state("stopped")?;
     println!("Recording canceled");
@@ -294,13 +270,6 @@ fn confirm_recording() -> Result<(), Box<dyn std::error::Error>> {
     send_confirm()?;
 
     thread::sleep(Duration::from_millis(500));
-
-    if let Ok(media_state) = fs::read_to_string(MEDIA_STATE_FILE) {
-        if media_state.trim() == "playing" {
-            let _ = Command::new("playerctl").arg("play").output();
-        }
-    }
-    let _ = fs::remove_file(MEDIA_STATE_FILE);
 
     set_state("stopped")?;
     println!("Transcription confirmed");
@@ -591,8 +560,9 @@ fn diagnose() -> Result<(), Box<dyn std::error::Error>> {
 
     // Audio devices
     println!("Audio Input Devices:");
-    for device in utils::list_audio_devices() {
-        println!("  {}", device);
+    for dev in utils::list_audio_devices() {
+        let marker = if dev.is_default { " (default)" } else { "" };
+        println!("  {}{}", dev.description, marker);
     }
 
     // Backend and config
@@ -696,8 +666,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::ListAudioDevices => {
-            for device in utils::list_audio_devices() {
-                println!("{}", device);
+            for dev in utils::list_audio_devices() {
+                let marker = if dev.is_default { " (default)" } else { "" };
+                println!("  {}{}", dev.description, marker);
             }
         }
         Commands::Debug { command } => match command {

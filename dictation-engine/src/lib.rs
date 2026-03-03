@@ -9,7 +9,7 @@ use systemd::daemon::{notify, STATE_READY, STATE_WATCHDOG};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-mod audio_backend;
+pub mod audio_backend;
 mod chunking;
 pub mod control_ipc;
 pub mod dbus_control;
@@ -22,8 +22,29 @@ mod post_processing;
 mod window_detect;
 pub mod user_dictionary;
 pub mod vad;
+#[cfg(feature = "tray")]
+mod tray;
 
 pub use dictation_types::{GuiControl, GuiState, GuiStatus};
+
+/// Check if media is playing and pause it. Returns true if media was paused.
+fn pause_media_if_playing() -> bool {
+    let Ok(output) = std::process::Command::new("playerctl")
+        .arg("status")
+        .output() else { return false };
+    let playing = String::from_utf8_lossy(&output.stdout).contains("Playing");
+    if playing {
+        let _ = std::process::Command::new("playerctl").arg("pause").output();
+        info!("Paused media playback");
+    }
+    playing
+}
+
+/// Resume media playback.
+fn resume_media() {
+    let _ = std::process::Command::new("playerctl").arg("play").output();
+    info!("Resumed media playback");
+}
 
 use audio_backend::{AudioBackend, AudioBackendConfig, BackendType};
 use dbus_control::DaemonCommand;
@@ -53,18 +74,10 @@ struct Config {
 struct DaemonConfig {
     audio_device: String,
     sample_rate: String,
-    #[serde(default = "default_language")]
-    language: String,
-
-    // Activation mode: "toggle" (default) or "hold"
-    #[serde(default = "default_activation_mode")]
-    activation_mode: String,
 
     // Model selection (format: "parakeet:model_name")
-    #[serde(default = "default_model")]
-    preview_model: String,
-    #[serde(default = "default_model")]
-    final_model: String,
+    #[serde(default = "default_model", alias = "preview_model")]
+    model: String,
 
     // Post-processing
     #[serde(default = "default_enable_acronyms")]
@@ -80,12 +93,6 @@ struct DaemonConfig {
     #[serde(default = "default_debug_audio")]
     debug_audio: bool,
 
-    // Voice Activity Detection
-    #[serde(default = "default_vad_enabled")]
-    vad_enabled: bool,
-    #[serde(default = "default_vad_threshold")]
-    vad_threshold: f32,
-
     // Trailing audio buffer after stop command (captures final words)
     #[serde(default = "default_trailing_buffer_ms")]
     trailing_buffer_ms: u64,
@@ -97,21 +104,22 @@ struct DaemonConfig {
     // Idle release timeout: how long to keep mic open after stop before releasing (seconds)
     #[serde(default = "default_idle_release_timeout_secs")]
     idle_release_timeout_secs: u64,
+
+    // Delay before resuming media playback after recording stops (milliseconds)
+    #[serde(default = "default_media_resume_delay_ms")]
+    media_resume_delay_ms: u64,
 }
 
-fn default_language() -> String { "en".to_string() }
-fn default_activation_mode() -> String { "toggle".to_string() }
 fn default_model() -> String { "parakeet:default".to_string() }
 fn default_enable_acronyms() -> bool { true }
 fn default_enable_punctuation() -> bool { true }
 fn default_enable_grammar() -> bool { true }
 fn default_silence_threshold_db() -> f32 { -60.0 }
 fn default_debug_audio() -> bool { false }
-fn default_vad_enabled() -> bool { true }
-fn default_vad_threshold() -> f32 { 0.5 }
 fn default_trailing_buffer_ms() -> u64 { 750 }
 fn default_audio_backend() -> String { "auto".to_string() }
 fn default_idle_release_timeout_secs() -> u64 { 30 }
+fn default_media_resume_delay_ms() -> u64 { 25 }
 
 /// Convert decibels to linear amplitude (RMS threshold).
 fn db_to_linear(db: f32) -> f32 {
@@ -371,6 +379,15 @@ impl DeviceManager {
         }
     }
 
+    /// Switch to a different audio input device. Takes effect on next recording start.
+    fn set_device(&mut self, device_name: Option<String>) {
+        info!("DeviceManager: Switching device to {:?}", device_name.as_deref().unwrap_or("Default"));
+        self.config.backend_config.device_name = device_name;
+        // Drop existing backend so next start() recreates with the new device
+        self.backend.take();
+        self.stopped_at = None;
+    }
+
     /// Spawn a background task to watch for device changes
     fn spawn_device_watcher(&self) {
         let needs_recreate = Arc::clone(&self.needs_recreate);
@@ -469,20 +486,16 @@ pub async fn run() -> Result<()> {
             daemon: DaemonConfig {
                 audio_device: "default".to_string(),
                 sample_rate: "16000".to_string(),
-                language: default_language(),
-                activation_mode: default_activation_mode(),
-                preview_model: default_model(),
-                final_model: default_model(),
+                model: default_model(),
                 enable_acronyms: default_enable_acronyms(),
                 enable_punctuation: default_enable_punctuation(),
                 enable_grammar: default_enable_grammar(),
                 silence_threshold_db: default_silence_threshold_db(),
                 debug_audio: default_debug_audio(),
-                vad_enabled: default_vad_enabled(),
-                vad_threshold: default_vad_threshold(),
                 trailing_buffer_ms: default_trailing_buffer_ms(),
                 audio_backend: default_audio_backend(),
                 idle_release_timeout_secs: default_idle_release_timeout_secs(),
+                media_resume_delay_ms: default_media_resume_delay_ms(),
             }
         }
     });
@@ -497,8 +510,8 @@ pub async fn run() -> Result<()> {
     let silence_threshold = db_to_linear(config.daemon.silence_threshold_db);
     info!("Silence threshold: {:.1}dB ({:.6} linear)", config.daemon.silence_threshold_db, silence_threshold);
 
-    info!("Config loaded: audio_device={}, sample_rate={}, language={}",
-          config.daemon.audio_device, sample_rate, config.daemon.language);
+    info!("Config loaded: audio_device={}, sample_rate={}",
+          config.daemon.audio_device, sample_rate);
 
     // Initialize user dictionary
     let user_dict = Arc::new(UserDictionary::new().unwrap_or_else(|e| {
@@ -516,8 +529,8 @@ pub async fn run() -> Result<()> {
     });
 
     // Parse model specification (Parakeet only)
-    let model_spec = ModelSpec::parse(&config.daemon.preview_model)
-        .map_err(|e| anyhow::anyhow!("Invalid preview_model '{}': {}", config.daemon.preview_model, e))?;
+    let model_spec = ModelSpec::parse(&config.daemon.model)
+        .map_err(|e| anyhow::anyhow!("Invalid model '{}': {}", config.daemon.model, e))?;
 
     info!("Model: {}", model_spec);
 
@@ -525,7 +538,7 @@ pub async fn run() -> Result<()> {
     if !model_spec.is_available() {
         return Err(anyhow::anyhow!(
             "Model '{}' not found at {:?}. Check that the model is installed.",
-            config.daemon.preview_model,
+            config.daemon.model,
             model_spec.model_path()
         ));
     }
@@ -561,7 +574,7 @@ pub async fn run() -> Result<()> {
     let device_manager_config = DeviceManagerConfig {
         backend_type,
         backend_config: AudioBackendConfig {
-            device_name: audio_device_name,
+            device_name: audio_device_name.clone(),
             sample_rate,
             silence_threshold,
         },
@@ -643,9 +656,19 @@ pub async fn run() -> Result<()> {
     let (state_tx, state_rx) = tokio::sync::watch::channel(DaemonState::Idle);
 
     // Create D-Bus service for control commands with health state
-    let (dbus_conn, _command_sender, mut command_rx) =
+    let (dbus_conn, command_sender, mut command_rx) =
         dbus_control::create_dbus_service(state_rx, Arc::clone(&health_state)).await?;
     let _dbus_conn = dbus_conn; // Keep alive
+
+    #[cfg(feature = "tray")]
+    let _tray_handle = {
+        let tray_tx = command_sender.lock().await.clone();
+        let tray_rx = state_tx.subscribe();
+        tray::spawn_tray(tray_rx, tray_tx, backend_type, audio_device_name.clone()).await
+    };
+
+    // Keep command_sender alive (used by D-Bus service)
+    let _command_sender = command_sender;
 
     info!("Daemon initialized - entering idle state (GUI hidden)");
 
@@ -659,6 +682,7 @@ pub async fn run() -> Result<()> {
     let mut session: Option<RecordingSession> = None;
     let mut audio_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut preview_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut media_was_playing = false;
     // Cancellation channel for graceful task shutdown
     let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
 
@@ -695,6 +719,7 @@ pub async fn run() -> Result<()> {
                     Ok(Some(cmd)) => match cmd {
                         DaemonCommand::StartRecording => {
                             info!("Received StartRecording command");
+                            media_was_playing = pause_media_if_playing();
 
                             // Drain any stale audio data from the channel before starting
                             {
@@ -732,6 +757,9 @@ pub async fn run() -> Result<()> {
                             // Reset cancellation flag for new session
                             let _ = cancel_tx.send(false);
 
+                            // Notify for waking preview task when new audio arrives
+                            let audio_notify = Arc::new(tokio::sync::Notify::new());
+
                             // Start audio processing task
                             let engine_clone = Arc::clone(&session_engine);
                             let spectrum_tx_clone = spectrum_tx.clone();
@@ -739,6 +767,7 @@ pub async fn run() -> Result<()> {
                             let mut cancel_rx = cancel_tx.subscribe();
                             let trailing_buffer_ms = config.daemon.trailing_buffer_ms;
                             let health_clone = Arc::clone(&health_state);
+                            let audio_notify_tx = Arc::clone(&audio_notify);
                             audio_task = Some(tokio::spawn(async move {
                                 let mut buffer = Vec::new();
                                 let trailing_duration = Duration::from_millis(trailing_buffer_ms);
@@ -787,6 +816,7 @@ pub async fn run() -> Result<()> {
                                                     if let Err(e) = engine_clone.process_audio(&samples) {
                                                         error!("Processing error: {}", e);
                                                     }
+                                                    audio_notify_tx.notify_one();
                                                 }
                                                 None => break,
                                             }
@@ -806,8 +836,8 @@ pub async fn run() -> Result<()> {
                             let enable_punctuation = config.daemon.enable_punctuation;
                             let user_dict_preview = Arc::clone(&user_dict);
                             let mut cancel_rx_preview = cancel_tx.subscribe();
+                            let audio_notify_rx = Arc::clone(&audio_notify);
                             preview_task = Some(tokio::spawn(async move {
-                                let mut check_interval = tokio::time::interval(std::time::Duration::from_millis(100));
                                 let pipeline = Pipeline::from_config_with_dict(
                                     enable_acronyms,
                                     enable_punctuation,
@@ -818,6 +848,7 @@ pub async fn run() -> Result<()> {
                                 let mut last_text = String::new();
                                 let mut last_text_change = Instant::now();
                                 const TEXT_SETTLED_THRESHOLD_MS: u64 = 300;
+                                const MAX_PREVIEW_WAIT_MS: u64 = 200;
 
                                 loop {
                                     tokio::select! {
@@ -828,7 +859,13 @@ pub async fn run() -> Result<()> {
                                                 break;
                                             }
                                         }
-                                        _ = check_interval.tick() => {
+                                        _ = async {
+                                            // Wake on new audio or after max wait (for settled detection)
+                                            tokio::select! {
+                                                _ = audio_notify_rx.notified() => {}
+                                                _ = tokio::time::sleep(Duration::from_millis(MAX_PREVIEW_WAIT_MS)) => {}
+                                            }
+                                        } => {
                                             match engine_clone.get_current_text() {
                                                 Ok(text_raw) => {
                                                     let text_processed = match pipeline.process(&text_raw) {
@@ -873,6 +910,10 @@ pub async fn run() -> Result<()> {
                             daemon_state = DaemonState::Recording;
                             let _ = state_tx.send(daemon_state);
                             info!("Entered Recording state");
+                        }
+                        DaemonCommand::SwitchDevice(name) => {
+                            info!("Switching audio device to {:?}", name.as_deref().unwrap_or("Default"));
+                            device_manager.set_device(name);
                         }
                         DaemonCommand::Shutdown => {
                             info!("Received Shutdown command");
@@ -970,6 +1011,11 @@ pub async fn run() -> Result<()> {
                             let _ = gui_control_tx.send(GuiControl::Exit);
                             break;
                         }
+                        DaemonCommand::SwitchDevice(name) => {
+                            warn!("Device switch to {:?} requested during recording, will apply on next session",
+                                  name.as_deref().unwrap_or("Default"));
+                            device_manager.set_device(name);
+                        }
                         _ => {
                             warn!("Ignoring unexpected command in Recording state");
                         }
@@ -986,6 +1032,15 @@ pub async fn run() -> Result<()> {
 
             DaemonState::Processing => {
                 info!("Entering Processing state");
+
+                if media_was_playing {
+                    media_was_playing = false;
+                    let delay = config.daemon.media_resume_delay_ms;
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                        resume_media();
+                    });
+                }
 
                 // Send SetProcessing IMMEDIATELY before any blocking work (shows spinner)
                 gui_control_tx.send(GuiControl::SetProcessing)
@@ -1018,8 +1073,12 @@ pub async fn run() -> Result<()> {
                 info!("Audio buffer contains {} samples", audio_buffer_len);
 
                 if audio_buffer_len > 0 {
-                    // Same model for preview and final - use cached text (no re-transcription)
-                    let preview_text = session_engine.as_ref().get_cached_text();
+                    // Run final transcription on full buffer (including trailing audio)
+                    let preview_text = session_engine.as_ref().get_final_result()
+                        .unwrap_or_else(|e| {
+                            warn!("Final transcription failed: {}, falling back to cached text", e);
+                            session_engine.as_ref().get_cached_text()
+                        });
                     info!("Transcription: '{}'", preview_text);
 
                     // Apply post-processing pipeline

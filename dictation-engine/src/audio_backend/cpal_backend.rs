@@ -256,7 +256,7 @@ impl AudioBackendFactory for CpalBackend {
                 if let Ok(name) = device.name() {
                     if Self::is_real_input_device(&name) {
                         let is_default = default_name.as_ref() == Some(&name);
-                        devices.push(DeviceInfo { name, is_default });
+                        devices.push(DeviceInfo { description: name.clone(), name, is_default });
                     }
                 }
             }

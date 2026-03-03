@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["slint-gui", "pipewire"]
-slint-gui = ["dep:slint-gui"]
+default = ["pipewire", "tray"]
 pipewire = ["dep:pipewire"]
+tray = ["dep:ksni"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -16,13 +16,13 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-slint-gui = { path = "../slint-gui", optional = true }
+slint-gui = { path = "../slint-gui" }
 dictation-types = { path = "../dictation-types" }
 shellexpand = "3"
 cpal = "0.15"
 toml = "0.8"
 harper-core = "0.68"
-zbus = "4.1"
+zbus = "5"
 systemd = "0.10"
 dirs = "5"
 notify = "6"
@@ -35,7 +35,6 @@ ort = "=2.0.0-rc.10"
 ndarray = "=0.16.1"
 # Parakeet engine
 parakeet-rs = "0.2"
-tempfile = "3"
 # SHA256 verification for VAD model
 sha2 = "0.10"
 hex = "0.4"
@@ -43,8 +42,11 @@ hex = "0.4"
 reqwest = { version = "0.12", features = ["blocking"] }
 # PipeWire native audio backend
 pipewire = { version = "0.8", optional = true }
+# System tray (StatusNotifierItem)
+ksni = { git = "https://github.com/iovxw/ksni.git", rev = "4d2320c", optional = true }
 
 [dev-dependencies]
+tempfile = "3"
 
 [lib]
 name = "dictation_engine"

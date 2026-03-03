@@ -1,5 +1,5 @@
 use anyhow::Result;
-use zbus::{interface, ConnectionBuilder};
+use zbus::interface;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::sync::{Mutex, watch};
@@ -39,6 +39,8 @@ pub enum DaemonCommand {
     StopRecording,
     Confirm,
     Shutdown,
+    /// Switch audio input device. None = system default, Some(name) = specific device.
+    SwitchDevice(Option<String>),
 }
 
 /// Response from status query
@@ -143,7 +145,7 @@ pub async fn create_dbus_service(
         health_state,
     };
 
-    let connection = ConnectionBuilder::session()?
+    let connection = zbus::connection::Builder::session()?
         .name("com.voicedictation.Daemon")?
         .serve_at("/com/voicedictation/Control", service)?
         .build()

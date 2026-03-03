@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use super::{AudioBackend, AudioBackendConfig, AudioBackendFactory, DeviceInfo};
 
@@ -103,6 +103,30 @@ impl AudioBackendFactory for PipewireBackend {
             }
         });
 
+        // Resolve device name to PipeWire target serial
+        let device_name = config.device_name.clone();
+        let target_serial = match &device_name {
+            Some(name) if name != "default" => {
+                match enumerate_audio_sources() {
+                    Ok(sources) => {
+                        let found = sources.iter().find(|s| s.name == *name);
+                        if let Some(source) = found {
+                            info!("Resolved device '{}' to PipeWire serial {}", name, source.object_serial);
+                            Some(source.object_serial)
+                        } else {
+                            warn!("Device '{}' not found in PipeWire sources, using default", name);
+                            None
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to enumerate PipeWire sources: {e}, using default");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
         // Spawn PipeWire thread
         let thread = thread::Builder::new()
             .name("pipewire-audio".into())
@@ -113,6 +137,7 @@ impl AudioBackendFactory for PipewireBackend {
                     sample_rate,
                     silence_threshold,
                     is_running_clone,
+                    target_serial,
                 ) {
                     error!("PipeWire thread error: {e}");
                 }
@@ -133,7 +158,8 @@ impl AudioBackendFactory for PipewireBackend {
         let devices: Vec<DeviceInfo> = sources
             .into_iter()
             .map(|s| DeviceInfo {
-                name: s.description,
+                description: s.description,
+                name: s.name,
                 is_default: false,
             })
             .collect();
@@ -141,6 +167,7 @@ impl AudioBackendFactory for PipewireBackend {
         if devices.is_empty() {
             Ok(vec![DeviceInfo {
                 name: "pipewire".to_string(),
+                description: "PipeWire Default".to_string(),
                 is_default: true,
             }])
         } else {
@@ -302,6 +329,7 @@ fn run_pipewire_thread(
     sample_rate: u32,
     silence_threshold: f32,
     is_running: Arc<AtomicBool>,
+    target_serial: Option<u32>,
 ) -> Result<()> {
     let mainloop = pw::main_loop::MainLoop::new(None)
         .context("Failed to create PipeWire MainLoop")?;
@@ -318,11 +346,11 @@ fn run_pipewire_thread(
 
     let samples_dropped = Arc::new(AtomicU64::new(0));
 
-    // Create a single capture stream connected to default source
+    let stream_name = if target_serial.is_some() { "targeted" } else { "default" };
     let (stream, _listener) = create_capture_stream(
         &core,
-        None, // Default source
-        "default",
+        target_serial,
+        stream_name,
         &format_buffer,
         silence_threshold,
         audio_tx,
@@ -330,7 +358,7 @@ fn run_pipewire_thread(
         is_running.clone(),
     )?;
 
-    info!("Created PipeWire capture stream (single device)");
+    info!("Created PipeWire capture stream (target_serial: {:?})", target_serial);
 
     // Run mainloop with command polling
     let loop_clone = mainloop.loop_();
