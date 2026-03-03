@@ -15,11 +15,13 @@ pub mod control_ipc;
 pub mod dbus_control;
 mod debug_audio;
 mod engine;
+mod app_profile;
 mod keyboard;
 mod model_selector;
 pub mod parakeet_engine;
 mod post_processing;
 mod window_detect;
+mod window_target;
 pub mod user_dictionary;
 pub mod vad;
 #[cfg(feature = "tray")]
@@ -586,7 +588,7 @@ pub async fn run() -> Result<()> {
     device_manager.spawn_device_watcher();
     info!("Audio streams pre-loaded and ready (fast startup enabled)");
 
-    let keyboard = Arc::new(KeyboardInjector::new(10, 50));
+    let keyboard = Arc::new(KeyboardInjector::new());
 
     // Spawn integrated GUI
     info!("Spawning integrated GUI...");
@@ -683,6 +685,7 @@ pub async fn run() -> Result<()> {
     let mut audio_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut preview_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut media_was_playing = false;
+    let mut window_target: Option<window_target::WindowTarget> = None;
     // Cancellation channel for graceful task shutdown
     let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
 
@@ -719,6 +722,11 @@ pub async fn run() -> Result<()> {
                     Ok(Some(cmd)) => match cmd {
                         DaemonCommand::StartRecording => {
                             info!("Received StartRecording command");
+                            // Capture focused window before pausing media (to lock typing target)
+                            window_target = window_target::WindowTarget::capture().await;
+                            if let Some(ref wt) = window_target {
+                                info!("Captured window target: class={}", wt.class());
+                            }
                             media_was_playing = pause_media_if_playing();
 
                             // Drain any stale audio data from the channel before starting
@@ -1115,9 +1123,13 @@ pub async fn run() -> Result<()> {
                         }
                     }
 
-                    // Detect focused app and sanitize text accordingly
-                    let app_category = window_detect::get_focused_app_category().await;
-                    let sanitizer = SanitizationProcessor::for_category(app_category);
+                    // Build per-app profile from captured window class
+                    let profile = match &window_target {
+                        Some(wt) => app_profile::AppProfile::from_window_class(wt.class()),
+                        None => app_profile::AppProfile::for_category(window_detect::AppCategory::General),
+                    };
+
+                    let sanitizer = SanitizationProcessor::new(profile.sanitization.clone(), profile.category);
                     let sanitized_result = sanitizer.process(&processed_result)?;
 
                     // Copy to clipboard as backup (wl-copy for Wayland)
@@ -1136,8 +1148,13 @@ pub async fn run() -> Result<()> {
                         }
                     }
 
-                    info!("Typing final text ({:?} mode)...", app_category);
-                    keyboard.type_text(&sanitized_result).await?;
+                    // Refocus original window before typing (handles window switches during recording)
+                    if let Some(ref wt) = window_target {
+                        wt.refocus().await.ok();
+                    }
+
+                    info!("Typing final text ({:?} mode, delay={}ms)...", profile.category, profile.word_delay_ms);
+                    keyboard.type_text(&sanitized_result, profile.word_delay_ms).await?;
                     info!("Typed!");
 
                     // Send to GUI via channel

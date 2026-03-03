@@ -11,6 +11,7 @@ pub use acronym::AcronymProcessor;
 pub use grammar::GrammarProcessor;
 pub use punctuation::PunctuationProcessor;
 pub use sanitize::SanitizationProcessor;
+pub use sanitize::SanitizationRules;
 
 /// Trait for text post-processors.
 ///

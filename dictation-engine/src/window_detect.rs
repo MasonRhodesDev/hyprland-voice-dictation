@@ -37,9 +37,8 @@ impl AppCategory {
 /// Currently returns Terminal mode by default (escapes shell chars).
 /// Future: Plugin system for automatic detection.
 pub async fn get_focused_app_category() -> AppCategory {
-    // Default to Terminal mode - escapes $, `, \, !
-    // Most dictation happens in terminals
-    AppCategory::Terminal
+    // Fallback when Hyprland/window detection isn't available
+    AppCategory::General
 }
 
 #[cfg(test)]
