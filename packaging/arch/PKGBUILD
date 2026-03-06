@@ -1,0 +1,47 @@
+# Maintainer: Mason Rhodes <mason@mrhodes.dev>
+pkgname=hyprland-voice-dictation
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Offline voice dictation for Hyprland with Parakeet speech recognition'
+arch=('x86_64')
+url='https://github.com/MasonRhodesDev/hyprland-voice-dictation'
+license=('MIT' 'Apache-2.0')
+depends=('wtype' 'pipewire' 'alsa-lib' 'fontconfig' 'freetype2')
+makedepends=('rust' 'cargo' 'pkg-config' 'pipewire')
+optdepends=('playerctl: auto-pause media during recording')
+provides=('voice-dictation')
+conflicts=('voice-dictation')
+install=hyprland-voice-dictation.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    export CARGO_TARGET_DIR=target
+    cargo build --release --locked
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+
+    install -Dm755 target/release/voice-dictation \
+        "$pkgdir/usr/bin/voice-dictation"
+
+    # Install a patched systemd service using the system binary path
+    install -d "$pkgdir/usr/lib/systemd/user"
+    sed 's|ExecStart=.*|ExecStart=/usr/bin/voice-dictation daemon|' \
+        packaging/systemd/voice-dictation.service \
+        > "$pkgdir/usr/lib/systemd/user/voice-dictation.service"
+    chmod 644 "$pkgdir/usr/lib/systemd/user/voice-dictation.service"
+
+    install -Dm755 scripts/download-parakeet-model.sh \
+        "$pkgdir/usr/share/$pkgname/download-parakeet-model.sh"
+
+    install -Dm644 LICENSE-MIT \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+    install -Dm644 LICENSE-APACHE \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+
+    install -Dm644 README.md \
+        "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

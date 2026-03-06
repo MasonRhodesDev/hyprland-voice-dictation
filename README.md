@@ -1,255 +1,193 @@
-# Voice Dictation System
+# Hyprland Voice Dictation
 
-Offline voice dictation for Linux with Wayland overlay using Whisper or Vosk speech recognition.
+Offline voice dictation for Hyprland using NVIDIA Parakeet TDT speech recognition. Press a key to start recording, press again to transcribe and type the result into any focused window.
 
 ## Features
 
-- **Whisper & Vosk engines**: Choose between Whisper (better accuracy) or Vosk (original behavior)
-- **Post-processing pipeline**: Automatic acronym detection, capitalization, and grammar checking (Harper)
-- **Two-model approach**: Fast Vosk model for live preview, accurate model (Whisper/Vosk) for final text
-- **Configuration TUI**: Interactive terminal UI for managing settings and models
-- **Preview-then-type**: See transcription in overlay before it's typed
-- **Wayland overlay**: Smooth animated GUI with audio spectrum and live transcription
-- **Compositor-agnostic**: Works with any Wayland compositor (Hyprland, Sway, KDE, GNOME, etc.)
-- **Single binary**: Unified binary with subcommands for daemon, GUI, and control
+- **Offline, private** — all processing runs locally, no cloud API
+- **NVIDIA Parakeet TDT 0.6b** — high-accuracy English speech recognition via ONNX Runtime
+- **Silero VAD** — voice activity detection to trim silence automatically
+- **Harper grammar checker** — optional light grammar correction on transcribed text
+- **Slint overlay** — transparent HUD showing recording state and live transcription
+- **System tray** — status icon with device selection and quick controls
+- **D-Bus control** — clean interface for keybind integration
+- **systemd daemon** — persistent background service with watchdog support
+- **playerctl integration** — auto-pause/resume media during recording
 
-## Prerequisites
+## Requirements
 
-- **Linux** (Fedora/Arch tested)
-- **Wayland compositor** - X11 not supported
-- **Rust 1.70+**
-- **System packages**: wtype, pipewire, alsa-lib-devel, fontconfig-devel, freetype-devel
-- **Disk space**:
-  - Whisper models: ~150MB (small), ~500MB (medium)
-  - Vosk models: ~40MB (small), ~2GB (large)
+- Wayland compositor (Hyprland, Sway, etc.)
+- `wtype` — keyboard input injection
+- PipeWire or ALSA audio
+- ~1.6 GB disk space for the Parakeet model
 
-Check dependencies:
-```bash
-bash scripts/check-deps.sh
-```
+Optional: `playerctl` for media pause/resume.
 
-Install missing packages:
-```bash
-# Fedora
-sudo dnf install rust cargo wtype pipewire alsa-lib-devel fontconfig-devel freetype-devel
+## Installation
 
-# Arch
-sudo pacman -S rust cargo wtype pipewire alsa-lib fontconfig freetype2
-```
-
-## Quick Start
+### Arch Linux (from source)
 
 ```bash
-# Build and install
+git clone https://github.com/MasonRhodesDev/hyprland-voice-dictation
+cd hyprland-voice-dictation
+
+# Build
 cargo build --release
-cargo install --path .
 
-# Configure (interactive TUI)
-voice-dictation config
+# Install binary
+install -Dm755 target/release/voice-dictation ~/.local/bin/voice-dictation
 
-# The TUI will:
-# - Let you choose Whisper or Vosk engine
-# - Select models for preview and final transcription
-# - Configure post-processing (acronyms, grammar, etc.)
-# - Offer to download missing models automatically
+# Install systemd service
+install -Dm644 packaging/systemd/voice-dictation.service \
+    ~/.config/systemd/user/voice-dictation.service
 
-# Test with real microphone
-bash test_manual.sh
+systemctl --user daemon-reload
 ```
 
-## Usage
+### From release tarball
 
-### Keybind Setup
-
-Add to your compositor config:
-
-**Hyprland:**
-```
-bind=$Meh, V, exec, voice-dictation toggle
-```
-
-**Sway:**
-```
-bindsym Mod4+Shift+Alt+v exec voice-dictation toggle
-```
-
-**KDE Plasma (Wayland):**
-- System Settings → Shortcuts → Custom Shortcuts
-- Add new command: `voice-dictation toggle`
-
-**GNOME (Wayland):**
-- Settings → Keyboard → Custom Shortcuts
-- Add new command: `voice-dictation toggle`
-
-Then:
-1. **Press your keybind** to start recording
-2. **Speak clearly** into microphone
-3. **Press keybind again** to confirm and type (Whisper processes the audio with post-processing)
-
-### Command Line
+Download the latest release tarball from the [releases page](https://github.com/MasonRhodesDev/hyprland-voice-dictation/releases), extract, and copy the binary:
 
 ```bash
-# Toggle recording (start/confirm)
-voice-dictation toggle
+tar -xzf hyprland-voice-dictation-*-x86_64-linux.tar.gz
+cd hyprland-voice-dictation-*/
+install -Dm755 voice-dictation ~/.local/bin/voice-dictation
+install -Dm644 voice-dictation.service ~/.config/systemd/user/voice-dictation.service
+systemctl --user daemon-reload
+```
 
-# Or use separate commands:
-voice-dictation start     # Start recording
-voice-dictation status    # Check status
-voice-dictation confirm   # Confirm and type
-voice-dictation stop      # Stop without typing
+## Download the Model
 
-# Configure settings
-voice-dictation config
+The Parakeet model (~1.6 GB) is not included and must be downloaded separately:
 
-# Advanced: Run daemon manually
-voice-dictation daemon    # Run engine daemon (GUI starts automatically)
+```bash
+voice-dictation download-model
+```
+
+This downloads the model from HuggingFace to `~/.config/voice-dictation/models/parakeet/`. Files already present are skipped.
+
+Alternatively, use the standalone shell script (requires `curl`):
+
+```bash
+bash scripts/download-parakeet-model.sh
+```
+
+## Setup
+
+### Start the daemon
+
+```bash
+# Enable on login
+systemctl --user enable --now voice-dictation
+
+# Check status
+systemctl --user status voice-dictation
+journalctl --user -u voice-dictation -f
+```
+
+### Hyprland keybind
+
+Add to `~/.config/hypr/hyprland.conf`:
+
+```
+bind = SUPER, V, exec, voice-dictation toggle
+```
+
+Press `Super+V` to start recording. Press again to confirm and type the transcription.
+
+### Other compositors
+
+Any Wayland compositor supporting `wtype` works. Map `voice-dictation toggle` to a key using your compositor's keybind system.
+
+## CLI Usage
+
+```
+voice-dictation <COMMAND>
+
+Commands:
+  daemon              Start the dictation engine daemon
+  start               Start a recording session
+  stop                Cancel recording
+  confirm             Finalize and type the transcription
+  toggle              Start if idle, confirm if recording
+  status              Show daemon and subsystem status
+  config              Open the configuration TUI
+  download-model      Download Parakeet model from HuggingFace
+  list-audio-devices  List available audio input devices
+  diagnose            Show diagnostics (model paths, audio, config)
+  debug list          List saved debug recordings
+  debug play FILE     Play a debug recording
 ```
 
 ## Configuration
 
-The configuration TUI (`voice-dictation config`) allows you to set:
+Run `voice-dictation config` to open the interactive configuration TUI.
 
-- **Transcription Engine**: Choose Whisper (better accuracy) or Vosk (original)
-- **Audio Device**: Select from available ALSA/PipeWire devices
-- **Models**: Configure preview and final transcription models
-- **Post-processing**:
-  - Acronym detection (e.g., "a p i" → "API")
-  - Capitalization (first word, "I", after sentence endings)
-  - Grammar & spell checking via Harper (developer-friendly)
-- **GUI Settings**: Window size, position, colors, fonts
-- **Advanced**: Sample rate, VAD threshold, language support
+Config file: `~/.config/voice-dictation/config.toml`
 
-Configuration is stored in `~/.config/voice-dictation/config.toml`.
+```toml
+# Audio device (leave empty for system default)
+audio_device = ""
 
-The TUI is powered by [schema-tui](https://github.com/masonyoungblood/schema-tui) - a JSON Schema-based configuration interface.
+# Audio backend: "pipewire" or "alsa"
+audio_backend = "pipewire"
 
-## Development
-
-```bash
-# Quick rebuild
-cargo build --release
-
-# Format code
-cargo fmt
-
-# Run linter
-cargo clippy
-
-# Test with real microphone
-bash test_manual.sh
-
-# Monitor logs
-tail -f /tmp/dictation-engine.log
+# Grammar checking
+grammar_check = true
 ```
 
-## Models
-
-Models are stored in `~/.config/voice-dictation/models/`.
-
-**Whisper Models** (GGML format):
-- **ggml-tiny.en.bin** (~75MB): Fastest, lower accuracy
-- **ggml-base.en.bin** (~142MB): Good balance
-- **ggml-small.en.bin** (~466MB): Recommended for CPU, high accuracy
-- **ggml-medium.en.bin** (~1.5GB): Best accuracy, slower
-
-**Vosk Models**:
-- **vosk-model-en-us-daanzu-20200905-lgraph** (~40MB): Fast, for preview
-- **vosk-model-en-us-0.22** (~1.8GB): Accurate, for final transcription
-
-The configuration TUI will offer to download missing models automatically.
+Run `voice-dictation diagnose` to inspect the current configuration and model status.
 
 ## Troubleshooting
 
-**No overlay?**
+**Daemon not starting:**
 ```bash
-pgrep -f "voice-dictation daemon" || echo "Daemon not running"
-tail /tmp/dictation-engine.log
+journalctl --user -u voice-dictation -n 50
+voice-dictation diagnose
 ```
 
-**No transcription?**
+**Model missing:**
 ```bash
-tail -f /tmp/dictation-engine.log | grep "Transcription:"
+voice-dictation download-model
 ```
 
-**Text not being typed?**
-- Ensure text input field is focused
-- Check: `tail /tmp/dictation-engine.log`
-- Verify: `which wtype`
-
-**Kill stuck processes:**
+**No audio input / wrong device:**
 ```bash
-pkill -9 -f dictation
+voice-dictation list-audio-devices
+# Then set audio_device in config
+voice-dictation config
 ```
 
-**Monitor logs:**
+**wtype not found:**
 ```bash
-make logs
-# or
-tail -f /tmp/dictation-engine.log
+# Arch
+sudo pacman -S wtype
+# Fedora
+sudo dnf install wtype
 ```
 
 ## Project Structure
 
 ```
-voice-dictation-rust/
-├── README.md
-├── Cargo.toml                  # Workspace configuration
-├── src/
-│   └── main.rs                 # Main binary with subcommands
-├── dictation-engine/           # Audio → Speech Recognition → Keyboard
-│   ├── Cargo.toml
-│   └── src/
-│       ├── lib.rs              # Engine entry point
-│       ├── engine.rs           # Engine trait
-│       ├── whisper_engine.rs   # Whisper implementation
-│       ├── vosk_engine.rs      # Vosk implementation
-│       ├── model_manager.rs    # Model loading and management
-│       ├── post_processing/    # Post-processing pipeline
-│       │   ├── mod.rs
-│       │   ├── acronym.rs      # Acronym detection
-│       │   ├── punctuation.rs  # Capitalization
-│       │   └── grammar.rs      # Harper grammar checking
-│       ├── control_ipc.rs      # Control socket server
-│       ├── ipc.rs              # Audio socket server
-│       └── keyboard.rs         # wtype injection
-├── slint-gui/                  # Wayland overlay (Slint framework)
-│   ├── Cargo.toml
-│   └── src/
-│       ├── lib.rs              # GUI entry point
-│       └── monitor.rs          # Monitor detection
-├── dictation-types/            # Shared types for daemon-GUI communication
-│   └── src/lib.rs
-├── config-schema.json          # JSON Schema for configuration
-├── scripts/                    # Utility scripts
-│   ├── check-deps.sh
-│   ├── download-whisper-models.sh
-│   ├── list-audio-devices.sh
-│   └── list-vosk-models.sh
-└── test_manual.sh              # Manual test with mic
+src/main.rs                   CLI frontend and D-Bus client
+dictation-engine/             Core library
+  src/lib.rs                  Daemon entry point and state machine
+  src/engine/                 Parakeet ONNX inference
+  src/audio/                  PipeWire/ALSA capture
+  src/vad.rs                  Silero VAD
+  src/post_processing/        Grammar and text cleanup
+dictation-types/              Shared types
+slint-gui/                    Overlay HUD (Slint UI)
+packaging/
+  arch/PKGBUILD               Arch Linux package
+  systemd/voice-dictation.service
+scripts/
+  check-deps.sh               Dependency checker
+  download-parakeet-model.sh  Standalone model downloader
+  list-audio-devices.sh       List audio devices
+config-schema.json            Config schema for the TUI
 ```
-
-## Dependencies
-
-**Runtime:**
-- Rust/Cargo
-- Whisper or Vosk models (downloaded via config TUI)
-- `wtype` - Wayland keyboard injection
-- PipeWire / ALSA - Audio input
-- Wayland compositor (Hyprland, Sway, KDE, GNOME, etc.)
-
-**Rust Libraries:**
-- `whisper-rs` - Whisper.cpp bindings
-- `vosk` - Vosk speech recognition
-- `slint` - GUI framework
-- `harper-core` - Grammar and spell checking
-- `schema-tui` - Configuration interface
-- `tokio` - Async runtime
-
-## Known Issues
-
-- Whisper can be slow on CPU (~3-10s for final processing depending on model/speech length)
-- Post-processing adds ~20ms overhead (can be disabled in config)
 
 ## License
 
-MIT OR Apache-2.0
+Licensed under either of [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE) at your option.

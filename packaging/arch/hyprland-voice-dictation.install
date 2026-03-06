@@ -1,0 +1,22 @@
+post_install() {
+    echo ""
+    echo "==> hyprland-voice-dictation installed successfully."
+    echo ""
+    echo "==> NEXT STEPS:"
+    echo ""
+    echo "    1. Download the Parakeet speech model (~1.6 GB):"
+    echo "       voice-dictation download-model"
+    echo ""
+    echo "    2. Enable and start the daemon:"
+    echo "       systemctl --user enable --now voice-dictation"
+    echo ""
+    echo "    3. Add a keybind in your Hyprland config:"
+    echo "       bind = SUPER, V, exec, voice-dictation toggle"
+    echo ""
+    echo "    See: https://github.com/MasonRhodesDev/hyprland-voice-dictation"
+    echo ""
+}
+
+post_upgrade() {
+    post_install
+}

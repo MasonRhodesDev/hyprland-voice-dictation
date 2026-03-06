@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use std::fs;
+use std::io::{self, Write as IoWrite};
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
@@ -60,6 +61,8 @@ enum Commands {
     },
     #[command(about = "Show audio backend diagnostics and configuration")]
     Diagnose,
+    #[command(about = "Download Parakeet speech recognition model from HuggingFace")]
+    DownloadModel,
 }
 
 #[derive(Subcommand)]
@@ -621,6 +624,68 @@ fn diagnose() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn download_model() -> Result<(), Box<dyn std::error::Error>> {
+    let home = std::env::var("HOME")?;
+    let model_dir = PathBuf::from(&home).join(".config/voice-dictation/models/parakeet");
+
+    fs::create_dir_all(&model_dir)?;
+
+    const BASE_URL: &str = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
+    const FILES: &[&str] = &[
+        "encoder-model.onnx",
+        "encoder-model.onnx.data",
+        "decoder_joint-model.onnx",
+    ];
+
+    println!("Model directory: {}", model_dir.display());
+    println!("Source: {}", BASE_URL);
+    println!();
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(None)
+        .build()?;
+
+    for filename in FILES {
+        let dest = model_dir.join(filename);
+
+        if dest.exists() {
+            let size = fs::metadata(&dest)?.len();
+            if size > 0 {
+                println!("  {} — already exists ({:.1} MB), skipping", filename, size as f64 / 1_048_576.0);
+                continue;
+            }
+        }
+
+        let url = format!("{}/{}", BASE_URL, filename);
+        print!("  Downloading {}... ", filename);
+        io::stdout().flush()?;
+
+        let response = client.get(&url).send()?;
+        if !response.status().is_success() {
+            eprintln!("HTTP {}", response.status());
+            return Err(format!("Failed to download {}: HTTP {}", filename, response.status()).into());
+        }
+
+        let total = response.content_length();
+        let bytes = response.bytes()?;
+        let size = bytes.len();
+
+        fs::write(&dest, &bytes)?;
+
+        if let Some(t) = total {
+            println!("{:.1} MB", t as f64 / 1_048_576.0);
+        } else {
+            println!("{:.1} MB", size as f64 / 1_048_576.0);
+        }
+    }
+
+    println!();
+    println!("Model download complete.");
+    println!("You can now start the daemon: systemctl --user start voice-dictation");
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -676,6 +741,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             DebugCommands::Play { filename } => debug_play(&filename)?,
         },
         Commands::Diagnose => diagnose()?,
+        Commands::DownloadModel => download_model()?,
     }
 
     Ok(())

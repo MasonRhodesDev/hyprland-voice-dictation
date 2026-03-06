@@ -1,5 +1,0 @@
-#!/bin/bash
-
-VOICE_DICTATION_BIN="$HOME/.local/bin/voice-dictation"
-
-exec "$VOICE_DICTATION_BIN" "$@"

@@ -24,11 +24,9 @@ Thumbs.db
 config.toml
 
 # Models (too large for git)
-models/*.zip
-models/vosk-model-*/
-.vosk/
-.plans/
+*.onnx
+*.onnx.data
 
 # Plan skill files
 CURRENT_PLAN.md
-docker-output/
+.plans/
