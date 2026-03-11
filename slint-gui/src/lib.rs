@@ -367,8 +367,14 @@ fn run_shell(
             let active_monitor = monitor::get_active_monitor();
 
             if let Ok(state) = shared_state.read() {
+                // Log monitor state on non-hidden transitions for debugging
+                if state.gui_state != GuiState::Hidden {
+                    debug!("GUI state={:?}, active_monitor={:?}", state.gui_state, active_monitor);
+                }
+
                 // Graceful degradation: show on all monitors when detection unavailable
-                let use_all_monitors = active_monitor.is_none();
+                let use_all_monitors = active_monitor.is_none()
+                    || active_monitor.as_ref().map_or(false, |s| s.is_empty());
                 if use_all_monitors && state.gui_state != GuiState::Hidden {
                     debug!("Monitor detection unavailable, showing GUI on all monitors");
                 }
@@ -378,18 +384,17 @@ fn run_shell(
                     let component = surface_state.component_instance();
 
                     // Determine if this surface is on the active monitor
+                    let output_name = app_state.get_output_info(key.output_handle)
+                        .and_then(|info| info.name().map(|n| n.to_string()));
+
                     let is_active = if use_all_monitors {
                         // Show on all monitors when detection unavailable
                         state.gui_state != GuiState::Hidden
                     } else if let Some(ref active_name) = active_monitor {
                         // Normal behavior: only show on active monitor
-                        if let Some(output_info) = app_state.get_output_info(key.output_handle) {
-                            output_info.name()
-                                .map(|name| name == active_name)
-                                .unwrap_or(false)
-                        } else {
-                            false
-                        }
+                        output_name.as_ref()
+                            .map(|name| name == active_name)
+                            .unwrap_or(false)
                     } else {
                         // Fallback: show on primary if can't determine active
                         app_state.get_output_info(key.output_handle)
@@ -403,6 +408,10 @@ fn run_shell(
                     } else {
                         0  // Hidden
                     };
+
+                    if state.gui_state != GuiState::Hidden && mode != 0 {
+                        info!("Setting mode={} on surface output={:?} (active_monitor={:?})", mode, output_name, active_monitor);
+                    }
 
                     if let Err(e) = component.set_property("mode", Value::Number(mode as f64)) {
                         debug!("Failed to set mode: {}", e);

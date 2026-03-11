@@ -1,3 +1,4 @@
+use futures_util::StreamExt;
 use ksni::menu::{MenuItem, RadioGroup, RadioItem, StandardItem, SubMenu};
 use ksni::{Handle, Tray, TrayMethods};
 use tokio::sync::{mpsc, watch};
@@ -11,6 +12,8 @@ pub struct DictationTray {
     command_tx: mpsc::Sender<DaemonCommand>,
     cached_devices: Vec<crate::audio_backend::DeviceInfo>,
     selected_device: Option<String>,
+    /// When true, icon_name returns empty to force ksni to emit NewIcon.
+    icon_invalidated: bool,
 }
 
 impl Tray for DictationTray {
@@ -27,6 +30,11 @@ impl Tray for DictationTray {
     }
 
     fn icon_name(&self) -> String {
+        if self.icon_invalidated {
+            // Return a known-valid icon so ksni detects a change and emits NewIcon
+            // without showing a missing-icon placeholder during the transition
+            return "content-loading-symbolic".into();
+        }
         match self.state {
             DaemonState::Idle => "microphone-sensitivity-muted-symbolic",
             DaemonState::Recording => "microphone-sensitivity-high-symbolic",
@@ -192,6 +200,7 @@ pub async fn spawn_tray(
         command_tx,
         cached_devices: initial_devices,
         selected_device: initial_device,
+        icon_invalidated: false,
     };
 
     let handle = match tray.spawn().await {
@@ -203,6 +212,14 @@ pub async fn spawn_tray(
     };
 
     info!("System tray icon active");
+
+    // Listen for icon-theme changes and force tray icon refresh
+    let theme_handle = handle.clone();
+    tokio::spawn(async move {
+        if let Err(e) = listen_theme_changes(theme_handle).await {
+            warn!("Theme change listener error: {e}");
+        }
+    });
 
     let update_handle = handle.clone();
     tokio::spawn(async move {
@@ -254,4 +271,58 @@ pub async fn spawn_tray(
     });
 
     Some(handle)
+}
+
+/// Listen for icon-theme changes via dconf and force tray icon re-resolution.
+/// When lmtt switches themes (breeze ↔ breeze-dark), we invalidate the icon
+/// name to trigger ksni's NewIcon signal so waybar re-fetches from the new theme.
+async fn listen_theme_changes(handle: Handle<DictationTray>) -> anyhow::Result<()> {
+    let connection = zbus::Connection::session().await?;
+
+    let match_rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .interface("ca.desrt.dconf.Writer")?
+        .member("Notify")?
+        .build();
+
+    let proxy = zbus::fdo::DBusProxy::new(&connection).await?;
+    proxy.add_match_rule(match_rule.into()).await?;
+
+    let mut stream = zbus::MessageStream::from(&connection);
+
+    info!("Listening for icon-theme changes");
+
+    while let Some(msg) = stream.next().await {
+        if let Ok(msg) = msg {
+            if let Some(member) = msg.header().member() {
+                if member.as_str() == "Notify" {
+                    if let Ok((path, _, _)) =
+                        msg.body().deserialize::<(&str, Vec<&str>, &str)>()
+                    {
+                        if path.contains("desktop/interface") {
+                            info!("Icon theme changed, debouncing before refresh");
+                            // Debounce: wait for all gsettings keys to settle
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            // Drain any additional notifications that queued up
+                            while let Ok(Some(_)) = tokio::time::timeout(
+                                std::time::Duration::from_millis(50),
+                                stream.next(),
+                            ).await {}
+                            // Single invalidation cycle
+                            handle.update(|tray| {
+                                tray.icon_invalidated = true;
+                            }).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            handle.update(|tray| {
+                                tray.icon_invalidated = false;
+                            }).await;
+                            info!("Tray icon refreshed");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }

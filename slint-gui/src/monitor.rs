@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// Circuit breaker: max consecutive failures before opening circuit
 const MAX_CONSECUTIVE_FAILURES: u32 = 10; // 20 seconds of failures (10 * 2s retry interval)
@@ -83,8 +83,10 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::
     use hyprland::event_listener::{EventListener, MonitorEventData};
 
     // Initialize global state
+    let initial = get_active_monitor_sync();
+    info!("Initial active monitor from Hyprland IPC: {:?}", initial);
     let monitor = Arc::new(RwLock::new(
-        get_active_monitor_sync().unwrap_or_default(),
+        initial.unwrap_or_default(),
     ));
     let _ = ACTIVE_MONITOR.set(monitor.clone());
 
