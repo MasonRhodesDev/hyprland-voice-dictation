@@ -554,6 +554,18 @@ pub async fn run() -> Result<()> {
     // Create shared health state
     let health_state = Arc::new(HealthState::new());
 
+    // Spawn dedicated watchdog task — decoupled from the event loop so long typing/processing
+    // operations don't starve the watchdog and cause systemd to kill us.
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(15));
+        loop {
+            interval.tick().await;
+            if let Err(e) = notify(false, [(STATE_WATCHDOG, "1")].iter()) {
+                debug!("Failed to send watchdog keepalive: {}", e);
+            }
+        }
+    });
+
     // Create audio channel (shared between DeviceManager and processing)
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
     let audio_rx_shared = Arc::new(tokio::sync::Mutex::new(audio_rx));
@@ -696,26 +708,11 @@ pub async fn run() -> Result<()> {
     // Cancellation channel for graceful task shutdown
     let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
 
-    // Watchdog keepalive: send every 15 seconds
-    let mut last_watchdog = Instant::now();
-    let watchdog_interval = Duration::from_secs(15);
-
     // Audio health monitoring constants
     let _audio_health_timeout = Duration::from_secs(3);
 
     // ===== PERSISTENT STATE MACHINE LOOP =====
     loop {
-        // Send systemd watchdog keepalive if interval elapsed
-        if last_watchdog.elapsed() >= watchdog_interval {
-            if health_state.is_healthy() {
-                if let Err(e) = notify(false, [(STATE_WATCHDOG, "1")].iter()) {
-                    debug!("Failed to send watchdog keepalive: {}", e);
-                }
-            } else {
-                warn!("Skipping watchdog keepalive - subsystem unhealthy, systemd will restart us");
-            }
-            last_watchdog = Instant::now();
-        }
 
         match daemon_state {
             DaemonState::Idle => {
@@ -1181,6 +1178,10 @@ pub async fn run() -> Result<()> {
                         wt.refocus().await.ok();
                     }
 
+                    let expected_typing_secs = (sanitized_result.len() as u64 * profile.word_delay_ms) / 1000;
+                    if expected_typing_secs > 15 {
+                        warn!("Typing will take ~{}s ({} chars at {}ms/char) — text is already in clipboard if interrupted", expected_typing_secs, sanitized_result.len(), profile.word_delay_ms);
+                    }
                     info!("Typing final text ({:?} mode, delay={}ms)...", profile.category, profile.word_delay_ms);
                     keyboard.type_text(&sanitized_result, profile.word_delay_ms).await?;
                     info!("Typed!");
