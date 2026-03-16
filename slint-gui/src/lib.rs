@@ -304,6 +304,12 @@ fn state_to_mode(state: GuiState) -> i32 {
 /// Exit code indicating UI reload requested (triggers systemd restart)
 const EXIT_CODE_RELOAD: i32 = 64;
 
+/// Exit code when all layer surfaces are lost (triggers systemd restart via Restart=on-failure)
+const EXIT_CODE_SURFACES_LOST: i32 = 1;
+
+/// Number of timer ticks (~16ms each) to wait before exiting after all surfaces are lost (~3s)
+const SURFACE_LOSS_GRACE_TICKS: u32 = 188;
+
 /// Run the single persistent shell with dynamic property updates
 fn run_shell(
     shared_state: Arc<RwLock<SharedState>>,
@@ -354,6 +360,9 @@ fn run_shell(
     // This runs inside the event loop and can safely access the component
     let update_interval = Duration::from_millis(16); // ~60fps
 
+    let mut empty_surface_ticks: u32 = 0;
+    let mut gui_initialized = false;
+
     event_loop
         .add_timer(update_interval, move |_deadline: Instant, app_state| {
             // Check for UI file reload request (dev workflow)
@@ -361,6 +370,22 @@ fn run_shell(
                 info!("UI file changed, reloading shell...");
                 reload_flag.store(false, Ordering::SeqCst);
                 std::process::exit(EXIT_CODE_RELOAD);
+            }
+
+            // Detect lost layer surfaces and exit for systemd restart
+            let surface_count = app_state.surfaces_with_keys().count();
+            if surface_count > 0 {
+                gui_initialized = true;
+                empty_surface_ticks = 0;
+            } else if gui_initialized {
+                empty_surface_ticks += 1;
+                if empty_surface_ticks >= SURFACE_LOSS_GRACE_TICKS {
+                    error!(
+                        "All layer surfaces lost for ~{}s after init, exiting for systemd restart",
+                        (empty_surface_ticks as u64 * 16) / 1000
+                    );
+                    std::process::exit(EXIT_CODE_SURFACES_LOST);
+                }
             }
 
             // Get active monitor from Hyprland
