@@ -63,6 +63,12 @@ enum Commands {
     Diagnose,
     #[command(about = "Download Parakeet speech recognition model from HuggingFace")]
     DownloadModel,
+    #[command(about = "Open the test loop UI for iterative transcription improvement")]
+    TestLoop {
+        /// Path to a specific recording WAV file (defaults to most recent)
+        #[arg(long)]
+        recording: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -742,6 +748,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         Commands::Diagnose => diagnose()?,
         Commands::DownloadModel => download_model()?,
+        Commands::TestLoop { recording } => {
+            test_loop_ui::run(recording.as_deref())?;
+        }
     }
 
     Ok(())

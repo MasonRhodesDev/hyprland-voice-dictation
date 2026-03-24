@@ -1,0 +1,334 @@
+import { Button, LineEdit, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+export struct WordTile {
+    word: string,
+    index: int,
+}
+
+export component TestLoop inherits Window {
+    title: "Test Loop";
+    width: 700px;
+    height: 520px;
+    background: #1e1e2e;
+
+    // Callbacks to Rust
+    callback load-recording(int);
+    callback navigate(int);  // -1 = prev, +1 = next
+    callback select-word(int);
+    callback rerun-engine();
+    callback add-substitution(string, string);
+    callback add-hotword(string, float);
+    callback apply-and-rerun();
+
+    // Properties set by Rust
+    in property <string> recording-timestamp: "";
+    in property <string> recording-duration: "";
+    in property <string> recording-preview: "";
+    in property <int> recording-index: 0;
+    in property <int> recording-count: 0;
+
+    in property <bool> recording-loaded: false;
+    in property <string> final-text: "";
+    in property <string> engine-info: "";
+    in property <[WordTile]> words: [];
+    in property <int> selected-word-index: -1;
+
+    in property <string> rerun-result: "";
+    in property <bool> has-rerun: false;
+
+    in-out property <string> correction-text: "";
+    in-out property <string> spoken-form-text: "";
+
+    // Picker screen
+    picker := Rectangle {
+        visible: !recording-loaded;
+        background: #1e1e2e;
+        x: 0; y: 0; width: parent.width; height: parent.height;
+
+        VerticalBox {
+            padding: 20px;
+            spacing: 16px;
+
+            Text {
+                text: "Test Loop";
+                color: #cdd6f4;
+                font-size: 22px;
+                font-weight: 700;
+            }
+
+            Text {
+                text: recording-count == 0 ? "No recordings found in /tmp/voice-dictation-debug/" : "Select a recording:";
+                color: #a6adc8;
+                font-size: 13px;
+            }
+
+            Rectangle {
+                visible: recording-count > 0;
+                background: #313244;
+                border-radius: 8px;
+                height: 120px;
+
+                VerticalBox {
+                    padding: 16px;
+                    spacing: 8px;
+
+                    Text {
+                        text: recording-timestamp;
+                        color: #cdd6f4;
+                        font-size: 14px;
+                        font-weight: 600;
+                    }
+
+                    Text {
+                        text: "Duration: " + recording-duration;
+                        color: #a6adc8;
+                        font-size: 12px;
+                    }
+
+                    Text {
+                        text: recording-preview;
+                        color: #bac2de;
+                        font-size: 12px;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            HorizontalBox {
+                spacing: 8px;
+                alignment: center;
+
+                Button {
+                    text: "←";
+                    enabled: recording-count > 1;
+                    clicked => { navigate(-1); }
+                }
+
+                Text {
+                    text: recording-count > 0 ? (recording-index + 1) + " / " + recording-count : "0 / 0";
+                    color: #a6adc8;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+
+                Button {
+                    text: "→";
+                    enabled: recording-count > 1;
+                    clicked => { navigate(1); }
+                }
+            }
+
+            Button {
+                text: "Load Recording";
+                enabled: recording-count > 0;
+                clicked => { load-recording(recording-index); }
+            }
+        }
+    }
+
+    // Review screen
+    review := Rectangle {
+        visible: recording-loaded;
+        background: #1e1e2e;
+        x: 0; y: 0; width: parent.width; height: parent.height;
+
+        VerticalBox {
+            padding: 16px;
+            spacing: 12px;
+
+            HorizontalBox {
+                spacing: 8px;
+                alignment: start;
+
+                Text {
+                    text: "Test Loop";
+                    color: #cdd6f4;
+                    font-size: 18px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "— " + recording-timestamp;
+                    color: #a6adc8;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Word tiles area
+            ScrollView {
+                height: 80px;
+                HorizontalLayout {
+                    spacing: 6px;
+                    padding: 4px;
+                    alignment: start;
+
+                    for tile[i] in words: Rectangle {
+                        width: tile-text.preferred-width + 16px;
+                        height: 32px;
+                        background: i == selected-word-index ? #fab387 : #313244;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: i == selected-word-index ? #fab387 : #45475a;
+
+                        tile-text := Text {
+                            text: tile.word;
+                            color: i == selected-word-index ? #1e1e2e : #cdd6f4;
+                            font-size: 13px;
+                            x: 8px;
+                            y: (parent.height - self.preferred-height) / 2;
+                        }
+
+                        TouchArea {
+                            clicked => { select-word(i); }
+                        }
+                    }
+                }
+            }
+
+            // Metadata row
+            HorizontalBox {
+                spacing: 16px;
+                alignment: start;
+
+                Text {
+                    text: engine-info;
+                    color: #6c7086;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "Duration: " + recording-duration;
+                    color: #6c7086;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Re-run result (shown after re-run)
+            Rectangle {
+                visible: has-rerun;
+                background: #1e2a1e;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: #a6e3a1;
+                height: 56px;
+
+                VerticalBox {
+                    padding: 8px;
+                    spacing: 4px;
+
+                    Text {
+                        text: "Re-run result:";
+                        color: #a6e3a1;
+                        font-size: 11px;
+                        font-weight: 600;
+                    }
+
+                    Text {
+                        text: rerun-result;
+                        color: #cdd6f4;
+                        font-size: 13px;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            Button {
+                text: "Re-run Engine";
+                clicked => { rerun-engine(); }
+            }
+
+            // Correction panel (shown when word selected)
+            Rectangle {
+                visible: selected-word-index >= 0;
+                background: #181825;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #45475a;
+
+                VerticalBox {
+                    padding: 16px;
+                    spacing: 10px;
+
+                    HorizontalBox {
+                        spacing: 8px;
+                        alignment: start;
+
+                        Text {
+                            text: "Selected word:";
+                            color: #a6adc8;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: selected-word-index >= 0 && selected-word-index < words.length ? words[selected-word-index].word : "";
+                            color: #fab387;
+                            font-size: 13px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    HorizontalBox {
+                        spacing: 8px;
+                        alignment: start;
+
+                        Text {
+                            text: "Correction:";
+                            color: #a6adc8;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            width: 90px;
+                        }
+
+                        correction-input := LineEdit {
+                            text <=> correction-text;
+                            placeholder-text: "corrected word";
+                        }
+                    }
+
+                    HorizontalBox {
+                        spacing: 8px;
+                        alignment: start;
+
+                        Text {
+                            text: "Spoken form:";
+                            color: #a6adc8;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            width: 90px;
+                        }
+
+                        spoken-input := LineEdit {
+                            text <=> spoken-form-text;
+                            placeholder-text: "what you actually say";
+                        }
+                    }
+
+                    HorizontalBox {
+                        spacing: 8px;
+
+                        Button {
+                            text: "Add Substitution";
+                            clicked => { add-substitution(spoken-form-text, correction-text); }
+                        }
+
+                        Button {
+                            text: "Add Hotword";
+                            clicked => { add-hotword(correction-text, 20.0); }
+                        }
+
+                        Button {
+                            text: "Apply & Re-run";
+                            clicked => { apply-and-rerun(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
