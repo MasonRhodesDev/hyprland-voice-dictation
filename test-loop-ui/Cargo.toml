@@ -1,0 +1,25 @@
+[package]
+name = "test-loop-ui"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "test-loop-ui"
+path = "src/main.rs"
+
+[lib]
+name = "test_loop_ui"
+path = "src/lib.rs"
+
+[dependencies]
+dictation-engine = { path = "../dictation-engine", default-features = false }
+slint = "1.14"
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+hound = "3.5"
+toml = "0.8"
+
+[build-dependencies]
+slint-build = "1.14"
