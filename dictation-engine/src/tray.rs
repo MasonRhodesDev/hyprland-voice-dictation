@@ -168,6 +168,19 @@ impl Tray for DictationTray {
             device_submenu.into(),
             MenuItem::Separator,
             StandardItem {
+                label: "Open Test Loop".into(),
+                activate: Box::new(|_tray: &mut Self| {
+                    if let Ok(exe) = std::env::current_exe() {
+                        let _ = std::process::Command::new(exe)
+                            .arg("test-loop")
+                            .spawn();
+                    }
+                }),
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
+            StandardItem {
                 label: "Quit".into(),
                 activate: Box::new(|tray: &mut Self| {
                     if let Err(e) = tray.command_tx.try_send(DaemonCommand::Shutdown) {
