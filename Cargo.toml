@@ -11,6 +11,7 @@ tray = ["dictation-engine/tray"]
 [dependencies]
 dictation-engine = { path = "dictation-engine", default-features = false }
 slint-gui = { path = "slint-gui" }
+test-loop-ui = { path = "test-loop-ui" }
 schema-tui = { git = "https://github.com/MasonRhodesDev/schema-tui.git" }
 clap = { version = "4", features = ["derive"] }
 zbus = "5"
@@ -24,6 +25,7 @@ members = [
     "dictation-engine",
     "dictation-types",
     "slint-gui",
+    "test-loop-ui",
 ]
 resolver = "2"
 
