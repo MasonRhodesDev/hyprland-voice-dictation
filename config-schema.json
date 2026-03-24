@@ -70,6 +70,14 @@
           "ui_widget": "toggle"
         },
         {
+          "id": "enable_word_substitution",
+          "label": "Word Substitution",
+          "description": "Replace spoken phrases with desired text (e.g., 'shay moy' → 'chezmoi'). Edit ~/.local/share/voice-dictation/substitutions.txt to configure.",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle"
+        },
+        {
           "id": "trailing_buffer_ms",
           "label": "Trailing Audio Buffer",
           "description": "Duration in milliseconds to continue recording after stop command (captures final words that might otherwise be cut off)",
