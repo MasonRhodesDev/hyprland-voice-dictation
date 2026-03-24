@@ -2,6 +2,7 @@ mod acronym;
 mod grammar;
 mod punctuation;
 mod sanitize;
+mod word_substitution;
 
 use crate::user_dictionary::UserDictionary;
 use anyhow::Result;
@@ -12,6 +13,7 @@ pub use grammar::GrammarProcessor;
 pub use punctuation::PunctuationProcessor;
 pub use sanitize::SanitizationProcessor;
 pub use sanitize::SanitizationRules;
+pub use word_substitution::WordSubstitutionProcessor;
 
 /// Trait for text post-processors.
 ///
@@ -46,24 +48,33 @@ impl Pipeline {
     /// Create a pipeline from configuration.
     ///
     /// Enables processors based on configuration flags.
-    /// Processors are applied in order: acronyms → punctuation → grammar.
+    /// Processors are applied in order: acronyms → punctuation → word substitution → grammar.
     pub fn from_config(
         enable_acronyms: bool,
         enable_punctuation: bool,
         enable_grammar: bool,
     ) -> Self {
-        Self::from_config_with_dict(enable_acronyms, enable_punctuation, enable_grammar, None)
+        Self::from_config_with_dict(
+            enable_acronyms,
+            enable_punctuation,
+            enable_grammar,
+            None,
+            false,
+            None,
+        )
     }
 
-    /// Create a pipeline from configuration with optional user dictionary.
+    /// Create a pipeline from configuration with optional user dictionary and word substitution.
     ///
     /// Enables processors based on configuration flags.
-    /// Processors are applied in order: acronyms → punctuation → grammar.
+    /// Processors are applied in order: acronyms → punctuation → word substitution → grammar.
     pub fn from_config_with_dict(
         enable_acronyms: bool,
         enable_punctuation: bool,
         enable_grammar: bool,
         user_dict: Option<Arc<UserDictionary>>,
+        enable_word_substitution: bool,
+        word_sub: Option<WordSubstitutionProcessor>,
     ) -> Self {
         let mut pipeline = Self::new();
 
@@ -75,6 +86,13 @@ impl Pipeline {
         // Then apply punctuation (capitalization)
         if enable_punctuation {
             pipeline.add_processor(Box::new(PunctuationProcessor::new()));
+        }
+
+        // Apply word substitutions (shay moy → chezmoi)
+        if enable_word_substitution {
+            if let Some(ws) = word_sub {
+                pipeline.add_processor(Box::new(ws));
+            }
         }
 
         // Finally apply grammar checking

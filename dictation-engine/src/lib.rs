@@ -53,7 +53,7 @@ use dbus_control::DaemonCommand;
 use engine::TranscriptionEngine;
 use keyboard::KeyboardInjector;
 use model_selector::ModelSpec;
-use post_processing::{Pipeline, SanitizationProcessor, TextProcessor};
+use post_processing::{Pipeline, SanitizationProcessor, TextProcessor, WordSubstitutionProcessor};
 use user_dictionary::UserDictionary;
 
 // Re-export DaemonState from dbus_control
@@ -88,6 +88,8 @@ struct DaemonConfig {
     enable_punctuation: bool,
     #[serde(default = "default_enable_grammar")]
     enable_grammar: bool,
+    #[serde(default = "default_enable_word_substitution")]
+    enable_word_substitution: bool,
 
     // Audio capture
     #[serde(default = "default_silence_threshold_db")]
@@ -120,6 +122,7 @@ fn default_model() -> String { "parakeet:default".to_string() }
 fn default_enable_acronyms() -> bool { true }
 fn default_enable_punctuation() -> bool { true }
 fn default_enable_grammar() -> bool { true }
+fn default_enable_word_substitution() -> bool { true }
 fn default_silence_threshold_db() -> f32 { -60.0 }
 fn default_debug_audio() -> bool { false }
 fn default_trailing_buffer_ms() -> u64 { 750 }
@@ -194,6 +197,52 @@ async fn watch_dictionary_files(user_dict: Arc<UserDictionary>) -> Result<()> {
                             info!("Dictionaries reloaded successfully");
                         }
                         break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+/// Watch substitution file and reload on changes.
+async fn watch_substitution_file(word_sub: WordSubstitutionProcessor) -> Result<()> {
+    let path = WordSubstitutionProcessor::watch_path();
+
+    if path.as_os_str().is_empty() {
+        info!("No substitution file path to watch");
+        return Ok(());
+    }
+
+    info!("Watching substitution file: {:?}", path);
+
+    let (tx, mut rx) = mpsc::channel(100);
+
+    let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+        if let Ok(event) = res {
+            let _ = tx.blocking_send(event);
+        }
+    })?;
+
+    if path.exists() {
+        watcher.watch(&path, RecursiveMode::NonRecursive)?;
+    } else if let Some(parent) = path.parent() {
+        if parent.exists() {
+            watcher.watch(parent, RecursiveMode::NonRecursive)?;
+        }
+    }
+
+    while let Some(event) = rx.recv().await {
+        match event.kind {
+            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+                if event.paths.iter().any(|p| p == &path) {
+                    info!("Substitution file changed: {:?}, reloading...", path);
+                    if let Err(e) = word_sub.reload() {
+                        warn!("Failed to reload substitutions: {}", e);
+                    } else {
+                        info!("Substitutions reloaded successfully");
                     }
                 }
             }
@@ -497,6 +546,7 @@ pub async fn run() -> Result<()> {
                 enable_acronyms: default_enable_acronyms(),
                 enable_punctuation: default_enable_punctuation(),
                 enable_grammar: default_enable_grammar(),
+                enable_word_substitution: default_enable_word_substitution(),
                 silence_threshold_db: default_silence_threshold_db(),
                 debug_audio: default_debug_audio(),
                 trailing_buffer_ms: default_trailing_buffer_ms(),
@@ -535,6 +585,32 @@ pub async fn run() -> Result<()> {
             error!("Dictionary file watcher error: {}", e);
         }
     });
+
+    // Initialize word substitution processor
+    let word_sub = if config.daemon.enable_word_substitution {
+        match WordSubstitutionProcessor::new(Some(Arc::clone(&user_dict))) {
+            Ok(ws) => {
+                info!("Word substitution processor initialized");
+                Some(ws)
+            }
+            Err(e) => {
+                warn!("Failed to initialize word substitution processor: {}, disabled", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Spawn file watcher for substitutions hot-reload
+    if let Some(ref ws) = word_sub {
+        let ws_watcher = ws.clone();
+        tokio::spawn(async move {
+            if let Err(e) = watch_substitution_file(ws_watcher).await {
+                error!("Substitution file watcher error: {}", e);
+            }
+        });
+    }
 
     // Parse model specification (Parakeet only)
     let model_spec = ModelSpec::parse(&config.daemon.model)
@@ -867,6 +943,8 @@ pub async fn run() -> Result<()> {
                             let gui_control_tx_preview = gui_control_tx.clone();
                             let enable_acronyms = config.daemon.enable_acronyms;
                             let enable_punctuation = config.daemon.enable_punctuation;
+                            let enable_word_substitution = config.daemon.enable_word_substitution;
+                            let word_sub_preview = word_sub.clone();
                             let user_dict_preview = Arc::clone(&user_dict);
                             let mut cancel_rx_preview = cancel_tx.subscribe();
                             let audio_notify_rx = Arc::clone(&audio_notify);
@@ -876,6 +954,8 @@ pub async fn run() -> Result<()> {
                                     enable_punctuation,
                                     false,  // grammar disabled in preview for speed
                                     Some(user_dict_preview),
+                                    enable_word_substitution,
+                                    word_sub_preview,
                                 );
 
                                 let mut last_text = String::new();
@@ -1120,6 +1200,8 @@ pub async fn run() -> Result<()> {
                         config.daemon.enable_punctuation,
                         config.daemon.enable_grammar,
                         Some(Arc::clone(&user_dict)),
+                        config.daemon.enable_word_substitution,
+                        word_sub.clone(),
                     );
                     let processed_result = pipeline.process(&preview_text)?;
 
