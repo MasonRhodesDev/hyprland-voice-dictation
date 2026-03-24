@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
+use crate::ctc_direct_engine::CtcDirectEngine;
 use crate::ctc_engine::CtcEngine;
 use crate::engine::TranscriptionEngine;
 use crate::hotword_trie;
@@ -27,6 +28,11 @@ impl ModelSpec {
     /// Returns true if this spec selects a CTC model variant
     pub fn is_ctc(&self) -> bool {
         self.model_name.starts_with("ctc-") || self.model_name == "ctc"
+    }
+
+    /// Returns true if this spec selects the CTC Direct (ONNX + beam search) engine
+    pub fn is_ctc_direct(&self) -> bool {
+        self.model_name == "ctc-direct"
     }
 }
 
@@ -76,8 +82,9 @@ impl ModelSpec {
     /// Get the full path to the model directory.
     ///
     /// CTC models are stored in `models/parakeet-ctc/`, TDT in `models/parakeet/`.
+    /// `ctc-direct` also uses `models/parakeet-ctc/` (same model files, different engine).
     pub fn model_path(&self) -> PathBuf {
-        if self.is_ctc() {
+        if self.is_ctc() || self.is_ctc_direct() {
             Self::get_models_dir().join("parakeet-ctc")
         } else {
             Self::get_models_dir().join("parakeet")
@@ -87,7 +94,7 @@ impl ModelSpec {
     /// Check if the model is available on the filesystem
     pub fn is_available(&self) -> bool {
         let path = self.model_path();
-        if self.is_ctc() {
+        if self.is_ctc() || self.is_ctc_direct() {
             // CTC needs a single model ONNX file + tokenizer
             has_onnx_model(&path) && path.join("tokenizer.json").exists()
         } else {
@@ -99,7 +106,15 @@ impl ModelSpec {
 
     /// Create a transcription engine from this specification
     pub fn create_engine(&self, sample_rate: u32) -> Result<Arc<dyn TranscriptionEngine>> {
-        if self.is_ctc() {
+        if self.is_ctc_direct() {
+            info!(
+                "Creating CTC Direct engine (ONNX + beam search) for model '{}'",
+                self.model_name
+            );
+            let model_path = self.model_path();
+            let engine = CtcDirectEngine::new(model_path, sample_rate)?;
+            Ok(Arc::new(engine))
+        } else if self.is_ctc() {
             info!(
                 "Creating parakeet CTC engine with model '{}'",
                 self.model_name
@@ -194,6 +209,21 @@ mod tests {
     fn test_model_path_ctc() {
         let spec = ModelSpec::parse("parakeet:ctc-1.1b").unwrap();
         let path = spec.model_path();
+        assert!(path.to_str().unwrap().ends_with("models/parakeet-ctc"));
+    }
+
+    #[test]
+    fn test_parse_ctc_direct_spec() {
+        let spec = ModelSpec::parse("parakeet:ctc-direct").unwrap();
+        assert_eq!(spec.model_name, "ctc-direct");
+        assert!(spec.is_ctc_direct());
+    }
+
+    #[test]
+    fn test_model_path_ctc_direct() {
+        let spec = ModelSpec::parse("parakeet:ctc-direct").unwrap();
+        let path = spec.model_path();
+        // ctc-direct uses the same parakeet-ctc model directory
         assert!(path.to_str().unwrap().ends_with("models/parakeet-ctc"));
     }
 }
