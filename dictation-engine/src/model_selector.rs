@@ -1,20 +1,33 @@
-//! Model selection and engine factory (Parakeet-only)
+//! Model selection and engine factory
 //!
 //! Provides a unified interface for parsing model specifications and creating
-//! transcription engines. Only the Parakeet engine is supported.
+//! transcription engines. Supports both Parakeet TDT and CTC model variants.
+//!
+//! Model specification format: `parakeet:<model_name>`
+//! - Names starting with `ctc-` route to the CTC engine (e.g., `parakeet:ctc-1.1b`)
+//! - All other names route to the TDT engine (e.g., `parakeet:default`)
 
 use anyhow::{anyhow, Result};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
+use crate::ctc_engine::CtcEngine;
 use crate::engine::TranscriptionEngine;
+use crate::hotword_trie;
 use crate::parakeet_engine::ParakeetEngine;
 
 /// Parsed model specification from config
 #[derive(Debug, Clone)]
 pub struct ModelSpec {
     pub model_name: String,
+}
+
+impl ModelSpec {
+    /// Returns true if this spec selects a CTC model variant
+    pub fn is_ctc(&self) -> bool {
+        self.model_name.starts_with("ctc-") || self.model_name == "ctc"
+    }
 }
 
 impl std::fmt::Display for ModelSpec {
@@ -27,7 +40,9 @@ impl ModelSpec {
     /// Parse a model specification string (format: "parakeet:model_name")
     ///
     /// # Examples
-    /// - "parakeet:default"
+    /// - "parakeet:default" -> TDT engine
+    /// - "parakeet:ctc-1.1b" -> CTC engine
+    /// - "parakeet:ctc-0.6b" -> CTC engine
     pub fn parse(spec: &str) -> Result<Self> {
         let parts: Vec<&str> = spec.splitn(2, ':').collect();
         if parts.len() != 2 {
@@ -58,26 +73,77 @@ impl ModelSpec {
             .join("models")
     }
 
-    /// Get the full path to the model
+    /// Get the full path to the model directory.
+    ///
+    /// CTC models are stored in `models/parakeet-ctc/`, TDT in `models/parakeet/`.
     pub fn model_path(&self) -> PathBuf {
-        Self::get_models_dir().join("parakeet")
+        if self.is_ctc() {
+            Self::get_models_dir().join("parakeet-ctc")
+        } else {
+            Self::get_models_dir().join("parakeet")
+        }
     }
 
     /// Check if the model is available on the filesystem
     pub fn is_available(&self) -> bool {
         let path = self.model_path();
-        // Parakeet TDT needs encoder and decoder ONNX files
-        path.join("encoder-model.onnx").exists()
-            && path.join("decoder_joint-model.onnx").exists()
+        if self.is_ctc() {
+            // CTC needs a single model ONNX file + tokenizer
+            has_onnx_model(&path) && path.join("tokenizer.json").exists()
+        } else {
+            // TDT needs encoder and decoder ONNX files
+            path.join("encoder-model.onnx").exists()
+                && path.join("decoder_joint-model.onnx").exists()
+        }
     }
 
     /// Create a transcription engine from this specification
     pub fn create_engine(&self, sample_rate: u32) -> Result<Arc<dyn TranscriptionEngine>> {
-        info!("Creating parakeet engine with model '{}'", self.model_name);
-        let model_path = self.model_path();
-        let engine = ParakeetEngine::new(model_path, sample_rate)?;
-        Ok(Arc::new(engine))
+        if self.is_ctc() {
+            info!(
+                "Creating parakeet CTC engine with model '{}'",
+                self.model_name
+            );
+            let model_path = self.model_path();
+            let hotwords_path = Some(hotword_trie::default_hotwords_path());
+            // Default beam width of 10 when hotwords are present
+            let beam_width = 10;
+            let engine = CtcEngine::new(model_path, sample_rate, hotwords_path, beam_width)?;
+            Ok(Arc::new(engine))
+        } else {
+            info!(
+                "Creating parakeet TDT engine with model '{}'",
+                self.model_name
+            );
+            let model_path = self.model_path();
+            let engine = ParakeetEngine::new(model_path, sample_rate)?;
+            Ok(Arc::new(engine))
+        }
     }
+}
+
+/// Check if a directory contains any .onnx model file
+fn has_onnx_model(dir: &std::path::Path) -> bool {
+    let candidates = ["model.onnx", "model_fp16.onnx", "model_int8.onnx", "model_q4.onnx"];
+    for candidate in &candidates {
+        if dir.join(candidate).exists() {
+            return true;
+        }
+    }
+    // Search for any .onnx file
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry
+                .path()
+                .extension()
+                .and_then(|s| s.to_str())
+                == Some("onnx")
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -88,6 +154,17 @@ mod tests {
     fn test_parse_parakeet_spec() {
         let spec = ModelSpec::parse("parakeet:default").unwrap();
         assert_eq!(spec.model_name, "default");
+        assert!(!spec.is_ctc());
+    }
+
+    #[test]
+    fn test_parse_ctc_spec() {
+        let spec = ModelSpec::parse("parakeet:ctc-1.1b").unwrap();
+        assert_eq!(spec.model_name, "ctc-1.1b");
+        assert!(spec.is_ctc());
+
+        let spec = ModelSpec::parse("parakeet:ctc-0.6b").unwrap();
+        assert!(spec.is_ctc());
     }
 
     #[test]
@@ -101,5 +178,22 @@ mod tests {
     fn test_display() {
         let spec = ModelSpec::parse("parakeet:default").unwrap();
         assert_eq!(format!("{}", spec), "parakeet:default");
+
+        let spec = ModelSpec::parse("parakeet:ctc-1.1b").unwrap();
+        assert_eq!(format!("{}", spec), "parakeet:ctc-1.1b");
+    }
+
+    #[test]
+    fn test_model_path_tdt() {
+        let spec = ModelSpec::parse("parakeet:default").unwrap();
+        let path = spec.model_path();
+        assert!(path.to_str().unwrap().ends_with("models/parakeet"));
+    }
+
+    #[test]
+    fn test_model_path_ctc() {
+        let spec = ModelSpec::parse("parakeet:ctc-1.1b").unwrap();
+        let path = spec.model_path();
+        assert!(path.to_str().unwrap().ends_with("models/parakeet-ctc"));
     }
 }

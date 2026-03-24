@@ -35,6 +35,8 @@ ort = "=2.0.0-rc.10"
 ndarray = "=0.16.1"
 # Parakeet engine
 parakeet-rs = "0.2"
+# Tokenizer for CTC beam search hotword processing
+tokenizers = { version = "0.22.2", features = ["onig"] }
 # SHA256 verification for VAD model
 sha2 = "0.10"
 hex = "0.4"
