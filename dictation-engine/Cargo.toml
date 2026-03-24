@@ -37,6 +37,8 @@ ndarray = "=0.16.1"
 parakeet-rs = "0.2"
 # Tokenizer for CTC beam search hotword processing
 tokenizers = { version = "0.22.2", features = ["onig"] }
+# FFT for mel spectrogram extraction in CtcDirectEngine
+rustfft = "6.4"
 # SHA256 verification for VAD model
 sha2 = "0.10"
 hex = "0.4"
