@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use dictation_engine::model_selector::ModelSpec;
-use dictation_engine::post_processing::Pipeline;
+use dictation_engine::post_processing::{Pipeline, WordSubstitutionProcessor};
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -22,6 +22,8 @@ struct DaemonConfig {
     enable_punctuation: bool,
     #[serde(default = "default_enable_grammar")]
     enable_grammar: bool,
+    #[serde(default = "default_enable_word_substitution")]
+    enable_word_substitution: bool,
 }
 
 fn default_model() -> String {
@@ -34,6 +36,9 @@ fn default_enable_punctuation() -> bool {
     true
 }
 fn default_enable_grammar() -> bool {
+    true
+}
+fn default_enable_word_substitution() -> bool {
     true
 }
 
@@ -51,6 +56,7 @@ fn load_config() -> Result<Config> {
                 enable_acronyms: true,
                 enable_punctuation: true,
                 enable_grammar: true,
+                enable_word_substitution: true,
             },
         });
     }
@@ -77,10 +83,18 @@ pub fn rerun_on_wav(wav_path: &Path) -> Result<String> {
     engine.process_audio(&samples)?;
     let raw = engine.get_final_result()?;
 
-    let pipeline = Pipeline::from_config(
+    let word_sub = if config.daemon.enable_word_substitution {
+        WordSubstitutionProcessor::new(None).ok()
+    } else {
+        None
+    };
+    let pipeline = Pipeline::from_config_with_dict(
         config.daemon.enable_acronyms,
         config.daemon.enable_punctuation,
         config.daemon.enable_grammar,
+        None,
+        config.daemon.enable_word_substitution,
+        word_sub,
     );
     let processed = pipeline.process(&raw)?;
 

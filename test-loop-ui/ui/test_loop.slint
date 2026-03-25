@@ -38,6 +38,8 @@ export component TestLoop inherits Window {
 
     in-out property <string> correction-text: "";
     in-out property <string> spoken-form-text: "";
+    in property <string> action-status: "";
+    in property <bool> hotword-added: false;
 
     // Picker screen
     picker := Rectangle {
@@ -253,12 +255,13 @@ export component TestLoop inherits Window {
                     padding: 16px;
                     spacing: 10px;
 
+                    // Header: selected word
                     HorizontalBox {
                         spacing: 8px;
                         alignment: start;
 
                         Text {
-                            text: "Selected word:";
+                            text: "Fix:";
                             color: #a6adc8;
                             font-size: 13px;
                             vertical-alignment: center;
@@ -271,61 +274,71 @@ export component TestLoop inherits Window {
                             font-weight: 600;
                             vertical-alignment: center;
                         }
-                    }
-
-                    HorizontalBox {
-                        spacing: 8px;
-                        alignment: start;
 
                         Text {
-                            text: "Correction:";
+                            text: "→";
                             color: #a6adc8;
                             font-size: 13px;
                             vertical-alignment: center;
-                            width: 90px;
                         }
 
                         correction-input := LineEdit {
                             text <=> correction-text;
-                            placeholder-text: "corrected word";
+                            placeholder-text: "what it should say";
+                            preferred-width: 160px;
                         }
                     }
 
+                    // Spoken form row (only relevant for substitution)
                     HorizontalBox {
                         spacing: 8px;
                         alignment: start;
 
                         Text {
-                            text: "Spoken form:";
+                            text: "You said:";
                             color: #a6adc8;
                             font-size: 13px;
                             vertical-alignment: center;
-                            width: 90px;
+                            width: 68px;
                         }
 
                         spoken-input := LineEdit {
                             text <=> spoken-form-text;
-                            placeholder-text: "what you actually say";
+                            placeholder-text: "what you actually said (for substitution)";
                         }
                     }
 
+                    // Action buttons + status
                     HorizontalBox {
                         spacing: 8px;
+                        alignment: start;
 
+                        // Enabled only when correction differs from spoken form
                         Button {
-                            text: "Add Substitution";
-                            clicked => { add-substitution(spoken-form-text, correction-text); }
+                            text: "Add Substitution + Re-run";
+                            enabled: correction-text != spoken-form-text && correction-text != "";
+                            clicked => {
+                                add-substitution(spoken-form-text, correction-text);
+                                rerun-engine();
+                            }
                         }
 
                         Button {
-                            text: "Add Hotword";
-                            clicked => { add-hotword(correction-text, 20.0); }
+                            text: hotword-added ? "✓ Hotword Added" : "Add Hotword + Re-run";
+                            enabled: !hotword-added && correction-text != "";
+                            clicked => {
+                                add-hotword(correction-text, 5.0);
+                                rerun-engine();
+                            }
                         }
+                    }
 
-                        Button {
-                            text: "Apply & Re-run";
-                            clicked => { apply-and-rerun(); }
-                        }
+                    // Status / feedback line
+                    Text {
+                        text: action-status;
+                        color: #a6e3a1;
+                        font-size: 12px;
+                        visible: action-status != "";
                     }
                 }
             }
