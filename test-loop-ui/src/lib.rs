@@ -96,16 +96,19 @@ pub fn run(recording_path: Option<&str>) -> Result<()> {
             let rec_guard = loaded_recording.lock().unwrap();
             if let Some(rec) = rec_guard.as_ref() {
                 let words: Vec<&str> = rec.metadata.final_text.split_whitespace().collect();
-                let word = words
+                let raw_word = words
                     .get(word_idx as usize)
                     .copied()
                     .unwrap_or("")
                     .to_string();
-                let word_for_correction = word.clone();
+                // Strip leading/trailing punctuation so hotwords and substitutions are clean
+                let clean = raw_word.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_selected_word_index(word_idx);
-                    ui.set_correction_text(word_for_correction.into());
-                    ui.set_spoken_form_text(word.into());
+                    ui.set_correction_text(clean.clone().into());
+                    ui.set_spoken_form_text(clean.into());
+                    ui.set_hotword_added(false);
+                    ui.set_action_status("".into());
                 }
             }
         });
@@ -138,39 +141,41 @@ pub fn run(recording_path: Option<&str>) -> Result<()> {
 
     // Add substitution callback
     {
+        let ui_weak = ui_weak.clone();
         ui.on_add_substitution(move |spoken, replacement| {
-            let _ = correction::append_substitution(spoken.as_str(), replacement.as_str());
+            match correction::append_substitution(spoken.as_str(), replacement.as_str()) {
+                Ok(_) => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.set_action_status(
+                            format!("✓ Added: \"{}\" → \"{}\"", spoken, replacement).into(),
+                        );
+                    }
+                }
+                Err(e) => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.set_action_status(format!("Error: {}", e).into());
+                    }
+                }
+            }
         });
     }
 
     // Add hotword callback
     {
-        ui.on_add_hotword(move |word, score| {
-            let _ = correction::append_hotword(word.as_str(), score);
-        });
-    }
-
-    // Apply & re-run callback
-    {
-        let loaded_recording = Arc::clone(&loaded_recording);
         let ui_weak = ui_weak.clone();
-        ui.on_apply_and_rerun(move || {
-            let wav_path = {
-                let guard = loaded_recording.lock().unwrap();
-                guard.as_ref().map(|r| r.wav_path.clone())
-            };
-            if let Some(path) = wav_path {
-                let ui_weak = ui_weak.clone();
-                std::thread::spawn(move || {
-                    let result = engine_runner::rerun_on_wav(&path)
-                        .unwrap_or_else(|e| format!("[error] {}", e));
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = ui_weak.upgrade() {
-                            ui.set_rerun_result(result.into());
-                            ui.set_has_rerun(true);
-                        }
-                    });
-                });
+        ui.on_add_hotword(move |word, score| {
+            match correction::append_hotword(word.as_str(), score) {
+                Ok(_) => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.set_hotword_added(true);
+                        ui.set_action_status(format!("✓ Hotword added: \"{}\"", word).into());
+                    }
+                }
+                Err(e) => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.set_action_status(format!("Error: {}", e).into());
+                    }
+                }
             }
         });
     }

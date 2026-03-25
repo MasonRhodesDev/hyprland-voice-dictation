@@ -749,6 +749,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Diagnose => diagnose()?,
         Commands::DownloadModel => download_model()?,
         Commands::TestLoop { recording } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            let _guard = rt.enter();
             test_loop_ui::run(recording.as_deref())?;
         }
     }
