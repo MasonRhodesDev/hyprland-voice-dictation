@@ -118,6 +118,42 @@
           "min": 0,
           "max": 300,
           "ui_widget": "number_input"
+        },
+        {
+          "id": "enable_correction_learning",
+          "label": "Correction Learning",
+          "description": "Automatically detect when you correct transcribed text and learn from corrections. Requires AT-SPI2 accessibility bus (available by default on GNOME/KDE). ~1-2ms per injection (background monitoring).",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle"
+        },
+        {
+          "id": "correction_monitor_duration_secs",
+          "label": "Correction Monitor Duration",
+          "description": "How many seconds to monitor for corrections after text injection.",
+          "type": "number",
+          "default": 60,
+          "min": 10,
+          "max": 300,
+          "ui_widget": "number_input"
+        },
+        {
+          "id": "correction_auto_promote_threshold",
+          "label": "Auto-Promote Threshold",
+          "description": "Number of times a correction must be seen before it's automatically added as a word substitution rule.",
+          "type": "number",
+          "default": 3,
+          "min": 1,
+          "max": 20,
+          "ui_widget": "number_input"
+        },
+        {
+          "id": "enable_accessibility_bridge",
+          "label": "Enable Accessibility Bridge",
+          "description": "Automatically enable the GTK/Qt accessibility bridge on daemon startup. Required for correction learning to detect text edits. Sets org.gnome.desktop.interface toolkit-accessibility to true via gsettings.",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle"
         }
       ]
     }

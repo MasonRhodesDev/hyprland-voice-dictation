@@ -69,6 +69,30 @@ enum Commands {
         #[arg(long)]
         recording: Option<String>,
     },
+    #[command(about = "Trigger a manual correction snapshot (compare current text field to last injection)")]
+    SnapshotCorrection,
+    #[command(about = "Show correction learning statistics")]
+    CorrectionStats,
+    #[command(about = "Manage learned corrections")]
+    Corrections {
+        #[command(subcommand)]
+        command: CorrectionCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum CorrectionCommands {
+    #[command(about = "List all learned corrections")]
+    List,
+    #[command(about = "Remove a learned correction by number (from 'corrections list')")]
+    Remove {
+        #[arg(help = "Correction number to remove (1-based index from 'corrections list')")]
+        number: usize,
+    },
+    #[command(about = "Remove all learned corrections and start fresh")]
+    Clear,
+    #[command(about = "Open corrections file in $EDITOR")]
+    Edit,
 }
 
 #[derive(Subcommand)]
@@ -752,6 +776,144 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let rt = tokio::runtime::Runtime::new()?;
             let _guard = rt.enter();
             test_loop_ui::run(recording.as_deref())?;
+        }
+        Commands::SnapshotCorrection => {
+            tokio::runtime::Runtime::new()?.block_on(call_dbus_method("SnapshotCorrection"))
+                .map_err(dbus_error_with_hint)?;
+            println!("Correction snapshot triggered");
+        }
+        Commands::CorrectionStats => {
+            let home = std::env::var("HOME")?;
+            let corrections_path = std::path::PathBuf::from(&home)
+                .join(".local/share/voice-dictation/corrections.json");
+            if corrections_path.exists() {
+                let content = fs::read_to_string(&corrections_path)?;
+                let data: Value = serde_json::from_str(&content)?;
+                if let Some(corrections) = data["corrections"].as_array() {
+                    let total = corrections.len();
+                    let promoted = corrections.iter()
+                        .filter(|c| c["promoted"].as_bool().unwrap_or(false))
+                        .count();
+                    let total_obs: u64 = corrections.iter()
+                        .filter_map(|c| c["count"].as_u64())
+                        .sum();
+                    println!("Correction Learning Statistics:");
+                    println!("  Unique corrections: {}", total);
+                    println!("  Total observations: {}", total_obs);
+                    println!("  Auto-promoted:      {}", promoted);
+                    println!("  Pending:            {}", total - promoted);
+                    println!();
+                    if total > 0 {
+                        println!("Top corrections:");
+                        let mut sorted: Vec<&Value> = corrections.iter().collect();
+                        sorted.sort_by(|a, b| {
+                            b["count"].as_u64().unwrap_or(0)
+                                .cmp(&a["count"].as_u64().unwrap_or(0))
+                        });
+                        for c in sorted.iter().take(10) {
+                            let orig = c["original"].as_str().unwrap_or("?");
+                            let corr = c["corrected"].as_str().unwrap_or("?");
+                            let count = c["count"].as_u64().unwrap_or(0);
+                            let prom = if c["promoted"].as_bool().unwrap_or(false) { " [promoted]" } else { "" };
+                            println!("  {:>3}x  '{}' → '{}'{}", count, orig, corr, prom);
+                        }
+                    }
+                } else {
+                    println!("No corrections recorded yet.");
+                }
+            } else {
+                println!("No corrections file found. Correction learning has not recorded any data yet.");
+                println!("File location: {}", corrections_path.display());
+            }
+        }
+        Commands::Corrections { command } => {
+            let home = std::env::var("HOME")?;
+            let corrections_path = std::path::PathBuf::from(&home)
+                .join(".local/share/voice-dictation/corrections.json");
+
+            match command {
+                CorrectionCommands::List => {
+                    if !corrections_path.exists() {
+                        println!("No corrections recorded yet.");
+                        return Ok(());
+                    }
+                    let content = fs::read_to_string(&corrections_path)?;
+                    let mut data: Value = serde_json::from_str(&content)?;
+                    if let Some(corrections) = data["corrections"].as_array() {
+                        if corrections.is_empty() {
+                            println!("No corrections recorded yet.");
+                            return Ok(());
+                        }
+                        println!("{:<4} {:>5}  {:<20} {:<20} {}", "#", "Count", "Original", "Corrected", "Status");
+                        println!("{}", "-".repeat(75));
+                        for (i, c) in corrections.iter().enumerate() {
+                            let orig = c["original"].as_str().unwrap_or("?");
+                            let corr = c["corrected"].as_str().unwrap_or("?");
+                            let count = c["count"].as_u64().unwrap_or(0);
+                            let status = if c["promoted"].as_bool().unwrap_or(false) {
+                                "promoted"
+                            } else {
+                                "pending"
+                            };
+                            println!("{:<4} {:>5}  {:<20} {:<20} {}", i + 1, count, orig, corr, status);
+                        }
+                        println!();
+                        println!("File: {}", corrections_path.display());
+                    }
+                }
+                CorrectionCommands::Remove { number } => {
+                    if !corrections_path.exists() {
+                        println!("No corrections file found.");
+                        return Ok(());
+                    }
+                    let content = fs::read_to_string(&corrections_path)?;
+                    let mut data: Value = serde_json::from_str(&content)?;
+                    if let Some(corrections) = data["corrections"].as_array_mut() {
+                        if number == 0 || number > corrections.len() {
+                            eprintln!("Invalid number {}. Use 'voice-dictation corrections list' to see valid numbers (1-{}).", number, corrections.len());
+                            return Err("Invalid correction number".into());
+                        }
+                        let removed = corrections.remove(number - 1);
+                        let orig = removed["original"].as_str().unwrap_or("?");
+                        let corr = removed["corrected"].as_str().unwrap_or("?");
+                        fs::write(&corrections_path, serde_json::to_string_pretty(&data)?)?;
+                        println!("Removed correction: '{}' → '{}'", orig, corr);
+                    }
+                }
+                CorrectionCommands::Clear => {
+                    if !corrections_path.exists() {
+                        println!("No corrections file found.");
+                        return Ok(());
+                    }
+                    print!("Remove all learned corrections? [y/N] ");
+                    io::stdout().flush()?;
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input)?;
+                    if input.trim().to_lowercase() == "y" {
+                        let data = serde_json::json!({"version": 1, "corrections": []});
+                        fs::write(&corrections_path, serde_json::to_string_pretty(&data)?)?;
+                        println!("All corrections cleared.");
+                    } else {
+                        println!("Cancelled.");
+                    }
+                }
+                CorrectionCommands::Edit => {
+                    if !corrections_path.exists() {
+                        // Create empty file
+                        let dir = corrections_path.parent().unwrap();
+                        fs::create_dir_all(dir)?;
+                        let data = serde_json::json!({"version": 1, "corrections": []});
+                        fs::write(&corrections_path, serde_json::to_string_pretty(&data)?)?;
+                    }
+                    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+                    let status = Command::new(&editor)
+                        .arg(&corrections_path)
+                        .status()?;
+                    if !status.success() {
+                        eprintln!("{} exited with: {}", editor, status);
+                    }
+                }
+            }
         }
     }
 

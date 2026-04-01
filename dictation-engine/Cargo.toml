@@ -4,9 +4,10 @@ version = "0.2.0"
 edition = "2021"
 
 [features]
-default = ["pipewire", "tray"]
+default = ["pipewire", "tray", "correction"]
 pipewire = ["dep:pipewire"]
 tray = ["dep:ksni"]
+correction = ["dep:correction-engine"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -49,6 +50,8 @@ pipewire = { version = "0.8", optional = true }
 # System tray (StatusNotifierItem)
 ksni = { git = "https://github.com/iovxw/ksni.git", rev = "4d2320c", optional = true }
 futures-util = "0.3"
+# AT-SPI2 correction learning (optional)
+correction-engine = { path = "../correction-engine", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

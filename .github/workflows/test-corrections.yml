@@ -1,0 +1,37 @@
+name: Test Corrections
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libpipewire-0.3-dev \
+            pkg-config
+
+      - name: Run unit tests
+        run: cargo test --package correction-engine
+
+  e2e-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Run e2e tests
+        run: bash correction-engine/tests/e2e/run.sh
