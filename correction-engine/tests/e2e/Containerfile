@@ -1,0 +1,26 @@
+FROM fedora:42
+
+RUN dnf install -y \
+    dbus-daemon \
+    at-spi2-core \
+    at-spi2-atk \
+    weston \
+    gtk4 \
+    gtk4-devel \
+    pipewire \
+    pipewire-alsa \
+    wtype \
+    python3 \
+    python3-gobject \
+    cargo \
+    rust \
+    gcc \
+  && dnf clean all
+
+RUN useradd -m testuser
+USER testuser
+WORKDIR /home/testuser/project
+
+COPY --chown=testuser:testuser . .
+
+ENTRYPOINT ["./correction-engine/tests/e2e/entrypoint.sh"]

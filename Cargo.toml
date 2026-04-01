@@ -4,9 +4,10 @@ version = "0.2.0"
 edition = "2021"
 
 [features]
-default = ["pipewire", "tray"]
+default = ["pipewire", "tray", "correction"]
 pipewire = ["dictation-engine/pipewire"]  # Native PipeWire audio backend
 tray = ["dictation-engine/tray"]
+correction = ["dictation-engine/correction"]  # AT-SPI2 correction learning
 
 [dependencies]
 dictation-engine = { path = "dictation-engine", default-features = false }
@@ -26,6 +27,7 @@ members = [
     "dictation-types",
     "slint-gui",
     "test-loop-ui",
+    "correction-engine",
 ]
 resolver = "2"
 

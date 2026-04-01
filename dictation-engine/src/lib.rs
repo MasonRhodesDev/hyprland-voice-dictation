@@ -120,6 +120,21 @@ struct DaemonConfig {
     // Engine idle timeout: drop ORT sessions after N seconds idle to reclaim BFCArena memory (seconds)
     #[serde(default = "default_engine_idle_timeout_secs")]
     engine_idle_timeout_secs: u64,
+
+    // Correction learning (AT-SPI2)
+    #[serde(default = "default_enable_correction_learning")]
+    enable_correction_learning: bool,
+
+    #[serde(default = "default_correction_monitor_duration_secs")]
+    correction_monitor_duration_secs: u64,
+
+    #[serde(default = "default_correction_auto_promote_threshold")]
+    correction_auto_promote_threshold: u32,
+
+    // Enable the GTK/Qt accessibility bridge (required for correction detection).
+    // Sets org.gnome.desktop.interface toolkit-accessibility to true on startup.
+    #[serde(default = "default_enable_accessibility_bridge")]
+    enable_accessibility_bridge: bool,
 }
 
 fn default_model() -> String { "parakeet:default".to_string() }
@@ -134,6 +149,10 @@ fn default_audio_backend() -> String { "auto".to_string() }
 fn default_idle_release_timeout_secs() -> u64 { 30 }
 fn default_media_resume_delay_ms() -> u64 { 25 }
 fn default_engine_idle_timeout_secs() -> u64 { 300 }  // 5 minutes
+fn default_enable_correction_learning() -> bool { true }
+fn default_correction_monitor_duration_secs() -> u64 { 60 }
+fn default_correction_auto_promote_threshold() -> u32 { 3 }
+fn default_enable_accessibility_bridge() -> bool { true }
 
 /// Convert decibels to linear amplitude (RMS threshold).
 fn db_to_linear(db: f32) -> f32 {
@@ -558,6 +577,10 @@ pub async fn run() -> Result<()> {
                 idle_release_timeout_secs: default_idle_release_timeout_secs(),
                 media_resume_delay_ms: default_media_resume_delay_ms(),
                 engine_idle_timeout_secs: default_engine_idle_timeout_secs(),
+                enable_correction_learning: default_enable_correction_learning(),
+                correction_monitor_duration_secs: default_correction_monitor_duration_secs(),
+                correction_auto_promote_threshold: default_correction_auto_promote_threshold(),
+                enable_accessibility_bridge: default_enable_accessibility_bridge(),
             }
         }
     });
@@ -615,6 +638,66 @@ pub async fn run() -> Result<()> {
             }
         });
     }
+
+    // Enable the accessibility bridge if correction learning is on.
+    // GTK apps check org.gnome.desktop.interface toolkit-accessibility to decide
+    // whether to load the AT-SPI2 bridge. Without this, no text-changed events.
+    #[cfg(feature = "correction")]
+    if config.daemon.enable_correction_learning && config.daemon.enable_accessibility_bridge {
+        match tokio::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "toolkit-accessibility"])
+            .output()
+            .await
+        {
+            Ok(output) => {
+                let current = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if current == "false" {
+                    info!("Enabling accessibility bridge (toolkit-accessibility → true)");
+                    let _ = tokio::process::Command::new("gsettings")
+                        .args(["set", "org.gnome.desktop.interface", "toolkit-accessibility", "true"])
+                        .output()
+                        .await;
+                } else {
+                    debug!("Accessibility bridge already enabled");
+                }
+            }
+            Err(e) => {
+                warn!("Could not check accessibility bridge via gsettings: {} — correction detection may not work for GTK apps", e);
+            }
+        }
+    }
+
+    // Initialize correction monitor (AT-SPI2 based)
+    #[cfg(feature = "correction")]
+    let correction_monitor = if config.daemon.enable_correction_learning {
+        let data_dir = dirs::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
+        let vd_dir = data_dir.join("voice-dictation");
+        let monitor_config = correction_engine::MonitorConfig {
+            enabled: true,
+            monitor_duration_secs: config.daemon.correction_monitor_duration_secs,
+            auto_promote_threshold: config.daemon.correction_auto_promote_threshold,
+            store_path: vd_dir.join("corrections.json"),
+            substitutions_path: vd_dir.join("substitutions.txt"),
+        };
+        match correction_engine::CorrectionMonitor::new(monitor_config).await {
+            Ok(monitor) => {
+                if monitor.is_available() {
+                    info!("Correction learning enabled (AT-SPI2 available)");
+                } else {
+                    warn!("Correction learning enabled but AT-SPI2 bus unavailable — corrections will not be detected");
+                }
+                Some(monitor)
+            }
+            Err(e) => {
+                warn!("Failed to initialize correction monitor: {} — continuing without correction learning", e);
+                None
+            }
+        }
+    } else {
+        info!("Correction learning disabled");
+        None
+    };
 
     // Parse model specification (Parakeet only)
     let model_spec = ModelSpec::parse(&config.daemon.model)
@@ -1271,6 +1354,20 @@ pub async fn run() -> Result<()> {
                     info!("Typing final text ({:?} mode, delay={}ms)...", profile.category, profile.word_delay_ms);
                     keyboard.type_text(&sanitized_result, profile.word_delay_ms).await?;
                     info!("Typed!");
+
+                    // Start correction monitoring (background task, non-blocking)
+                    #[cfg(feature = "correction")]
+                    if let Some(ref monitor) = correction_monitor {
+                        let context = correction_engine::InjectionContext {
+                            text: sanitized_result.clone(),
+                            timestamp: chrono::Utc::now(),
+                            instant: std::time::Instant::now(),
+                            window_class: window_target.as_ref().map(|w| w.class().to_string()).unwrap_or_default(),
+                            window_title: String::new(),
+                        };
+                        let _handle = monitor.start_monitoring(context);
+                        debug!("Correction monitoring started for {}s", config.daemon.correction_monitor_duration_secs);
+                    }
 
                     // Send to GUI via channel
                     gui_control_tx.send(GuiControl::SetClosing)

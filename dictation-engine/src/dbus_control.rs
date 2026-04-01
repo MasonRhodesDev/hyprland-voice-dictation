@@ -41,6 +41,8 @@ pub enum DaemonCommand {
     Shutdown,
     /// Switch audio input device. None = system default, Some(name) = specific device.
     SwitchDevice(Option<String>),
+    /// Trigger a manual correction snapshot (compare current text field to last injection).
+    SnapshotCorrection,
 }
 
 /// Response from status query
@@ -115,6 +117,15 @@ impl VoiceDictationService {
         };
 
         Ok((gui_status.to_string(), engine_status.to_string(), audio_status.to_string()))
+    }
+
+    /// Trigger a manual correction snapshot
+    async fn snapshot_correction(&self) -> zbus::fdo::Result<()> {
+        info!("D-Bus: SnapshotCorrection called");
+        let sender = self.command_sender.lock().await;
+        sender.send(DaemonCommand::SnapshotCorrection).await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to send command: {}", e)))?;
+        Ok(())
     }
 
     /// Shutdown the daemon gracefully
