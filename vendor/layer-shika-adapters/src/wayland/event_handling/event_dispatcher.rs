@@ -77,11 +77,6 @@ impl SurfaceState {
         self.update_size(clamped_width, target_height);
     }
 
-    #[allow(clippy::unused_self)]
-    pub(crate) fn handle_layer_surface_closed(&mut self) {
-        info!("Layer surface closed");
-    }
-
     pub(crate) fn handle_output_mode(&mut self, width: i32, height: i32) {
         info!("WlOutput size changed to {width}x{height}");
         let width = width.try_into().unwrap_or_default();

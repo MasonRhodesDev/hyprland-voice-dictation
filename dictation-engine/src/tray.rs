@@ -199,91 +199,107 @@ impl Tray for DictationTray {
     }
 }
 
-pub async fn spawn_tray(
-    mut state_rx: watch::Receiver<DaemonState>,
+pub fn spawn_tray(
+    state_rx: watch::Receiver<DaemonState>,
     command_tx: mpsc::Sender<DaemonCommand>,
     backend_type: BackendType,
     initial_device: Option<String>,
-) -> Option<Handle<DictationTray>> {
-    // Populate initial device cache (ok to block once at startup)
-    let initial_devices = crate::audio_backend::list_devices(backend_type).unwrap_or_default();
-
-    let tray = DictationTray {
-        state: DaemonState::Idle,
-        command_tx,
-        cached_devices: initial_devices,
-        selected_device: initial_device,
-        icon_invalidated: false,
-    };
-
-    let handle = match tray.spawn().await {
-        Ok(h) => h,
-        Err(e) => {
-            warn!("Failed to spawn system tray (no tray host?): {e}");
-            return None;
-        }
-    };
-
-    info!("System tray icon active");
-
-    // Listen for icon-theme changes and force tray icon refresh
-    let theme_handle = handle.clone();
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        if let Err(e) = listen_theme_changes(theme_handle).await {
-            warn!("Theme change listener error: {e}");
-        }
-    });
-
-    let update_handle = handle.clone();
-    tokio::spawn(async move {
-        let mut refresh_interval = tokio::time::interval(std::time::Duration::from_secs(30));
-        refresh_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // Skip the immediate first tick
-        refresh_interval.tick().await;
+        let mut backoff = std::time::Duration::from_secs(5);
+        let max_backoff = std::time::Duration::from_secs(30);
 
         loop {
-            tokio::select! {
-                result = state_rx.changed() => {
-                    if result.is_err() {
-                        break;
-                    }
-                    let new_state = *state_rx.borrow_and_update();
-                    let refresh = new_state == DaemonState::Idle;
-                    let bt = backend_type;
-                    if update_handle
-                        .update(move |tray| {
-                            tray.state = new_state;
-                            if refresh {
-                                if let Ok(devs) = crate::audio_backend::list_devices(bt) {
-                                    tray.cached_devices = devs;
-                                }
-                            }
-                        })
-                        .await
-                        .is_none()
-                    {
-                        break;
-                    }
+            let initial_devices =
+                crate::audio_backend::list_devices(backend_type).unwrap_or_default();
+
+            let tray = DictationTray {
+                state: *state_rx.borrow(),
+                command_tx: command_tx.clone(),
+                cached_devices: initial_devices,
+                selected_device: initial_device.clone(),
+                icon_invalidated: false,
+            };
+
+            match tray.spawn().await {
+                Ok(handle) => {
+                    info!("System tray icon active");
+
+                    // Listen for icon-theme changes and force tray icon refresh
+                    let theme_handle = handle.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = listen_theme_changes(theme_handle).await {
+                            warn!("Theme change listener error: {e}");
+                        }
+                    });
+
+                    // Run the state/device update loop (blocks until tray is dropped)
+                    run_tray_update_loop(handle, state_rx, backend_type).await;
+                    break;
                 }
-                _ = refresh_interval.tick() => {
-                    let bt = backend_type;
-                    if update_handle
-                        .update(move |tray| {
-                            if let Ok(devs) = crate::audio_backend::list_devices(bt) {
-                                tray.cached_devices = devs;
-                            }
-                        })
-                        .await
-                        .is_none()
-                    {
-                        break;
-                    }
+                Err(e) => {
+                    warn!(
+                        "Failed to spawn system tray (no tray host?): {e}, retrying in {backoff:?}"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
                 }
             }
         }
-    });
+    })
+}
 
-    Some(handle)
+/// Runs the tray state/device update loop until the tray handle is dropped.
+async fn run_tray_update_loop(
+    handle: Handle<DictationTray>,
+    mut state_rx: watch::Receiver<DaemonState>,
+    backend_type: BackendType,
+) {
+    let mut refresh_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    refresh_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Skip the immediate first tick
+    refresh_interval.tick().await;
+
+    loop {
+        tokio::select! {
+            result = state_rx.changed() => {
+                if result.is_err() {
+                    break;
+                }
+                let new_state = *state_rx.borrow_and_update();
+                let refresh = new_state == DaemonState::Idle;
+                let bt = backend_type;
+                if handle
+                    .update(move |tray| {
+                        tray.state = new_state;
+                        if refresh {
+                            if let Ok(devs) = crate::audio_backend::list_devices(bt) {
+                                tray.cached_devices = devs;
+                            }
+                        }
+                    })
+                    .await
+                    .is_none()
+                {
+                    break;
+                }
+            }
+            _ = refresh_interval.tick() => {
+                let bt = backend_type;
+                if handle
+                    .update(move |tray| {
+                        if let Ok(devs) = crate::audio_backend::list_devices(bt) {
+                            tray.cached_devices = devs;
+                        }
+                    })
+                    .await
+                    .is_none()
+                {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 /// Listen for icon-theme changes via dconf and force tray icon re-resolution.

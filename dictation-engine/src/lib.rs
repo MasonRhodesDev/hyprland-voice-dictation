@@ -765,7 +765,7 @@ pub async fn run() -> Result<()> {
     let _tray_handle = {
         let tray_tx = command_sender.lock().await.clone();
         let tray_rx = state_tx.subscribe();
-        tray::spawn_tray(tray_rx, tray_tx, backend_type, audio_device_name.clone()).await
+        tray::spawn_tray(tray_rx, tray_tx, backend_type, audio_device_name.clone())
     };
 
     // Keep command_sender alive (used by D-Bus service)

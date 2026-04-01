@@ -226,6 +226,28 @@ impl AppState {
             .find(|surface| surface.layer_surface().as_ref().id() == *layer_surface_id)
     }
 
+    /// Remove a surface identified by its layer surface object ID.
+    /// Returns the removed surface (whose managed proxy drop handlers will clean up Wayland objects).
+    pub fn remove_by_layer_surface_id(
+        &mut self,
+        layer_surface_id: &ObjectId,
+    ) -> Option<PerOutputSurface> {
+        // Find the key for the surface matching this layer surface ID
+        let key = self
+            .surfaces
+            .iter()
+            .find(|(_, surface)| surface.layer_surface().as_ref().id() == *layer_surface_id)
+            .map(|(k, _)| k.clone());
+
+        if let Some(key) = key {
+            // Clean up surface_to_key entries pointing to this key
+            self.surface_to_key.retain(|_, k| *k != key);
+            self.surfaces.remove(&key)
+        } else {
+            None
+        }
+    }
+
     pub fn get_surface_name(&self, surface_handle: SurfaceHandle) -> Option<&str> {
         self.surface_handle_to_name
             .get(&surface_handle)
