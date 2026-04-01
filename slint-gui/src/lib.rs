@@ -8,6 +8,7 @@ use layer_shika::calloop::TimeoutAction;
 use layer_shika::prelude::*;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use slint_interpreter::Value;
+use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -362,6 +363,8 @@ fn run_shell(
 
     let mut empty_surface_ticks: u32 = 0;
     let mut gui_initialized = false;
+    // Track output fingerprints (description + scale) to detect monitor swaps
+    let mut output_fingerprints: HashMap<OutputHandle, (String, Option<i32>)> = HashMap::new();
 
     event_loop
         .add_timer(update_interval, move |_deadline: Instant, app_state| {
@@ -385,6 +388,32 @@ fn run_shell(
                         (empty_surface_ticks as u64 * 16) / 1000
                     );
                     std::process::exit(EXIT_CODE_SURFACES_LOST);
+                }
+            }
+
+            // Detect monitor configuration changes (physical swap, scale change)
+            if gui_initialized {
+                for (key, _surface_state) in app_state.surfaces_with_keys() {
+                    if let Some(info) = app_state.get_output_info(key.output_handle) {
+                        let description = info.description().unwrap_or_default().to_string();
+                        let scale = info.scale();
+                        let fingerprint = (description, scale);
+
+                        if let Some(prev) = output_fingerprints.get(&key.output_handle) {
+                            if *prev != fingerprint {
+                                error!(
+                                    "Monitor configuration changed on output {:?}: {:?} -> {:?}, exiting for systemd restart",
+                                    info.name().unwrap_or("unknown"),
+                                    prev,
+                                    fingerprint,
+                                );
+                                std::process::exit(EXIT_CODE_SURFACES_LOST);
+                            }
+                        } else {
+                            // First time seeing this output, record fingerprint
+                            output_fingerprints.insert(key.output_handle, fingerprint);
+                        }
+                    }
                 }
             }
 

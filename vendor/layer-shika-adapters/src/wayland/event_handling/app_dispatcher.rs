@@ -67,8 +67,17 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for AppState {
             }
             zwlr_layer_surface_v1::Event::Closed => {
                 let layer_surface_id = layer_surface.id();
-                if let Some(surface) = state.get_output_by_layer_surface_mut(&layer_surface_id) {
-                    surface.handle_layer_surface_closed();
+                if let Some(_removed) = state.remove_by_layer_surface_id(&layer_surface_id) {
+                    let remaining = state.surfaces_with_keys().count();
+                    info!(
+                        "Layer surface {:?} closed and removed ({} surfaces remaining)",
+                        layer_surface_id, remaining
+                    );
+                } else {
+                    info!(
+                        "Layer surface {:?} closed but was not tracked",
+                        layer_surface_id
+                    );
                 }
             }
             _ => {}
