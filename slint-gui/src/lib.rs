@@ -375,6 +375,12 @@ fn run_shell(
                 std::process::exit(EXIT_CODE_RELOAD);
             }
 
+            // Check for compositor events requiring restart (monitor add/remove, config reload)
+            if monitor::is_restart_needed() {
+                error!("Compositor change detected, exiting for systemd restart");
+                std::process::exit(EXIT_CODE_SURFACES_LOST);
+            }
+
             // Detect lost layer surfaces and exit for systemd restart
             let surface_count = app_state.surfaces_with_keys().count();
             if surface_count > 0 {

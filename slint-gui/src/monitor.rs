@@ -1,10 +1,10 @@
 //! Monitor detection and active monitor tracking for Hyprland
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Circuit breaker: max consecutive failures before opening circuit
 const MAX_CONSECUTIVE_FAILURES: u32 = 10; // 20 seconds of failures (10 * 2s retry interval)
@@ -20,6 +20,17 @@ struct MonitorListenerHealth {
 
 /// Global active monitor name
 static ACTIVE_MONITOR: std::sync::OnceLock<Arc<RwLock<String>>> = std::sync::OnceLock::new();
+
+/// Flag set when compositor events require a GUI restart (monitor add/remove, config reload, etc.)
+static RESTART_NEEDED: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+
+/// Check if a compositor event requires a GUI restart
+pub fn is_restart_needed() -> bool {
+    RESTART_NEEDED
+        .get()
+        .map(|f| f.load(Ordering::SeqCst))
+        .unwrap_or(false)
+}
 
 /// Get the currently active monitor name
 pub fn get_active_monitor() -> Option<String> {
@@ -90,6 +101,9 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::
     ));
     let _ = ACTIVE_MONITOR.set(monitor.clone());
 
+    let restart_flag = Arc::new(AtomicBool::new(false));
+    let _ = RESTART_NEEDED.set(restart_flag.clone());
+
     // Create health tracker for circuit breaker
     let health = Arc::new(MonitorListenerHealth {
         consecutive_failures: AtomicU32::new(0),
@@ -97,6 +111,8 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::
     });
 
     thread::spawn(move || {
+        let mut connected_once = false;
+
         loop {
             // Check circuit breaker state
             if let Ok(circuit) = health.circuit_open_until.read() {
@@ -133,13 +149,40 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::
                 }
             });
 
+            // Compositor events that require surface recreation
+            let restart_on_add = restart_flag.clone();
+            listener.add_monitor_added_handler(move |data| {
+                error!("Monitor added: '{}' — surfaces need recreation, requesting restart", data.name);
+                restart_on_add.store(true, Ordering::SeqCst);
+            });
+
+            let restart_on_remove = restart_flag.clone();
+            listener.add_monitor_removed_handler(move |name| {
+                error!("Monitor removed: '{}' — surfaces need recreation, requesting restart", name);
+                restart_on_remove.store(true, Ordering::SeqCst);
+            });
+
+            let restart_on_config = restart_flag.clone();
+            listener.add_config_reloaded_handler(move || {
+                error!("Hyprland config reloaded — monitor layout may have changed, requesting restart");
+                restart_on_config.store(true, Ordering::SeqCst);
+            });
+
             match listener.start_listener() {
                 Ok(_) => {
-                    // Success - reset failure counter
+                    // Listener returned cleanly (shouldn't happen normally)
                     health.consecutive_failures.store(0, Ordering::SeqCst);
+                    connected_once = true;
                     debug!("Hyprland monitor listener connected successfully");
                 }
                 Err(e) => {
+                    // If we were previously connected and the listener dropped,
+                    // the compositor likely crashed/restarted — signal restart
+                    if connected_once {
+                        error!("Hyprland IPC connection lost (compositor restart?): {e}, requesting restart");
+                        restart_flag.store(true, Ordering::SeqCst);
+                    }
+
                     // Failure - increment counter and check circuit breaker
                     let failures = health.consecutive_failures.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -158,7 +201,7 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::
 
                         // Reset failure counter for next circuit attempt
                         health.consecutive_failures.store(0, Ordering::SeqCst);
-                    } else {
+                    } else if !connected_once {
                         warn!(
                             "Hyprland event listener error (attempt {}/{}): {}",
                             failures, MAX_CONSECUTIVE_FAILURES, e
@@ -166,6 +209,11 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::
                         thread::sleep(Duration::from_secs(2));
                     }
                 }
+            }
+
+            // Mark that we've connected at least once after successful handler registration
+            if !connected_once {
+                connected_once = true;
             }
         }
     });
