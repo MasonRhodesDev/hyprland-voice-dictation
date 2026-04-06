@@ -525,7 +525,8 @@ fn run_shell(
     info!("Starting shell event loop");
     runtime.run().map_err(|e| format!("Shell run error: {}", e))?;
 
-    info!("Shell event loop exited");
-
-    Ok(())
+    // If we get here, the event loop exited (Wayland connection broken or signal received).
+    // Exit the process so systemd can restart us with fresh surfaces.
+    error!("Shell event loop exited unexpectedly, exiting for systemd restart");
+    std::process::exit(EXIT_CODE_SURFACES_LOST);
 }

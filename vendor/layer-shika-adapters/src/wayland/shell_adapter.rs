@@ -630,11 +630,24 @@ impl WaylandShellSystem {
 
         let event_queue = &mut self.event_queue;
         let connection = &self.connection;
+        let loop_signal = self.event_loop.get_signal();
+        let mut consecutive_errors: u32 = 0;
+        const MAX_CONSECUTIVE_ERRORS: u32 = 10;
 
         self.event_loop
             .run(None, &mut self.state, move |shared_data| {
                 if let Err(e) = Self::process_events(connection, event_queue, shared_data) {
-                    error!("Error processing events: {e}");
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        error!(
+                            "Wayland connection broken ({consecutive_errors} consecutive errors), stopping event loop: {e}"
+                        );
+                        loop_signal.stop();
+                    } else if consecutive_errors == 1 {
+                        error!("Error processing events: {e}");
+                    }
+                } else {
+                    consecutive_errors = 0;
                 }
             })
             .map_err(|e| EventLoopError::Execution { source: e })?;
