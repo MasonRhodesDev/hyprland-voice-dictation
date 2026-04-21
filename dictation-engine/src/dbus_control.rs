@@ -39,6 +39,8 @@ pub enum DaemonCommand {
     StopRecording,
     Confirm,
     Shutdown,
+    /// Exit with code 64 so systemd (RestartForceExitStatus=64) restarts the daemon.
+    Restart,
     /// Switch audio input device. None = system default, Some(name) = specific device.
     SwitchDevice(Option<String>),
     /// Trigger a manual correction snapshot (compare current text field to last injection).
