@@ -181,6 +181,16 @@ impl Tray for DictationTray {
             .into(),
             MenuItem::Separator,
             StandardItem {
+                label: "Restart Daemon".into(),
+                activate: Box::new(|tray: &mut Self| {
+                    if let Err(e) = tray.command_tx.try_send(DaemonCommand::Restart) {
+                        warn!("Tray: failed to send Restart: {e}");
+                    }
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
                 label: "Quit".into(),
                 activate: Box::new(|tray: &mut Self| {
                     if let Err(e) = tray.command_tx.try_send(DaemonCommand::Shutdown) {

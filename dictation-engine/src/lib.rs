@@ -868,6 +868,7 @@ pub async fn run() -> Result<()> {
     let mut preview_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut media_was_playing = false;
     let mut window_target: Option<window_target::WindowTarget> = None;
+    let mut restart_requested = false;
     // Cancellation channel for graceful task shutdown
     let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
 
@@ -1120,6 +1121,12 @@ pub async fn run() -> Result<()> {
                             let _ = gui_control_tx.send(GuiControl::Exit);
                             break;
                         }
+                        DaemonCommand::Restart => {
+                            info!("Received Restart command");
+                            restart_requested = true;
+                            let _ = gui_control_tx.send(GuiControl::Exit);
+                            break;
+                        }
                         _ => {
                             warn!("Ignoring unexpected command in Idle state");
                         }
@@ -1196,6 +1203,24 @@ pub async fn run() -> Result<()> {
                         }
                         DaemonCommand::Shutdown => {
                             info!("Shutdown during recording");
+
+                            let _ = device_manager.stop();
+                            let _ = device_manager.flush();
+                            let _ = cancel_tx.send(true);
+
+                            if let Some(task) = audio_task.take() {
+                                let _ = task.await;
+                            }
+                            if let Some(task) = preview_task.take() {
+                                let _ = task.await;
+                            }
+
+                            let _ = gui_control_tx.send(GuiControl::Exit);
+                            break;
+                        }
+                        DaemonCommand::Restart => {
+                            info!("Restart during recording");
+                            restart_requested = true;
 
                             let _ = device_manager.stop();
                             let _ = device_manager.flush();
@@ -1398,5 +1423,9 @@ pub async fn run() -> Result<()> {
     }
 
     info!("Daemon shutting down");
+    if restart_requested {
+        info!("Exiting with code 64 to trigger systemd restart");
+        std::process::exit(64);
+    }
     Ok(())
 }
