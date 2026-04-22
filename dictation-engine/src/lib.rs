@@ -30,6 +30,7 @@ pub mod user_dictionary;
 pub mod vad;
 #[cfg(feature = "tray")]
 mod tray;
+mod idle_inhibit;
 
 pub use dictation_types::{GuiControl, GuiState, GuiStatus};
 
@@ -867,6 +868,7 @@ pub async fn run() -> Result<()> {
     let mut audio_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut preview_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut media_was_playing = false;
+    let mut idle_inhibit: Option<idle_inhibit::IdleInhibitor> = None;
     let mut window_target: Option<window_target::WindowTarget> = None;
     let mut restart_requested = false;
     // Cancellation channel for graceful task shutdown
@@ -907,6 +909,14 @@ pub async fn run() -> Result<()> {
                                 info!("Captured window target: class={}", wt.class());
                             }
                             media_was_playing = pause_media_if_playing();
+
+                            idle_inhibit = match idle_inhibit::acquire("Active voice dictation session").await {
+                                Ok(i) => Some(i),
+                                Err(e) => {
+                                    warn!("Failed to acquire idle inhibit: {}", e);
+                                    None
+                                }
+                            };
 
                             // Drain any stale audio data from the channel before starting
                             {
@@ -1158,6 +1168,7 @@ pub async fn run() -> Result<()> {
                         let _ = device_manager.stop();
                         let _ = gui_control_tx.send(GuiControl::SetHidden);
                         session = None;
+                        idle_inhibit = None;
                         daemon_state = DaemonState::Idle;
                         let _ = state_tx.send(daemon_state);
                         info!("Recovered to Idle state after audio task crash");
@@ -1197,6 +1208,7 @@ pub async fn run() -> Result<()> {
                             let _ = gui_control_tx.send(GuiControl::SetHidden);
 
                             session = None;
+                            idle_inhibit = None;
                             daemon_state = DaemonState::Idle;
                             let _ = state_tx.send(daemon_state);
                             info!("Returned to Idle state");
@@ -1414,6 +1426,7 @@ pub async fn run() -> Result<()> {
                 let _ = device_manager.stop();
 
                 session = None;
+                idle_inhibit = None;
                 engine_stopped_at = Some(Instant::now());
                 daemon_state = DaemonState::Idle;
                 let _ = state_tx.send(daemon_state);
