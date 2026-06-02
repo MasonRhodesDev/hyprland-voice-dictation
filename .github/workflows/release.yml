@@ -83,10 +83,9 @@ jobs:
             ### From source
 
             ```bash
-            cargo build --release
-            cp target/release/voice-dictation ~/.local/bin/
-            cp packaging/systemd/voice-dictation.service ~/.config/systemd/user/
-            systemctl --user daemon-reload
+            git clone https://github.com/MasonRhodesDev/hyprland-voice-dictation
+            cd hyprland-voice-dictation
+            make install
             ```
 
             ### Download model
