@@ -31,8 +31,16 @@ pub enum GuiControl {
         text_settled: bool,
     },
 
-    /// Transition to processing state (spinner animation)
-    SetProcessing,
+    /// Transition to transcribing state (ASR running; spinner)
+    SetTranscribing,
+
+    /// Transition to / update typing state as the result is injected.
+    /// `done`/`total` are word counts so the GUI can show real progress and
+    /// observers can see the work is alive and advancing (not wedged).
+    SetTyping {
+        done: usize,
+        total: usize,
+    },
 
     /// Transition to closing state and begin shutdown animation
     SetClosing,
@@ -66,6 +74,9 @@ pub enum GuiState {
     Hidden,
     PreListening,
     Listening,
-    Processing,
+    /// ASR running — spinner, no progress known yet.
+    Transcribing,
+    /// Injecting the result — spinner plus typing progress (see SharedState).
+    Typing,
     Closing,
 }
