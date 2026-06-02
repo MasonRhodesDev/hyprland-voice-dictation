@@ -29,6 +29,8 @@ pub struct SharedState {
     pub closing_progress: f32,
     pub fade: f32,
     pub pre_listening: bool,
+    /// Typing progress (0.0–1.0) while gui_state == Typing.
+    pub typing_progress: f32,
 }
 
 impl Default for SharedState {
@@ -40,6 +42,7 @@ impl Default for SharedState {
             closing_progress: 0.0,
             fade: 1.0,
             pre_listening: false,
+            typing_progress: 0.0,
         }
     }
 }
@@ -207,9 +210,19 @@ fn spawn_channel_listener(
                             GuiControl::UpdateVadState { .. } => {
                                 // VAD state handled elsewhere
                             }
-                            GuiControl::SetProcessing => {
-                                state.gui_state = GuiState::Processing;
+                            GuiControl::SetTranscribing => {
+                                state.gui_state = GuiState::Transcribing;
                                 state.fade = 1.0;
+                                state.typing_progress = 0.0;
+                            }
+                            GuiControl::SetTyping { done, total } => {
+                                state.gui_state = GuiState::Typing;
+                                state.fade = 1.0;
+                                state.typing_progress = if total > 0 {
+                                    (done as f32 / total as f32).clamp(0.0, 1.0)
+                                } else {
+                                    0.0
+                                };
                             }
                             GuiControl::SetClosing => {
                                 state.gui_state = GuiState::Closing;
@@ -297,7 +310,9 @@ fn state_to_mode(state: GuiState) -> i32 {
         GuiState::Hidden => 0,
         GuiState::PreListening => 1,
         GuiState::Listening => 1,
-        GuiState::Processing => 2,
+        // Both spinner states map to mode 2; the Typing view also reads `progress`.
+        GuiState::Transcribing => 2,
+        GuiState::Typing => 2,
         GuiState::Closing => 3,
     }
 }
@@ -311,6 +326,63 @@ const EXIT_CODE_SURFACES_LOST: i32 = 1;
 /// Number of timer ticks (~16ms each) to wait before exiting after all surfaces are lost (~3s)
 const SURFACE_LOSS_GRACE_TICKS: u32 = 188;
 
+/// Properties the timer callback drives on the active surface. The UI file (which
+/// may be a user-customized copy under ~/.config) must declare all of these as
+/// inputs, or those updates silently no-op. We check this once at startup so a
+/// drifted UI fails loudly instead of mysteriously (frozen spinner, dead progress).
+const REQUIRED_UI_PROPERTIES: &[&str] = &[
+    "mode",
+    "spinner-angle",
+    "progress",
+    "fade",
+    "spectrum",
+    "text",
+    "pre-listening",
+    "closing-progress",
+];
+
+/// Compile the resolved UI file and verify it declares every property the Rust
+/// timer drives. Returns a human-readable error describing the drift, if any.
+fn validate_ui_contract(ui_file: &str) -> std::result::Result<(), String> {
+    let compiler = slint_interpreter::Compiler::default();
+    let result = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .map_err(|e| format!("could not start UI validation runtime: {e}"))?
+        .block_on(compiler.build_from_path(ui_file));
+
+    let errors: Vec<String> = result
+        .diagnostics()
+        .filter(|d| d.level() == slint_interpreter::DiagnosticLevel::Error)
+        .map(|d| d.to_string())
+        .collect();
+    if !errors.is_empty() {
+        return Err(format!("UI '{ui_file}' failed to compile: {}", errors.join("; ")));
+    }
+
+    let component = result
+        .components()
+        .next()
+        .ok_or_else(|| format!("UI '{ui_file}' defines no component"))?;
+
+    // Normalize '-'/'_' since Slint treats them interchangeably in identifiers.
+    let present: std::collections::HashSet<String> = component
+        .properties()
+        .map(|(name, _)| name.replace('-', "_"))
+        .collect();
+    let missing: Vec<&str> = REQUIRED_UI_PROPERTIES
+        .iter()
+        .copied()
+        .filter(|p| !present.contains(&p.replace('-', "_")))
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "UI '{ui_file}' is missing required input properties {missing:?} — it has drifted \
+             from the Rust property contract. Add them (see slint-gui/ui/dictation.slint)."
+        ));
+    }
+    Ok(())
+}
+
 /// Run the single persistent shell with dynamic property updates
 fn run_shell(
     shared_state: Arc<RwLock<SharedState>>,
@@ -319,6 +391,16 @@ fn run_shell(
 ) -> GuiResult<()> {
     let ui_file = resolve_ui_path("dictation");
     info!("Loading UI from: {}", ui_file);
+
+    // Fail loud on UI contract drift (e.g. a customized config copy missing newer
+    // properties) instead of silently no-op'ing property updates. We still proceed
+    // with degraded rendering rather than crash-looping the daemon.
+    if let Err(e) = validate_ui_contract(&ui_file) {
+        error!("UI contract validation failed: {e}");
+        let _ = gui_status_tx.blocking_send(GuiStatus::Error(format!("UI contract drift: {e}")));
+    } else {
+        info!("UI contract OK ({} required properties present)", REQUIRED_UI_PROPERTIES.len());
+    }
 
     // Build the shell with the unified component
     // Use max dimensions to accommodate all modes
@@ -365,9 +447,17 @@ fn run_shell(
     let mut gui_initialized = false;
     // Track output fingerprints (description + scale) to detect monitor swaps
     let mut output_fingerprints: HashMap<OutputHandle, (String, Option<i32>)> = HashMap::new();
+    // Last gui_state we emitted a log line for, so we log transitions instead of every frame.
+    let mut last_logged_state: Option<GuiState> = None;
+    // Spinner rotation, advanced here each tick (capped at the timer rate) instead of via a
+    // free-running Slint animation, so a long/stuck spinner state can't drive uncapped repaints.
+    let mut spinner_angle: f32 = 0.0;
 
     event_loop
         .add_timer(update_interval, move |_deadline: Instant, app_state| {
+            // Advance the spinner at a fixed rate (one full turn/sec), bounded by the timer.
+            spinner_angle = (spinner_angle + 360.0 * update_interval.as_secs_f32()) % 360.0;
+
             // Check for UI file reload request (dev workflow)
             if reload_flag.load(Ordering::SeqCst) {
                 info!("UI file changed, reloading shell...");
@@ -427,9 +517,14 @@ fn run_shell(
             let active_monitor = monitor::get_active_monitor();
 
             if let Ok(state) = shared_state.read() {
-                // Log monitor state on non-hidden transitions for debugging
-                if state.gui_state != GuiState::Hidden {
-                    debug!("GUI state={:?}, active_monitor={:?}", state.gui_state, active_monitor);
+                // Log state transitions only (not every frame) to avoid flooding the journal.
+                if last_logged_state != Some(state.gui_state) {
+                    if state.gui_state != GuiState::Hidden {
+                        info!("GUI state -> {:?} (active_monitor={:?})", state.gui_state, active_monitor);
+                    } else {
+                        debug!("GUI state -> Hidden");
+                    }
+                    last_logged_state = Some(state.gui_state);
                 }
 
                 // Graceful degradation: show on all monitors when detection unavailable
@@ -469,16 +564,21 @@ fn run_shell(
                         0  // Hidden
                     };
 
-                    if state.gui_state != GuiState::Hidden && mode != 0 {
-                        info!("Setting mode={} on surface output={:?} (active_monitor={:?})", mode, output_name, active_monitor);
-                    }
-
                     if let Err(e) = component.set_property("mode", Value::Number(mode as f64)) {
                         debug!("Failed to set mode: {}", e);
                     }
 
                     // Only update other properties for active surface
                     if is_active {
+                        // Drive the spinner rotation and typing progress (Slint only repaints
+                        // when the visible mode actually references these properties).
+                        if let Err(e) = component.set_property("spinner-angle", Value::Number(spinner_angle as f64)) {
+                            debug!("Failed to set spinner-angle: {}", e);
+                        }
+                        if let Err(e) = component.set_property("progress", Value::Number(state.typing_progress as f64)) {
+                            debug!("Failed to set progress: {}", e);
+                        }
+
                         // Update spectrum for listening mode
                         if state.gui_state == GuiState::Listening || state.gui_state == GuiState::PreListening {
                             // Convert spectrum values to a model

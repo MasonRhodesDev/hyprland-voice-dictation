@@ -549,6 +549,35 @@ async fn drain_audio_channel(
     drained
 }
 
+/// Guarantees the GUI is driven out of the Processing state even if the processing
+/// path returns early via `?`. The Processing overlay runs a continuous spinner
+/// animation, so a Processing state that never clears pins a CPU core (the GUI also
+/// has a hard watchdog as a final backstop). Armed on construction; call `disarm()`
+/// on the normal success path so it does not fire a redundant SetHidden.
+struct ProcessingGuard {
+    tx: broadcast::Sender<GuiControl>,
+    armed: bool,
+}
+
+impl ProcessingGuard {
+    fn new(tx: broadcast::Sender<GuiControl>) -> Self {
+        Self { tx, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ProcessingGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            warn!("Processing path exited before clearing GUI state; forcing SetHidden");
+            let _ = self.tx.send(GuiControl::SetHidden);
+        }
+    }
+}
+
 #[tokio::main]
 pub async fn run() -> Result<()> {
     tracing_subscriber::fmt()
@@ -1279,9 +1308,12 @@ pub async fn run() -> Result<()> {
                     });
                 }
 
-                // Send SetProcessing IMMEDIATELY before any blocking work (shows spinner)
-                gui_control_tx.send(GuiControl::SetProcessing)
-                    .map_err(|e| anyhow::anyhow!("Failed to send SetProcessing: {}", e))?;
+                // Show the transcribing spinner IMMEDIATELY before any blocking work.
+                gui_control_tx.send(GuiControl::SetTranscribing)
+                    .map_err(|e| anyhow::anyhow!("Failed to send SetTranscribing: {}", e))?;
+
+                // From here on, any early return (`?`) must not strand the GUI in Processing.
+                let mut processing_guard = ProcessingGuard::new(gui_control_tx.clone());
 
                 // 1. Stop audio backends (pause streams)
                 let _ = device_manager.stop();
@@ -1389,7 +1421,18 @@ pub async fn run() -> Result<()> {
                         warn!("Typing will take ~{}s ({} chars at {}ms/char) — text is already in clipboard if interrupted", expected_typing_secs, sanitized_result.len(), profile.word_delay_ms);
                     }
                     info!("Typing final text ({:?} mode, delay={}ms)...", profile.category, profile.word_delay_ms);
-                    keyboard.type_text(&sanitized_result, profile.word_delay_ms).await?;
+                    // Switch the overlay to Typing and stream word-count progress. Throttle to
+                    // ~50 updates so we never flood the broadcast channel, but always emit the
+                    // final (done == total) update. This progress doubles as a liveness signal.
+                    let typing_tx = gui_control_tx.clone();
+                    let mut last_sent = 0usize;
+                    keyboard.type_text_with_progress(&sanitized_result, profile.word_delay_ms, move |done, total| {
+                        let step = (total / 50).max(1);
+                        if done == 0 || done == total || done - last_sent >= step {
+                            last_sent = done;
+                            let _ = typing_tx.send(GuiControl::SetTyping { done, total });
+                        }
+                    }).await?;
                     info!("Typed!");
 
                     // Start correction monitoring (background task, non-blocking)
@@ -1421,6 +1464,7 @@ pub async fn run() -> Result<()> {
                 // Hide GUI and return to Idle
                 gui_control_tx.send(GuiControl::SetHidden)
                     .map_err(|e| anyhow::anyhow!("Failed to send SetHidden: {}", e))?;
+                processing_guard.disarm();
 
                 // Stop audio capture (streams paused but kept alive for next session)
                 let _ = device_manager.stop();

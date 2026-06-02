@@ -32,28 +32,23 @@ export component Dictation inherits Window {
     // Shared properties
     in property <float> fade: 1.0;
 
+    // Spinner rotation in degrees, advanced by Rust each timer tick (capped repaint
+    // rate — no free-running Slint animation that could spin uncapped when a state sticks).
+    in property <float> spinner-angle: 0;
+
+    // Typing progress (0.0-1.0), shown during processing/typing (mode == 2).
+    in property <float> progress: 0.0;
+
     // Closing mode properties
     in property <float> closing-progress: 0.0;
 
-    // Animation states
-    property <float> spinner-angle: 0;
+    // Derived animation states
     property <float> closing-radius: 10.0 * (1.0 - closing-progress);
     property <float> closing-alpha: 1.0 - closing-progress;
 
     background: transparent;
     default-font-family: "Noto Sans";
     default-font-size: 16px;
-
-    // Spinner animation (runs when in processing or closing mode)
-    animate spinner-angle {
-        duration: 1000ms;
-        iteration-count: -1;
-        easing: linear;
-    }
-
-    init => {
-        spinner-angle = 360;
-    }
 
     // ========== LISTENING MODE (mode == 1) ==========
     if mode == 1: Rectangle {
@@ -123,6 +118,25 @@ export component Dictation inherits Window {
                 height: 6px;
                 border-radius: 3px;
                 background: white.with_alpha(fade * (0.3 + 0.7 * (i / 7)));
+            }
+        }
+
+        // Typing progress bar — only visible once typing starts (progress > 0).
+        if progress > 0.0: Rectangle {
+            x: 14px;
+            y: 50px;
+            width: 32px;
+            height: 3px;
+            border-radius: 1.5px;
+            background: white.with_alpha(0.25 * fade);
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width * progress;
+                height: parent.height;
+                border-radius: parent.border-radius;
+                background: white.with_alpha(0.9 * fade);
             }
         }
     }
