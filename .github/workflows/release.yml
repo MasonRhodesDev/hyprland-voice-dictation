@@ -32,6 +32,8 @@ jobs:
             libfontconfig1-dev \
             libfreetype-dev \
             libpipewire-0.3-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
             pkg-config
 
       - name: Cache cargo
