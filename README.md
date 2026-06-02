@@ -25,24 +25,36 @@ Optional: `playerctl` for media pause/resume.
 
 ## Installation
 
-### Arch Linux (from source)
+### From source
 
 ```bash
 git clone https://github.com/MasonRhodesDev/hyprland-voice-dictation
 cd hyprland-voice-dictation
 
-# Build
-cargo build --release
-
-# Install binary
-install -Dm755 target/release/voice-dictation ~/.local/bin/voice-dictation
-
-# Install systemd service
-install -Dm644 packaging/systemd/voice-dictation.service \
-    ~/.config/systemd/user/voice-dictation.service
-
-systemctl --user daemon-reload
+make install
 ```
+
+`make install` builds the release binary, installs it to `~/.local/bin/voice-dictation`,
+installs and reloads the systemd user service, restarts the daemon so it runs the binary
+you just built, and removes any stale shadow copy (see warning below). Override the
+locations if you need to:
+
+```bash
+make install BINDIR=/usr/local/bin UNITDIR=/etc/systemd/user
+```
+
+To remove everything (your model and config under `~/.config/voice-dictation` are kept):
+
+```bash
+make uninstall
+```
+
+> **Do not `cargo install --path .`** — that installs to `~/.cargo/bin`, which usually
+> precedes `~/.local/bin` on `PATH`. The keybind would then run the `~/.cargo/bin` copy
+> while the systemd daemon runs the `~/.local/bin` copy, and a stale shadow there makes
+> the keybind silently misbehave. Use `make install`, which keeps a single binary in
+> `~/.local/bin`. Run `make doctor` (or `voice-dictation diagnose`) any time the keybind
+> seems dead — it reports duplicate binaries on `PATH` and client/daemon skew.
 
 ### From release tarball
 
@@ -94,6 +106,11 @@ bind = SUPER, V, exec, voice-dictation toggle
 ```
 
 Press `Super+V` to start recording. Press again to confirm and type the transcription.
+
+> If the keybind seems to do nothing, run `voice-dictation diagnose` (or `make doctor`).
+> The most common causes are a duplicate binary on `PATH` (the bind runs a different one
+> than the daemon) or a wedged daemon — `systemctl --user restart voice-dictation` clears
+> the latter.
 
 ### Other compositors
 

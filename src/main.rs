@@ -18,6 +18,7 @@ const DBUS_INTERFACE_NAME: &str = "com.voicedictation.Control";
 
 #[derive(Parser)]
 #[command(name = "voice-dictation")]
+#[command(version)]
 #[command(about = "Voice dictation system with Parakeet speech recognition", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -585,6 +586,95 @@ fn debug_play(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Find all `voice-dictation` executables on `$PATH`, deduplicated by their
+/// canonical target. Returns the PATH-order entries so the first one (the one
+/// that actually wins) is listed first.
+fn binaries_on_path(name: &str) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut seen_canonical: Vec<PathBuf> = Vec::new();
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in path.split(':') {
+            if dir.is_empty() {
+                continue;
+            }
+            let candidate = PathBuf::from(dir).join(name);
+            if !candidate.is_file() {
+                continue;
+            }
+            let canonical = fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+            if !seen_canonical.contains(&canonical) {
+                seen_canonical.push(canonical);
+                found.push(candidate);
+            }
+        }
+    }
+    found
+}
+
+/// Ask the session bus which PID owns the daemon's well-known name, then
+/// resolve that PID's executable via /proc. Returns None if the daemon isn't
+/// running or the PID can't be resolved.
+async fn get_daemon_pid() -> Option<u32> {
+    let connection = Connection::session().await.ok()?;
+    let proxy = zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+    )
+    .await
+    .ok()?;
+    proxy
+        .call("GetConnectionUnixProcessID", &(DBUS_SERVICE_NAME))
+        .await
+        .ok()
+}
+
+fn daemon_exe() -> Option<PathBuf> {
+    let pid = tokio::runtime::Runtime::new().ok()?.block_on(get_daemon_pid())?;
+    fs::read_link(format!("/proc/{}/exe", pid)).ok()
+}
+
+/// Print a "Binary consistency" section: warn when more than one
+/// `voice-dictation` is on PATH (PATH order silently picks the winner) and when
+/// the running daemon is a different binary than this client (stale daemon after
+/// an install). This is the most common cause of "the keybind does nothing".
+fn check_binary_consistency() {
+    println!("\nBinary consistency:");
+    println!("  Version: {}", env!("CARGO_PKG_VERSION"));
+
+    let self_exe = std::env::current_exe().ok();
+    let self_canonical = self_exe
+        .as_ref()
+        .map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()));
+
+    let bins = binaries_on_path("voice-dictation");
+    if bins.len() > 1 {
+        println!("  WARNING: {} 'voice-dictation' binaries on PATH (first wins):", bins.len());
+        for b in &bins {
+            println!("    {}", b.display());
+        }
+        println!("  Keep only one — prefer ~/.local/bin (see README). Remove the others.");
+    } else if let Some(b) = bins.first() {
+        println!("  Client binary: {}", b.display());
+    }
+
+    match daemon_exe() {
+        Some(daemon) => {
+            println!("  Daemon binary: {}", daemon.display());
+            let daemon_canonical = fs::canonicalize(&daemon).unwrap_or_else(|_| daemon.clone());
+            if let Some(self_canonical) = &self_canonical {
+                if *self_canonical != daemon_canonical {
+                    println!("  WARNING: client and daemon are different binaries.");
+                    println!("  Restart the daemon so it matches the installed binary:");
+                    println!("    systemctl --user restart voice-dictation");
+                }
+            }
+        }
+        None => println!("  Daemon binary: (daemon not running)"),
+    }
+}
+
 fn diagnose() -> Result<(), Box<dyn std::error::Error>> {
     let home = std::env::var("HOME")?;
     let config_path = PathBuf::from(&home).join(".config/voice-dictation/config.toml");
@@ -650,6 +740,8 @@ fn diagnose() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(0);
         println!("  Current recordings: {} (use 'voice-dictation debug list' to view)", count);
     }
+
+    check_binary_consistency();
 
     Ok(())
 }
