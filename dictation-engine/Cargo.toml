@@ -2,6 +2,7 @@
 name = "dictation-engine"
 version.workspace = true
 edition = "2021"
+license.workspace = true
 
 [features]
 default = ["pipewire", "tray", "correction"]
