@@ -65,12 +65,8 @@ pub fn save_debug_audio(
     let json_path = debug_dir.join(format!("{}.json", base_name));
 
     // Write WAV file
-    let spec = WavSpec {
-        channels: 1,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: SampleFormat::Int,
-    };
+    let spec =
+        WavSpec { channels: 1, sample_rate, bits_per_sample: 16, sample_format: SampleFormat::Int };
 
     let mut writer = WavWriter::create(&wav_path, spec)?;
     for &sample in audio_buffer {
@@ -99,12 +95,7 @@ pub fn save_debug_audio(
 fn cleanup_old_files(debug_dir: &PathBuf) -> Result<()> {
     let mut wav_files: Vec<_> = fs::read_dir(debug_dir)?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext == "wav")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|ext| ext == "wav").unwrap_or(false))
         .collect();
 
     if wav_files.len() <= MAX_DEBUG_FILES {

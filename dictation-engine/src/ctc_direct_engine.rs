@@ -67,10 +67,7 @@ impl CtcDirectEngine {
     /// * `sample_rate` – Must be 16000
     pub fn new(model_dir: PathBuf, sample_rate: u32) -> Result<Self> {
         if sample_rate != 16000 {
-            anyhow::bail!(
-                "CtcDirectEngine requires 16 kHz audio, got {} Hz",
-                sample_rate
-            );
+            anyhow::bail!("CtcDirectEngine requires 16 kHz audio, got {} Hz", sample_rate);
         }
 
         info!("Loading CtcDirectEngine from {:?}", model_dir);
@@ -129,11 +126,7 @@ impl CtcDirectEngine {
             return Ok(String::new());
         }
 
-        debug!(
-            "CtcDirect: {} samples → {} frames",
-            samples.len(),
-            num_frames
-        );
+        debug!("CtcDirect: {} samples → {} frames", samples.len(), num_frames);
 
         // Step 2: Run ONNX model
         // Input shape: input_features [1, T, 80], attention_mask [1, T] (all ones i64)
@@ -149,16 +142,15 @@ impl CtcDirectEngine {
 
         // Step 3: Run model and extract logits [1, T', 1025] → [T', 1025]
         let logits_2d = {
-            let mut session = self
-                .session
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
+            let mut session =
+                self.session.lock().map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
             let outputs = session.run(ort::inputs!(
                 "input_features" => input_value,
                 "attention_mask" => mask_value
             ))?;
 
-            let (shape, data) = outputs["logits"].try_extract_tensor::<f32>()
+            let (shape, data) = outputs["logits"]
+                .try_extract_tensor::<f32>()
                 .map_err(|e| anyhow::anyhow!("Failed to extract logits: {}", e))?;
             // Shape derefs to &[i64]
             if shape.len() != 3 {
@@ -191,10 +183,7 @@ impl CtcDirectEngine {
     /// Used by the chunked-transcription path.
     fn transcribe_chunk_with_timestamps(&self, samples: &[i16]) -> Result<TimestampedChunkResult> {
         let text = self.transcribe_chunk(samples)?;
-        Ok(TimestampedChunkResult {
-            text,
-            words: Vec::new(),
-        })
+        Ok(TimestampedChunkResult { text, words: Vec::new() })
     }
 
     /// Transcribe the full audio buffer, chunking if necessary.
@@ -205,11 +194,7 @@ impl CtcDirectEngine {
         }
 
         let duration_secs = samples.len() as f32 / self.sample_rate as f32;
-        debug!(
-            "CtcDirect transcribe_buffer: {} samples ({:.2}s)",
-            samples.len(),
-            duration_secs
-        );
+        debug!("CtcDirect transcribe_buffer: {} samples ({:.2}s)", samples.len(), duration_secs);
 
         if self.chunk_config.needs_chunking(samples) {
             return transcribe_chunked_with_timestamps(samples, &self.chunk_config, |chunk| {
@@ -255,10 +240,8 @@ impl TranscriptionEngine for CtcDirectEngine {
         };
 
         if current_len <= last_len_val + RETRANSCRIBE_THRESHOLD {
-            let cached = self
-                .current_text
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+            let cached =
+                self.current_text.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
             return Ok(cached.clone());
         }
 
@@ -274,10 +257,8 @@ impl TranscriptionEngine for CtcDirectEngine {
         let full_text = self.transcribe_buffer(&full_audio)?;
 
         {
-            let mut cached = self
-                .current_text
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+            let mut cached =
+                self.current_text.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
             *cached = full_text.clone();
         }
         {
@@ -302,17 +283,11 @@ impl TranscriptionEngine for CtcDirectEngine {
     }
 
     fn get_cached_text(&self) -> String {
-        self.current_text
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.current_text.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     fn get_audio_buffer(&self) -> Vec<i16> {
-        self.audio_buffer
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.audio_buffer.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     fn reset(&self) {
@@ -393,23 +368,18 @@ fn ctc_beam_search_decode(
                 let new_blank_score =
                     log_add(hyp.blank_score, hyp.non_blank_score) + blank_log_prob;
 
-                let entry = next_beam
-                    .entry(hyp.tokens.clone())
-                    .or_insert_with(|| BeamHypothesis {
-                        tokens: hyp.tokens.clone(),
-                        blank_score: f32::NEG_INFINITY,
-                        non_blank_score: f32::NEG_INFINITY,
-                        hotword_context: hyp.hotword_context.clone(),
-                    });
+                let entry = next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
+                    tokens: hyp.tokens.clone(),
+                    blank_score: f32::NEG_INFINITY,
+                    non_blank_score: f32::NEG_INFINITY,
+                    hotword_context: hyp.hotword_context.clone(),
+                });
                 entry.blank_score = log_add(entry.blank_score, new_blank_score);
             }
 
             // --- Non-blank extensions ---
-            let top_tokens = top_k_tokens(
-                frame_log_probs.as_slice().unwrap(),
-                beam_width * 3,
-                blank_id,
-            );
+            let top_tokens =
+                top_k_tokens(frame_log_probs.as_slice().unwrap(), beam_width * 3, blank_id);
 
             for &(token_id, token_log_prob) in &top_tokens {
                 let last_token = hyp.tokens.last().copied();
@@ -424,9 +394,8 @@ fn ctc_beam_search_decode(
                         0.0
                     };
 
-                    let entry = next_beam
-                        .entry(hyp.tokens.clone())
-                        .or_insert_with(|| BeamHypothesis {
+                    let entry =
+                        next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
                             tokens: hyp.tokens.clone(),
                             blank_score: f32::NEG_INFINITY,
                             non_blank_score: f32::NEG_INFINITY,
@@ -464,9 +433,8 @@ fn ctc_beam_search_decode(
                         };
                     }
 
-                    let entry = next_beam
-                        .entry(new_tokens.clone())
-                        .or_insert_with(|| BeamHypothesis {
+                    let entry =
+                        next_beam.entry(new_tokens.clone()).or_insert_with(|| BeamHypothesis {
                             tokens: new_tokens,
                             blank_score: f32::NEG_INFINITY,
                             non_blank_score: f32::NEG_INFINITY,
@@ -481,9 +449,7 @@ fn ctc_beam_search_decode(
         // Prune beam to top-K
         beam = next_beam.into_values().collect();
         beam.sort_by(|a, b| {
-            b.total_score()
-                .partial_cmp(&a.total_score())
-                .unwrap_or(std::cmp::Ordering::Equal)
+            b.total_score().partial_cmp(&a.total_score()).unwrap_or(std::cmp::Ordering::Equal)
         });
         beam.truncate(beam_width);
     }
@@ -492,9 +458,7 @@ fn ctc_beam_search_decode(
     let best = beam
         .into_iter()
         .max_by(|a, b| {
-            a.total_score()
-                .partial_cmp(&b.total_score())
-                .unwrap_or(std::cmp::Ordering::Equal)
+            a.total_score().partial_cmp(&b.total_score()).unwrap_or(std::cmp::Ordering::Equal)
         })
         .unwrap_or(BeamHypothesis {
             tokens: Vec::new(),
@@ -518,8 +482,7 @@ fn log_softmax(logits: &Array2<f32>) -> Array2<f32> {
     for t in 0..time_steps {
         let row = logits.row(t);
         let max_val = row.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let log_sum_exp: f32 =
-            row.iter().map(|&x| (x - max_val).exp()).sum::<f32>().ln() + max_val;
+        let log_sum_exp: f32 = row.iter().map(|&x| (x - max_val).exp()).sum::<f32>().ln() + max_val;
         for v in 0..vocab_size {
             result[[t, v]] = logits[[t, v]] - log_sum_exp;
         }
@@ -562,10 +525,7 @@ fn load_hotword_trie(
     let path = hotwords_path.unwrap_or_else(hotword_trie::default_hotwords_path);
 
     if !path.exists() {
-        info!(
-            "No hotwords file at {}, hotword boosting disabled",
-            path.display()
-        );
+        info!("No hotwords file at {}, hotword boosting disabled", path.display());
         return Ok(HotwordTrie::empty());
     }
 
@@ -582,12 +542,7 @@ fn load_hotword_trie(
         match tokenizer.encode(entry.text.as_str(), false) {
             Ok(encoding) => {
                 let ids: Vec<u32> = encoding.get_ids().to_vec();
-                debug!(
-                    "Hotword '{}' -> {} tokens: {:?}",
-                    entry.text,
-                    ids.len(),
-                    ids
-                );
+                debug!("Hotword '{}' -> {} tokens: {:?}", entry.text, ids.len(), ids);
                 token_sequences.push((entry, ids));
             }
             Err(e) => {
@@ -664,14 +619,12 @@ mod tests {
                     let new_blank_score =
                         log_add(hyp.blank_score, hyp.non_blank_score) + blank_log_prob;
                     let entry =
-                        next_beam
-                            .entry(hyp.tokens.clone())
-                            .or_insert_with(|| BeamHypothesis {
-                                tokens: hyp.tokens.clone(),
-                                blank_score: f32::NEG_INFINITY,
-                                non_blank_score: f32::NEG_INFINITY,
-                                hotword_context: hyp.hotword_context.clone(),
-                            });
+                        next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
+                            tokens: hyp.tokens.clone(),
+                            blank_score: f32::NEG_INFINITY,
+                            non_blank_score: f32::NEG_INFINITY,
+                            hotword_context: hyp.hotword_context.clone(),
+                        });
                     entry.blank_score = log_add(entry.blank_score, new_blank_score);
                 }
 
@@ -682,8 +635,7 @@ mod tests {
                     .filter(|(i, _)| *i != blank_id as usize)
                     .map(|(i, &p)| (i as u32, p))
                     .collect();
-                indexed
-                    .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                 indexed.truncate(beam_width * 3);
 
                 for &(token_id, token_log_prob) in &indexed {
@@ -695,9 +647,8 @@ mod tests {
                         } else {
                             0.0
                         };
-                        let entry = next_beam
-                            .entry(hyp.tokens.clone())
-                            .or_insert_with(|| BeamHypothesis {
+                        let entry =
+                            next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
                                 tokens: hyp.tokens.clone(),
                                 blank_score: f32::NEG_INFINITY,
                                 non_blank_score: f32::NEG_INFINITY,
@@ -726,9 +677,8 @@ mod tests {
                                 Vec::new()
                             };
                         }
-                        let entry = next_beam
-                            .entry(new_tokens.clone())
-                            .or_insert_with(|| BeamHypothesis {
+                        let entry =
+                            next_beam.entry(new_tokens.clone()).or_insert_with(|| BeamHypothesis {
                                 tokens: new_tokens,
                                 blank_score: f32::NEG_INFINITY,
                                 non_blank_score: f32::NEG_INFINITY,
@@ -742,9 +692,7 @@ mod tests {
 
             beam = next_beam.into_values().collect();
             beam.sort_by(|a, b| {
-                b.total_score()
-                    .partial_cmp(&a.total_score())
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                b.total_score().partial_cmp(&a.total_score()).unwrap_or(std::cmp::Ordering::Equal)
             });
             beam.truncate(beam_width);
         }
@@ -752,9 +700,7 @@ mod tests {
         let best = beam
             .into_iter()
             .max_by(|a, b| {
-                a.total_score()
-                    .partial_cmp(&b.total_score())
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                a.total_score().partial_cmp(&b.total_score()).unwrap_or(std::cmp::Ordering::Equal)
             })
             .unwrap_or(BeamHypothesis {
                 tokens: Vec::new(),

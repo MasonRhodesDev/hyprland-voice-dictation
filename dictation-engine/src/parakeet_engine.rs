@@ -78,7 +78,9 @@ impl ParakeetEngine {
         }
 
         let f32_samples = Self::samples_to_f32(samples);
-        let mut parakeet = self.parakeet.lock()
+        let mut parakeet = self
+            .parakeet
+            .lock()
             .map_err(|e| anyhow::anyhow!("Parakeet model lock poisoned: {}", e))?;
         let result = parakeet.transcribe_samples(f32_samples, self.sample_rate, 1, None)?;
 
@@ -92,14 +94,18 @@ impl ParakeetEngine {
         }
 
         let f32_samples = Self::samples_to_f32(samples);
-        let mut parakeet = self.parakeet.lock()
+        let mut parakeet = self
+            .parakeet
+            .lock()
             .map_err(|e| anyhow::anyhow!("Parakeet model lock poisoned: {}", e))?;
-        let result = parakeet.transcribe_samples(f32_samples, self.sample_rate, 1, Some(TimestampMode::Words))?;
+        let result = parakeet.transcribe_samples(
+            f32_samples,
+            self.sample_rate,
+            1,
+            Some(TimestampMode::Words),
+        )?;
 
-        Ok(TimestampedChunkResult {
-            text: result.text,
-            words: result.tokens,
-        })
+        Ok(TimestampedChunkResult { text: result.text, words: result.tokens })
     }
 
     /// Run transcription on accumulated audio, chunking if necessary
@@ -111,7 +117,8 @@ impl ParakeetEngine {
 
         // Check audio statistics
         let max_sample = samples.iter().map(|s| s.abs()).max().unwrap_or(0);
-        let rms = (samples.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / samples.len() as f64).sqrt();
+        let rms = (samples.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / samples.len() as f64)
+            .sqrt();
         let duration_secs = samples.len() as f32 / self.sample_rate as f32;
         debug!(
             "transcribe_buffer: {} samples, max={}, rms={:.1}, duration={:.2}s",
@@ -149,7 +156,8 @@ fn normalize_audio(samples: &[i16], target_rms: f32, max_gain: f32) -> Vec<i16> 
         return Vec::new();
     }
 
-    let rms = (samples.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / samples.len() as f64).sqrt() as f32;
+    let rms = (samples.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / samples.len() as f64)
+        .sqrt() as f32;
 
     // Skip if near-silent
     if rms < 1.0 {
@@ -165,10 +173,13 @@ fn normalize_audio(samples: &[i16], target_rms: f32, max_gain: f32) -> Vec<i16> 
 
     debug!("normalize_audio: rms={:.1}, gain={:.2}x", rms, gain);
 
-    samples.iter().map(|&s| {
-        let amplified = s as f32 * gain;
-        amplified.clamp(i16::MIN as f32, i16::MAX as f32) as i16
-    }).collect()
+    samples
+        .iter()
+        .map(|&s| {
+            let amplified = s as f32 * gain;
+            amplified.clamp(i16::MIN as f32, i16::MAX as f32) as i16
+        })
+        .collect()
 }
 
 impl TranscriptionEngine for ParakeetEngine {
@@ -176,7 +187,9 @@ impl TranscriptionEngine for ParakeetEngine {
         // ONLY buffer audio here - never run transcription
         // Transcription happens in the preview task (100ms polling) and final result
         // Running it here blocks audio capture and causes data loss
-        let mut buffer = self.audio_buffer.lock()
+        let mut buffer = self
+            .audio_buffer
+            .lock()
             .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
         buffer.extend_from_slice(samples);
         Ok(())
@@ -189,7 +202,9 @@ impl TranscriptionEngine for ParakeetEngine {
         // Lock ordering: audio_buffer -> last_transcribed_len -> current_text
         // This must be consistent with reset() to avoid deadlocks
 
-        let buffer = self.audio_buffer.lock()
+        let buffer = self
+            .audio_buffer
+            .lock()
             .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
 
         if buffer.is_empty() {
@@ -203,7 +218,9 @@ impl TranscriptionEngine for ParakeetEngine {
 
         let current_len = buffer.len();
         let last_len_val = {
-            let last_len = self.last_transcribed_len.lock()
+            let last_len = self
+                .last_transcribed_len
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Last transcribed len lock poisoned: {}", e))?;
             *last_len
         };
@@ -211,7 +228,9 @@ impl TranscriptionEngine for ParakeetEngine {
         // Only re-transcribe when enough new audio accumulated
         // This balances responsiveness vs CPU usage
         if current_len <= last_len_val + RETRANSCRIBE_THRESHOLD {
-            let cached = self.current_text.lock()
+            let cached = self
+                .current_text
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Current text lock poisoned: {}", e))?;
             return Ok(cached.clone());
         }
@@ -220,20 +239,27 @@ impl TranscriptionEngine for ParakeetEngine {
         let full_audio = buffer.clone();
         drop(buffer);
 
-        debug!("Preview transcription: {} samples ({:.2}s)",
-               full_audio.len(), full_audio.len() as f32 / 16000.0);
+        debug!(
+            "Preview transcription: {} samples ({:.2}s)",
+            full_audio.len(),
+            full_audio.len() as f32 / 16000.0
+        );
 
         let full_text = self.transcribe_buffer(&full_audio)?;
 
         // Replace cache with new result (not append)
         // Lock ordering: current_text -> last_transcribed_len
         {
-            let mut cached = self.current_text.lock()
+            let mut cached = self
+                .current_text
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Current text lock poisoned: {}", e))?;
             *cached = full_text.clone();
         }
         {
-            let mut last_len = self.last_transcribed_len.lock()
+            let mut last_len = self
+                .last_transcribed_len
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Last transcribed len lock poisoned: {}", e))?;
             *last_len = current_len;
         }
@@ -242,7 +268,9 @@ impl TranscriptionEngine for ParakeetEngine {
     }
 
     fn get_final_result(&self) -> Result<String> {
-        let buffer = self.audio_buffer.lock()
+        let buffer = self
+            .audio_buffer
+            .lock()
             .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
         let samples = buffer.clone();
         drop(buffer);
@@ -252,15 +280,11 @@ impl TranscriptionEngine for ParakeetEngine {
     fn get_cached_text(&self) -> String {
         // Return the cached preview text without re-transcribing
         // Useful in single-model mode where preview already has full transcription
-        self.current_text.lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+        self.current_text.lock().map(|guard| guard.clone()).unwrap_or_default()
     }
 
     fn get_audio_buffer(&self) -> Vec<i16> {
-        self.audio_buffer.lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+        self.audio_buffer.lock().map(|guard| guard.clone()).unwrap_or_default()
     }
 
     fn reset(&self) {

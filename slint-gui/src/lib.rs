@@ -88,9 +88,10 @@ fn spawn_ui_file_watcher(reload_flag: Arc<AtomicBool>) {
                 if let Ok(event) = res {
                     // Only reload on modify/create events for .slint files
                     if event.kind.is_modify() || event.kind.is_create() {
-                        let is_slint = event.paths.iter().any(|p| {
-                            p.extension().map_or(false, |ext| ext == "slint")
-                        });
+                        let is_slint = event
+                            .paths
+                            .iter()
+                            .any(|p| p.extension().map_or(false, |ext| ext == "slint"));
                         if is_slint {
                             info!("UI file changed, triggering reload...");
                             reload_flag_clone.store(true, Ordering::SeqCst);
@@ -359,16 +360,12 @@ fn validate_ui_contract(ui_file: &str) -> std::result::Result<(), String> {
         return Err(format!("UI '{ui_file}' failed to compile: {}", errors.join("; ")));
     }
 
-    let component = result
-        .components()
-        .next()
-        .ok_or_else(|| format!("UI '{ui_file}' defines no component"))?;
+    let component =
+        result.components().next().ok_or_else(|| format!("UI '{ui_file}' defines no component"))?;
 
     // Normalize '-'/'_' since Slint treats them interchangeably in identifiers.
-    let present: std::collections::HashSet<String> = component
-        .properties()
-        .map(|(name, _)| name.replace('-', "_"))
-        .collect();
+    let present: std::collections::HashSet<String> =
+        component.properties().map(|(name, _)| name.replace('-', "_")).collect();
     let missing: Vec<&str> = REQUIRED_UI_PROPERTIES
         .iter()
         .copied()
@@ -408,13 +405,13 @@ fn run_shell(
     info!("Creating Shell from UI file...");
     let mut runtime = Shell::from_file(&ui_file)
         .surface("Dictation")
-        .width(380)  // Listening mode is widest
-        .height(90)  // Listening mode is tallest
+        .width(380) // Listening mode is widest
+        .height(90) // Listening mode is tallest
         .anchor(AnchorEdges::empty().with_bottom())
         .margin((0, 0, 50, 0))
         .layer(Layer::Overlay)
         .keyboard_interactivity(KeyboardInteractivity::None)
-        .output_policy(OutputPolicy::AllOutputs)  // Surfaces on all monitors
+        .output_policy(OutputPolicy::AllOutputs) // Surfaces on all monitors
         .build()
         .map_err(|e| {
             let _ = gui_status_tx.blocking_send(GuiStatus::Error(format!(

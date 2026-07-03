@@ -65,18 +65,13 @@ impl ModelSpec {
             ));
         }
 
-        Ok(Self {
-            model_name: parts[1].to_string(),
-        })
+        Ok(Self { model_name: parts[1].to_string() })
     }
 
     /// Get the base models directory
     fn get_models_dir() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home)
-            .join(".config")
-            .join("voice-dictation")
-            .join("models")
+        PathBuf::from(home).join(".config").join("voice-dictation").join("models")
     }
 
     /// Get the full path to the model directory.
@@ -115,10 +110,7 @@ impl ModelSpec {
             let engine = CtcDirectEngine::new(model_path, sample_rate)?;
             Ok(Arc::new(engine))
         } else if self.is_ctc() {
-            info!(
-                "Creating parakeet CTC engine with model '{}'",
-                self.model_name
-            );
+            info!("Creating parakeet CTC engine with model '{}'", self.model_name);
             let model_path = self.model_path();
             let hotwords_path = Some(hotword_trie::default_hotwords_path());
             // Default beam width of 10 when hotwords are present
@@ -126,10 +118,7 @@ impl ModelSpec {
             let engine = CtcEngine::new(model_path, sample_rate, hotwords_path, beam_width)?;
             Ok(Arc::new(engine))
         } else {
-            info!(
-                "Creating parakeet TDT engine with model '{}'",
-                self.model_name
-            );
+            info!("Creating parakeet TDT engine with model '{}'", self.model_name);
             let model_path = self.model_path();
             let engine = ParakeetEngine::new(model_path, sample_rate)?;
             Ok(Arc::new(engine))
@@ -148,12 +137,7 @@ fn has_onnx_model(dir: &std::path::Path) -> bool {
     // Search for any .onnx file
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
-            if entry
-                .path()
-                .extension()
-                .and_then(|s| s.to_str())
-                == Some("onnx")
-            {
+            if entry.path().extension().and_then(|s| s.to_str()) == Some("onnx") {
                 return true;
             }
         }

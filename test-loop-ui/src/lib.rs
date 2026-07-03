@@ -13,10 +13,11 @@ pub fn run(recording_path: Option<&str>) -> Result<()> {
 
     let initial_index: usize = if let Some(path) = recording_path {
         let wav = PathBuf::from(path);
-        recordings
-            .iter()
-            .position(|r| r.wav_path == wav)
-            .unwrap_or(if recordings.is_empty() { 0 } else { recordings.len() - 1 })
+        recordings.iter().position(|r| r.wav_path == wav).unwrap_or(if recordings.is_empty() {
+            0
+        } else {
+            recordings.len() - 1
+        })
     } else {
         if recordings.is_empty() {
             0
@@ -96,11 +97,7 @@ pub fn run(recording_path: Option<&str>) -> Result<()> {
             let rec_guard = loaded_recording.lock().unwrap();
             if let Some(rec) = rec_guard.as_ref() {
                 let words: Vec<&str> = rec.metadata.final_text.split_whitespace().collect();
-                let raw_word = words
-                    .get(word_idx as usize)
-                    .copied()
-                    .unwrap_or("")
-                    .to_string();
+                let raw_word = words.get(word_idx as usize).copied().unwrap_or("").to_string();
                 // Strip leading/trailing punctuation so hotwords and substitutions are clean
                 let clean = raw_word.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
                 if let Some(ui) = ui_weak.upgrade() {
@@ -186,11 +183,7 @@ pub fn run(recording_path: Option<&str>) -> Result<()> {
 
 fn update_picker(ui: &TestLoop, recs: &[recording::Recording], idx: usize) {
     if let Some(rec) = recs.get(idx) {
-        let ts = rec
-            .metadata
-            .timestamp
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string();
+        let ts = rec.metadata.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
         let dur = format!("{:.1}s", rec.metadata.duration_ms as f64 / 1000.0);
         let preview = if rec.metadata.final_text.len() > 60 {
             format!("{}...", &rec.metadata.final_text[..57])
@@ -206,11 +199,7 @@ fn update_picker(ui: &TestLoop, recs: &[recording::Recording], idx: usize) {
 }
 
 fn populate_review(ui: &TestLoop, rec: &recording::Recording) {
-    let ts = rec
-        .metadata
-        .timestamp
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
+    let ts = rec.metadata.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
     let dur = format!("{:.1}s", rec.metadata.duration_ms as f64 / 1000.0);
     let engine_info = format!(
         "engine: {} | accurate: {}",
@@ -231,10 +220,7 @@ fn populate_review(ui: &TestLoop, rec: &recording::Recording) {
         .final_text
         .split_whitespace()
         .enumerate()
-        .map(|(i, w)| WordTile {
-            word: w.to_string().into(),
-            index: i as i32,
-        })
+        .map(|(i, w)| WordTile { word: w.to_string().into(), index: i as i32 })
         .collect();
     ui.set_words(word_tiles.as_slice().into());
 }

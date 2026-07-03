@@ -18,7 +18,7 @@ url='https://github.com/MasonRhodesDev/hyprland-voice-dictation'
 license=('MIT' 'Apache-2.0')
 depends=('wtype' 'pipewire' 'alsa-lib' 'fontconfig' 'freetype2' 'libxkbcommon'
          'wayland' 'systemd')
-makedepends=('rust' 'cargo' 'pkg-config')
+makedepends=('rust' 'cargo' 'pkg-config' 'clang')
 optdepends=('playerctl: auto-pause media during recording')
 provides=('voice-dictation')
 conflicts=('voice-dictation')

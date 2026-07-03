@@ -44,10 +44,8 @@ fn default_enable_word_substitution() -> bool {
 
 fn load_config() -> Result<Config> {
     let home = std::env::var("HOME").context("HOME not set")?;
-    let config_path = std::path::PathBuf::from(home)
-        .join(".config")
-        .join("voice-dictation")
-        .join("config.toml");
+    let config_path =
+        std::path::PathBuf::from(home).join(".config").join("voice-dictation").join("config.toml");
 
     if !config_path.exists() {
         return Ok(Config {
@@ -73,8 +71,8 @@ pub fn rerun_on_wav(wav_path: &Path) -> Result<String> {
     let spec = ModelSpec::parse(&config.daemon.model)?;
     let engine = spec.create_engine(16000)?;
 
-    let mut reader = WavReader::open(wav_path)
-        .with_context(|| format!("opening WAV {}", wav_path.display()))?;
+    let mut reader =
+        WavReader::open(wav_path).with_context(|| format!("opening WAV {}", wav_path.display()))?;
     let samples: Vec<i16> = reader
         .samples::<i16>()
         .collect::<std::result::Result<_, _>>()

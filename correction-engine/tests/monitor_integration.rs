@@ -6,9 +6,7 @@
 use chrono::Utc;
 use correction_engine::connection::MockTextChangeSource;
 use correction_engine::store::CorrectionStore;
-use correction_engine::types::{
-    InjectionContext, MonitorConfig, TextChangeEvent, TextChangeOp,
-};
+use correction_engine::types::{InjectionContext, MonitorConfig, TextChangeEvent, TextChangeOp};
 use correction_engine::CorrectionMonitor;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -52,8 +50,7 @@ async fn test_full_correction_flow() {
     let store = CorrectionStore::empty(config.clone());
     let (mock_source, tx) = MockTextChangeSource::new(true);
 
-    let monitor =
-        CorrectionMonitor::with_source(Arc::new(mock_source), store, config);
+    let monitor = CorrectionMonitor::with_source(Arc::new(mock_source), store, config);
 
     let context = make_context("hello world");
     let handle = monitor.start_monitoring(context);
@@ -62,13 +59,9 @@ async fn test_full_correction_flow() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Simulate: user deletes "world" and types "earth"
-    tx.send(make_event(TextChangeOp::Delete, 6, "world"))
-        .await
-        .unwrap();
+    tx.send(make_event(TextChangeOp::Delete, 6, "world")).await.unwrap();
     tokio::time::sleep(Duration::from_millis(10)).await;
-    tx.send(make_event(TextChangeOp::Insert, 6, "earth"))
-        .await
-        .unwrap();
+    tx.send(make_event(TextChangeOp::Insert, 6, "earth")).await.unwrap();
 
     // Close the channel to end monitoring early
     drop(tx);
@@ -86,8 +79,7 @@ async fn test_monitoring_timeout() {
     let store = CorrectionStore::empty(config.clone());
     let (mock_source, _tx) = MockTextChangeSource::new(true);
 
-    let monitor =
-        CorrectionMonitor::with_source(Arc::new(mock_source), store, config);
+    let monitor = CorrectionMonitor::with_source(Arc::new(mock_source), store, config);
 
     let context = make_context("hello world");
     let handle = monitor.start_monitoring(context);
@@ -104,8 +96,7 @@ async fn test_graceful_degradation() {
     let store = CorrectionStore::empty(config.clone());
     let (mock_source, _tx) = MockTextChangeSource::new(false); // AT-SPI2 unavailable
 
-    let monitor =
-        CorrectionMonitor::with_source(Arc::new(mock_source), store, config);
+    let monitor = CorrectionMonitor::with_source(Arc::new(mock_source), store, config);
 
     assert!(!monitor.is_available());
 
@@ -125,8 +116,7 @@ async fn test_auto_promotion_e2e() {
     for i in 0..3 {
         let store = CorrectionStore::load(&config).unwrap();
         let (mock_source, tx) = MockTextChangeSource::new(true);
-        let monitor =
-            CorrectionMonitor::with_source(Arc::new(mock_source), store, config.clone());
+        let monitor = CorrectionMonitor::with_source(Arc::new(mock_source), store, config.clone());
 
         let context = make_context("the cash is here");
         let handle = monitor.start_monitoring(context);
@@ -134,13 +124,9 @@ async fn test_auto_promotion_e2e() {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Same correction each time: cash → cache
-        tx.send(make_event(TextChangeOp::Delete, 4, "cash"))
-            .await
-            .unwrap();
+        tx.send(make_event(TextChangeOp::Delete, 4, "cash")).await.unwrap();
         tokio::time::sleep(Duration::from_millis(10)).await;
-        tx.send(make_event(TextChangeOp::Insert, 4, "cache"))
-            .await
-            .unwrap();
+        tx.send(make_event(TextChangeOp::Insert, 4, "cache")).await.unwrap();
 
         drop(tx);
         let corrections = handle.await.unwrap();
@@ -163,21 +149,16 @@ async fn test_stats() {
     let store = CorrectionStore::empty(config.clone());
     let (mock_source, tx) = MockTextChangeSource::new(true);
 
-    let monitor =
-        CorrectionMonitor::with_source(Arc::new(mock_source), store, config);
+    let monitor = CorrectionMonitor::with_source(Arc::new(mock_source), store, config);
 
     let context = make_context("hello world");
     let handle = monitor.start_monitoring(context);
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    tx.send(make_event(TextChangeOp::Delete, 6, "world"))
-        .await
-        .unwrap();
+    tx.send(make_event(TextChangeOp::Delete, 6, "world")).await.unwrap();
     tokio::time::sleep(Duration::from_millis(10)).await;
-    tx.send(make_event(TextChangeOp::Insert, 6, "earth"))
-        .await
-        .unwrap();
+    tx.send(make_event(TextChangeOp::Insert, 6, "earth")).await.unwrap();
 
     drop(tx);
     handle.await.unwrap();

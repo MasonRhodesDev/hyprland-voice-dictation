@@ -124,10 +124,7 @@ pub fn extract_corrections(
             (replacement.deleted_text.clone(), String::new())
         } else {
             // Full replacement: delete + insert pair
-            (
-                replacement.deleted_text.clone(),
-                replacement.inserted_text.clone(),
-            )
+            (replacement.deleted_text.clone(), replacement.inserted_text.clone())
         };
 
         // Don't record no-op corrections
@@ -382,36 +379,20 @@ mod tests {
     fn test_no_correction_on_append() {
         let context = make_context("hello");
         // Insert " world" at the end (pos 5 = length of "hello")
-        let events = vec![make_event(
-            TextChangeOp::Insert,
-            5,
-            " world",
-            Duration::ZERO,
-        )];
+        let events = vec![make_event(TextChangeOp::Insert, 5, " world", Duration::ZERO)];
 
         let corrections = extract_corrections(&context, &events);
-        assert!(
-            corrections.is_empty(),
-            "Appending text should not be a correction"
-        );
+        assert!(corrections.is_empty(), "Appending text should not be a correction");
     }
 
     #[test]
     fn test_no_correction_on_prepend() {
         let context = make_context("world");
         // Insert "hello " at the start (pos 0)
-        let events = vec![make_event(
-            TextChangeOp::Insert,
-            0,
-            "hello ",
-            Duration::ZERO,
-        )];
+        let events = vec![make_event(TextChangeOp::Insert, 0, "hello ", Duration::ZERO)];
 
         let corrections = extract_corrections(&context, &events);
-        assert!(
-            corrections.is_empty(),
-            "Prepending text should not be a correction"
-        );
+        assert!(corrections.is_empty(), "Prepending text should not be a correction");
     }
 
     #[test]
@@ -589,18 +570,12 @@ mod tests {
     fn test_context_before() {
         assert_eq!(extract_context_before("hello world foo", 6, 20), "hello ");
         assert_eq!(extract_context_before("hello", 0, 20), "");
-        assert_eq!(
-            extract_context_before("a very long prefix text here", 28, 10),
-            " text here"
-        );
+        assert_eq!(extract_context_before("a very long prefix text here", 28, 10), " text here");
     }
 
     #[test]
     fn test_context_after() {
-        assert_eq!(
-            extract_context_after("hello world foo", 11, 20),
-            " foo"
-        );
+        assert_eq!(extract_context_after("hello world foo", 11, 20), " foo");
         assert_eq!(extract_context_after("hello", 5, 20), "");
         assert_eq!(extract_context_after("hello world", 0, 5), "hello");
     }

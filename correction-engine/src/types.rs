@@ -83,8 +83,7 @@ pub struct MonitorConfig {
 
 impl Default for MonitorConfig {
     fn default() -> Self {
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("~/.local/share"));
+        let data_dir = dirs::data_dir().unwrap_or_else(|| PathBuf::from("~/.local/share"));
         let vd_dir = data_dir.join("voice-dictation");
 
         Self {

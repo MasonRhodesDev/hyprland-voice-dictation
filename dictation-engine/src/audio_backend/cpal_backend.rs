@@ -40,10 +40,7 @@ impl CpalBackend {
         true
     }
 
-    fn new(
-        tx: mpsc::UnboundedSender<Vec<i16>>,
-        config: &AudioBackendConfig,
-    ) -> Result<Self> {
+    fn new(tx: mpsc::UnboundedSender<Vec<i16>>, config: &AudioBackendConfig) -> Result<Self> {
         let host = cpal::default_host();
 
         // Determine which device to use (single device only)
@@ -52,7 +49,8 @@ impl CpalBackend {
             // "default" or None: use system default directly (fast path)
             None | Some("default") => {
                 info!("Using system default audio device (fast path)");
-                let dev = host.default_input_device()
+                let dev = host
+                    .default_input_device()
                     .ok_or_else(|| anyhow::anyhow!("No default input device available"))?;
                 if let Ok(name) = dev.name() {
                     info!("Default device: '{}'", name);
@@ -99,8 +97,7 @@ impl CpalBackend {
             buffer_size: cpal::BufferSize::Default,
         };
 
-        let errored_streams: Arc<Mutex<HashSet<String>>> =
-            Arc::new(Mutex::new(HashSet::new()));
+        let errored_streams: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
         let last_audio_timestamp = Arc::new(AtomicU64::new(0));
         let samples_dropped = Arc::new(AtomicU64::new(0));
 
@@ -112,40 +109,44 @@ impl CpalBackend {
         let errored_streams_clone = Arc::clone(&errored_streams);
         let samples_dropped_clone = Arc::clone(&samples_dropped);
 
-        let stream = device.build_input_stream(
-            &stream_config,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                // Pre-filter obviously silent chunks
-                let rms: f32 =
-                    (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
-                if rms < threshold {
-                    return; // Skip completely silent chunks
-                }
-
-                // Convert to i16
-                let samples: Vec<i16> = data
-                    .iter()
-                    .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
-                    .collect();
-
-                // Send directly via crossbeam channel (no muxer)
-                if cb_tx.try_send(samples).is_err() {
-                    samples_dropped_clone.fetch_add(1, Ordering::Relaxed);
-                }
-            },
-            move |err| {
-                // Log once per stream
-                if let Ok(mut errored) = errored_streams_clone.lock() {
-                    if errored.insert(error_stream_id.clone()) {
-                        error!(
-                            "Audio stream '{}' error: {} (will retry on device reconnection)",
-                            error_stream_id, err
-                        );
+        let stream = device
+            .build_input_stream(
+                &stream_config,
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    // Pre-filter obviously silent chunks
+                    let rms: f32 =
+                        (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
+                    if rms < threshold {
+                        return; // Skip completely silent chunks
                     }
-                }
-            },
-            None,
-        ).map_err(|e| anyhow::anyhow!("Failed to create audio stream for '{}': {}", stream_id, e))?;
+
+                    // Convert to i16
+                    let samples: Vec<i16> = data
+                        .iter()
+                        .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
+                        .collect();
+
+                    // Send directly via crossbeam channel (no muxer)
+                    if cb_tx.try_send(samples).is_err() {
+                        samples_dropped_clone.fetch_add(1, Ordering::Relaxed);
+                    }
+                },
+                move |err| {
+                    // Log once per stream
+                    if let Ok(mut errored) = errored_streams_clone.lock() {
+                        if errored.insert(error_stream_id.clone()) {
+                            error!(
+                                "Audio stream '{}' error: {} (will retry on device reconnection)",
+                                error_stream_id, err
+                            );
+                        }
+                    }
+                },
+                None,
+            )
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to create audio stream for '{}': {}", stream_id, e)
+            })?;
 
         info!("Created audio stream for: {}", stream_id);
 
@@ -177,12 +178,7 @@ impl CpalBackend {
         });
 
         info!("CpalBackend initialized with single stream (direct channel)");
-        Ok(Self {
-            streams: vec![stream],
-            errored_streams,
-            last_audio_timestamp,
-            samples_dropped,
-        })
+        Ok(Self { streams: vec![stream], errored_streams, last_audio_timestamp, samples_dropped })
     }
 
     /// Get the timestamp (ms since epoch) of the last audio received
@@ -246,9 +242,7 @@ impl AudioBackendFactory for CpalBackend {
 
     fn list_devices() -> Result<Vec<DeviceInfo>> {
         let host = cpal::default_host();
-        let default_name = host
-            .default_input_device()
-            .and_then(|d| d.name().ok());
+        let default_name = host.default_input_device().and_then(|d| d.name().ok());
 
         let mut devices = Vec::new();
         if let Ok(input_devices) = host.input_devices() {

@@ -7,7 +7,13 @@ version = 2
 yanked = "deny"
 # Add RUSTSEC IDs here (with a justifying comment) only if an advisory is
 # confirmed not to affect us and a fix isn't yet available.
-ignore = []
+ignore = [
+    { id = "RUSTSEC-2024-0436", reason = "paste is an unmaintained compile-time-only proc-macro (slint dep); no runtime exposure" },
+    { id = "RUSTSEC-2025-0141", reason = "bincode 2.x unmaintained; used only for local model-cache serialization of trusted data" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; renders local trusted fonts only (slint text stack)" },
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml duplicate-attr quadratic scan; we never parse untrusted XML, fix needs semver-major of transitive dep" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader allocation DoS; same trusted-input rationale as 2026-0194" },
+]
 
 [licenses]
 version = 2

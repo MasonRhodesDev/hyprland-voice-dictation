@@ -9,6 +9,7 @@ use systemd::daemon::{notify, STATE_READY, STATE_WATCHDOG};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
+mod app_profile;
 pub mod audio_backend;
 mod chunking;
 pub mod control_ipc;
@@ -18,27 +19,26 @@ pub mod ctc_features;
 pub mod dbus_control;
 pub mod debug_audio;
 pub mod engine;
-mod app_profile;
 pub mod hotword_trie;
+mod idle_inhibit;
 mod keyboard;
 pub mod model_selector;
 pub mod parakeet_engine;
 pub mod post_processing;
-mod window_detect;
-mod window_target;
-pub mod user_dictionary;
-pub mod vad;
 #[cfg(feature = "tray")]
 mod tray;
-mod idle_inhibit;
+pub mod user_dictionary;
+pub mod vad;
+mod window_detect;
+mod window_target;
 
 pub use dictation_types::{GuiControl, GuiState, GuiStatus};
 
 /// Check if media is playing and pause it. Returns true if media was paused.
 fn pause_media_if_playing() -> bool {
-    let Ok(output) = std::process::Command::new("playerctl")
-        .arg("status")
-        .output() else { return false };
+    let Ok(output) = std::process::Command::new("playerctl").arg("status").output() else {
+        return false;
+    };
     let playing = String::from_utf8_lossy(&output.stdout).contains("Playing");
     if playing {
         let _ = std::process::Command::new("playerctl").arg("pause").output();
@@ -138,22 +138,54 @@ struct DaemonConfig {
     enable_accessibility_bridge: bool,
 }
 
-fn default_model() -> String { "parakeet:default".to_string() }
-fn default_enable_acronyms() -> bool { true }
-fn default_enable_punctuation() -> bool { true }
-fn default_enable_grammar() -> bool { true }
-fn default_enable_word_substitution() -> bool { true }
-fn default_silence_threshold_db() -> f32 { -60.0 }
-fn default_debug_audio() -> bool { false }
-fn default_trailing_buffer_ms() -> u64 { 750 }
-fn default_audio_backend() -> String { "auto".to_string() }
-fn default_idle_release_timeout_secs() -> u64 { 30 }
-fn default_media_resume_delay_ms() -> u64 { 25 }
-fn default_engine_idle_timeout_secs() -> u64 { 300 }  // 5 minutes
-fn default_enable_correction_learning() -> bool { true }
-fn default_correction_monitor_duration_secs() -> u64 { 60 }
-fn default_correction_auto_promote_threshold() -> u32 { 3 }
-fn default_enable_accessibility_bridge() -> bool { true }
+fn default_model() -> String {
+    "parakeet:default".to_string()
+}
+fn default_enable_acronyms() -> bool {
+    true
+}
+fn default_enable_punctuation() -> bool {
+    true
+}
+fn default_enable_grammar() -> bool {
+    true
+}
+fn default_enable_word_substitution() -> bool {
+    true
+}
+fn default_silence_threshold_db() -> f32 {
+    -60.0
+}
+fn default_debug_audio() -> bool {
+    false
+}
+fn default_trailing_buffer_ms() -> u64 {
+    750
+}
+fn default_audio_backend() -> String {
+    "auto".to_string()
+}
+fn default_idle_release_timeout_secs() -> u64 {
+    30
+}
+fn default_media_resume_delay_ms() -> u64 {
+    25
+}
+fn default_engine_idle_timeout_secs() -> u64 {
+    300
+} // 5 minutes
+fn default_enable_correction_learning() -> bool {
+    true
+}
+fn default_correction_monitor_duration_secs() -> u64 {
+    60
+}
+fn default_correction_auto_promote_threshold() -> u32 {
+    3
+}
+fn default_enable_accessibility_bridge() -> bool {
+    true
+}
 
 /// Convert decibels to linear amplitude (RMS threshold).
 fn db_to_linear(db: f32) -> f32 {
@@ -331,10 +363,7 @@ struct DeviceManager {
 
 impl DeviceManager {
     /// Create a new DeviceManager with pre-created audio backend.
-    fn new(
-        config: DeviceManagerConfig,
-        audio_tx: mpsc::UnboundedSender<Vec<i16>>,
-    ) -> Result<Self> {
+    fn new(config: DeviceManagerConfig, audio_tx: mpsc::UnboundedSender<Vec<i16>>) -> Result<Self> {
         // Create initial backend (streams created but paused)
         info!("DeviceManager: Pre-creating audio backend ({:?})...", config.backend_type);
         let backend = Self::create_backend(&config, audio_tx.clone())?;
@@ -384,7 +413,10 @@ impl DeviceManager {
                         break;
                     }
                     Err(e) if attempt < MAX_RETRIES => {
-                        warn!("DeviceManager: Backend creation failed (attempt {}): {}, retrying...", attempt, e);
+                        warn!(
+                            "DeviceManager: Backend creation failed (attempt {}): {}, retrying...",
+                            attempt, e
+                        );
                         last_error = Some(e);
                         std::thread::sleep(RETRY_DELAY);
                     }
@@ -395,7 +427,9 @@ impl DeviceManager {
             }
 
             if self.backend.is_none() {
-                return Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Failed to create audio backend")));
+                return Err(
+                    last_error.unwrap_or_else(|| anyhow::anyhow!("Failed to create audio backend"))
+                );
             }
         }
 
@@ -420,7 +454,10 @@ impl DeviceManager {
                     info!("DeviceManager: Audio backend released immediately");
                 } else {
                     self.stopped_at = Some(Instant::now());
-                    info!("DeviceManager: Audio stopped, will release after {}s idle", timeout_secs);
+                    info!(
+                        "DeviceManager: Audio stopped, will release after {}s idle",
+                        timeout_secs
+                    );
                 }
             } else {
                 self.stopped_at = None;
@@ -461,7 +498,10 @@ impl DeviceManager {
 
     /// Switch to a different audio input device. Takes effect on next recording start.
     fn set_device(&mut self, device_name: Option<String>) {
-        info!("DeviceManager: Switching device to {:?}", device_name.as_deref().unwrap_or("Default"));
+        info!(
+            "DeviceManager: Switching device to {:?}",
+            device_name.as_deref().unwrap_or("Default")
+        );
         self.config.backend_config.device_name = device_name;
         // Drop existing backend so next start() recreates with the new device
         self.backend.take();
@@ -480,17 +520,19 @@ impl DeviceManager {
             }
 
             let flag = needs_recreate;
-            let mut watcher = match notify::recommended_watcher(move |res: std::result::Result<Event, notify::Error>| {
-                if let Ok(event) = res {
-                    match event.kind {
-                        EventKind::Create(_) | EventKind::Remove(_) => {
-                            info!("DeviceManager: Audio device change detected, will recreate on next start");
-                            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            let mut watcher = match notify::recommended_watcher(
+                move |res: std::result::Result<Event, notify::Error>| {
+                    if let Ok(event) = res {
+                        match event.kind {
+                            EventKind::Create(_) | EventKind::Remove(_) => {
+                                info!("DeviceManager: Audio device change detected, will recreate on next start");
+                                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
-                }
-            }) {
+                },
+            ) {
                 Ok(w) => w,
                 Err(e) => {
                     error!("DeviceManager: Failed to create watcher: {}", e);
@@ -540,8 +582,8 @@ async fn drain_audio_channel(
                 }
                 drained += 1;
             }
-            Ok(None) => break,  // Channel closed
-            Err(_) => break,    // Timeout - no more data
+            Ok(None) => break, // Channel closed
+            Err(_) => break,   // Timeout - no more data
         }
     }
 
@@ -611,22 +653,26 @@ pub async fn run() -> Result<()> {
                 correction_monitor_duration_secs: default_correction_monitor_duration_secs(),
                 correction_auto_promote_threshold: default_correction_auto_promote_threshold(),
                 enable_accessibility_bridge: default_enable_accessibility_bridge(),
-            }
+            },
         }
     });
 
-    let sample_rate: u32 = config.daemon.sample_rate.parse()
-        .unwrap_or_else(|_| {
-            warn!("Invalid sample_rate '{}', defaulting to 16000", config.daemon.sample_rate);
-            16000
-        });
+    let sample_rate: u32 = config.daemon.sample_rate.parse().unwrap_or_else(|_| {
+        warn!("Invalid sample_rate '{}', defaulting to 16000", config.daemon.sample_rate);
+        16000
+    });
 
     // Convert silence threshold from dB to linear RMS value
     let silence_threshold = db_to_linear(config.daemon.silence_threshold_db);
-    info!("Silence threshold: {:.1}dB ({:.6} linear)", config.daemon.silence_threshold_db, silence_threshold);
+    info!(
+        "Silence threshold: {:.1}dB ({:.6} linear)",
+        config.daemon.silence_threshold_db, silence_threshold
+    );
 
-    info!("Config loaded: audio_device={}, sample_rate={}",
-          config.daemon.audio_device, sample_rate);
+    info!(
+        "Config loaded: audio_device={}, sample_rate={}",
+        config.daemon.audio_device, sample_rate
+    );
 
     // Initialize user dictionary
     let user_dict = Arc::new(UserDictionary::new().unwrap_or_else(|e| {
@@ -684,7 +730,12 @@ pub async fn run() -> Result<()> {
                 if current == "false" {
                     info!("Enabling accessibility bridge (toolkit-accessibility → true)");
                     let _ = tokio::process::Command::new("gsettings")
-                        .args(["set", "org.gnome.desktop.interface", "toolkit-accessibility", "true"])
+                        .args([
+                            "set",
+                            "org.gnome.desktop.interface",
+                            "toolkit-accessibility",
+                            "true",
+                        ])
                         .output()
                         .await;
                 } else {
@@ -700,8 +751,8 @@ pub async fn run() -> Result<()> {
     // Initialize correction monitor (AT-SPI2 based)
     #[cfg(feature = "correction")]
     let correction_monitor = if config.daemon.enable_correction_learning {
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
+        let data_dir =
+            dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
         let vd_dir = data_dir.join("voice-dictation");
         let monitor_config = correction_engine::MonitorConfig {
             enabled: true,
@@ -769,18 +820,18 @@ pub async fn run() -> Result<()> {
     let (gui_status_tx, mut gui_status_rx) = mpsc::channel::<GuiStatus>(10);
 
     // Parse audio device config
-    let audio_device_name = if config.daemon.audio_device.is_empty() || config.daemon.audio_device == "default" {
-        None
-    } else {
-        Some(config.daemon.audio_device.clone())
-    };
+    let audio_device_name =
+        if config.daemon.audio_device.is_empty() || config.daemon.audio_device == "default" {
+            None
+        } else {
+            Some(config.daemon.audio_device.clone())
+        };
 
     // Parse audio backend type
-    let backend_type = BackendType::from_str(&config.daemon.audio_backend)
-        .unwrap_or_else(|| {
-            warn!("Unknown audio backend '{}', using auto", config.daemon.audio_backend);
-            BackendType::Auto
-        });
+    let backend_type = BackendType::from_str(&config.daemon.audio_backend).unwrap_or_else(|| {
+        warn!("Unknown audio backend '{}', using auto", config.daemon.audio_backend);
+        BackendType::Auto
+    });
 
     // Create DeviceManager with eager-loaded audio backend
     info!("Creating DeviceManager with pre-loaded audio backend...");
@@ -818,10 +869,9 @@ pub async fn run() -> Result<()> {
 
     // Wait for GUI to initialize (with timeout)
     info!("Waiting for GUI to initialize...");
-    let gui_available = match tokio::time::timeout(
-        Duration::from_secs(5),
-        gui_status_rx.recv()
-    ).await {
+    let gui_available = match tokio::time::timeout(Duration::from_secs(5), gui_status_rx.recv())
+        .await
+    {
         Ok(Some(GuiStatus::Ready)) => {
             info!("GUI ready");
             true
@@ -859,7 +909,8 @@ pub async fn run() -> Result<()> {
 
     // Pre-load engine at startup for instant recording start
     info!("Pre-loading Parakeet engine (blocking call before D-Bus)...");
-    let mut preview_engine: Option<Arc<dyn TranscriptionEngine>> = Some(model_spec.create_engine(sample_rate)?);
+    let mut preview_engine: Option<Arc<dyn TranscriptionEngine>> =
+        Some(model_spec.create_engine(sample_rate)?);
     let mut engine_stopped_at: Option<Instant> = None;
     info!("Parakeet engine loaded and ready");
 
@@ -908,7 +959,6 @@ pub async fn run() -> Result<()> {
 
     // ===== PERSISTENT STATE MACHINE LOOP =====
     loop {
-
         match daemon_state {
             DaemonState::Idle => {
                 // Check for idle timeout (release mic if idle too long)
@@ -939,13 +989,15 @@ pub async fn run() -> Result<()> {
                             }
                             media_was_playing = pause_media_if_playing();
 
-                            idle_inhibit = match idle_inhibit::acquire("Active voice dictation session").await {
-                                Ok(i) => Some(i),
-                                Err(e) => {
-                                    warn!("Failed to acquire idle inhibit: {}", e);
-                                    None
-                                }
-                            };
+                            idle_inhibit =
+                                match idle_inhibit::acquire("Active voice dictation session").await
+                                {
+                                    Ok(i) => Some(i),
+                                    Err(e) => {
+                                        warn!("Failed to acquire idle inhibit: {}", e);
+                                        None
+                                    }
+                                };
 
                             // Drain any stale audio data from the channel before starting
                             {
@@ -981,8 +1033,9 @@ pub async fn run() -> Result<()> {
                             let session_engine = Arc::clone(engine);
 
                             // Signal UI to show
-                            gui_control_tx.send(GuiControl::SetListening)
-                                .map_err(|e| anyhow::anyhow!("Failed to send SetListening: {}", e))?;
+                            gui_control_tx.send(GuiControl::SetListening).map_err(|e| {
+                                anyhow::anyhow!("Failed to send SetListening: {}", e)
+                            })?;
 
                             // Create session
                             session = Some(RecordingSession {
@@ -1079,7 +1132,7 @@ pub async fn run() -> Result<()> {
                                 let pipeline = Pipeline::from_config_with_dict(
                                     enable_acronyms,
                                     enable_punctuation,
-                                    false,  // grammar disabled in preview for speed
+                                    false, // grammar disabled in preview for speed
                                     Some(user_dict_preview),
                                     enable_word_substitution,
                                     word_sub_preview,
@@ -1152,7 +1205,10 @@ pub async fn run() -> Result<()> {
                             info!("Entered Recording state");
                         }
                         DaemonCommand::SwitchDevice(name) => {
-                            info!("Switching audio device to {:?}", name.as_deref().unwrap_or("Default"));
+                            info!(
+                                "Switching audio device to {:?}",
+                                name.as_deref().unwrap_or("Default")
+                            );
                             device_manager.set_device(name);
                         }
                         DaemonCommand::Shutdown => {
@@ -1169,7 +1225,7 @@ pub async fn run() -> Result<()> {
                         _ => {
                             warn!("Ignoring unexpected command in Idle state");
                         }
-                    }
+                    },
                     Ok(None) => {
                         error!("D-Bus command channel closed");
                         break;
@@ -1186,7 +1242,8 @@ pub async fn run() -> Result<()> {
                     if task.is_finished() {
                         error!("Audio task died unexpectedly - recovering to Idle");
                         health_state.audio_healthy.store(false, Ordering::Relaxed);
-                        *health_state.last_error.write().await = Some("Audio task crashed during recording".to_string());
+                        *health_state.last_error.write().await =
+                            Some("Audio task crashed during recording".to_string());
 
                         // Clean up
                         audio_task = None;
@@ -1285,7 +1342,7 @@ pub async fn run() -> Result<()> {
                         _ => {
                             warn!("Ignoring unexpected command in Recording state");
                         }
-                    }
+                    },
                     Ok(None) => {
                         error!("D-Bus command channel closed");
                         break;
@@ -1309,7 +1366,8 @@ pub async fn run() -> Result<()> {
                 }
 
                 // Show the transcribing spinner IMMEDIATELY before any blocking work.
-                gui_control_tx.send(GuiControl::SetTranscribing)
+                gui_control_tx
+                    .send(GuiControl::SetTranscribing)
                     .map_err(|e| anyhow::anyhow!("Failed to send SetTranscribing: {}", e))?;
 
                 // From here on, any early return (`?`) must not strand the GUI in Processing.
@@ -1333,9 +1391,11 @@ pub async fn run() -> Result<()> {
                 }
 
                 // Get engine from session
-                let session_engine = session.as_ref()
+                let session_engine = session
+                    .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("No active session in Processing state"))?
-                    .engine.clone();
+                    .engine
+                    .clone();
 
                 // Check if any audio was captured
                 let audio_buffer_len = session_engine.as_ref().get_audio_buffer().len();
@@ -1343,8 +1403,8 @@ pub async fn run() -> Result<()> {
 
                 if audio_buffer_len > 0 {
                     // Run final transcription on full buffer (including trailing audio)
-                    let preview_text = session_engine.as_ref().get_final_result()
-                        .unwrap_or_else(|e| {
+                    let preview_text =
+                        session_engine.as_ref().get_final_result().unwrap_or_else(|e| {
                             warn!("Final transcription failed: {}, falling back to cached text", e);
                             session_engine.as_ref().get_cached_text()
                         });
@@ -1381,7 +1441,9 @@ pub async fn run() -> Result<()> {
                             accurate_engine: "parakeet".to_string(),
                             same_model_used: true,
                         };
-                        if let Err(e) = debug_audio::save_debug_audio(&audio_buffer, sample_rate, metadata) {
+                        if let Err(e) =
+                            debug_audio::save_debug_audio(&audio_buffer, sample_rate, metadata)
+                        {
                             warn!("Failed to save debug audio: {}", e);
                         }
                     }
@@ -1389,10 +1451,13 @@ pub async fn run() -> Result<()> {
                     // Build per-app profile from captured window class
                     let profile = match &window_target {
                         Some(wt) => app_profile::AppProfile::from_window_class(wt.class()),
-                        None => app_profile::AppProfile::for_category(window_detect::AppCategory::General),
+                        None => app_profile::AppProfile::for_category(
+                            window_detect::AppCategory::General,
+                        ),
                     };
 
-                    let sanitizer = SanitizationProcessor::new(profile.sanitization.clone(), profile.category);
+                    let sanitizer =
+                        SanitizationProcessor::new(profile.sanitization.clone(), profile.category);
                     let sanitized_result = sanitizer.process(&processed_result)?;
 
                     // Copy to clipboard as backup (wl-copy for Wayland)
@@ -1416,23 +1481,33 @@ pub async fn run() -> Result<()> {
                         wt.refocus().await.ok();
                     }
 
-                    let expected_typing_secs = (sanitized_result.len() as u64 * profile.word_delay_ms) / 1000;
+                    let expected_typing_secs =
+                        (sanitized_result.len() as u64 * profile.word_delay_ms) / 1000;
                     if expected_typing_secs > 15 {
                         warn!("Typing will take ~{}s ({} chars at {}ms/char) — text is already in clipboard if interrupted", expected_typing_secs, sanitized_result.len(), profile.word_delay_ms);
                     }
-                    info!("Typing final text ({:?} mode, delay={}ms)...", profile.category, profile.word_delay_ms);
+                    info!(
+                        "Typing final text ({:?} mode, delay={}ms)...",
+                        profile.category, profile.word_delay_ms
+                    );
                     // Switch the overlay to Typing and stream word-count progress. Throttle to
                     // ~50 updates so we never flood the broadcast channel, but always emit the
                     // final (done == total) update. This progress doubles as a liveness signal.
                     let typing_tx = gui_control_tx.clone();
                     let mut last_sent = 0usize;
-                    keyboard.type_text_with_progress(&sanitized_result, profile.word_delay_ms, move |done, total| {
-                        let step = (total / 50).max(1);
-                        if done == 0 || done == total || done - last_sent >= step {
-                            last_sent = done;
-                            let _ = typing_tx.send(GuiControl::SetTyping { done, total });
-                        }
-                    }).await?;
+                    keyboard
+                        .type_text_with_progress(
+                            &sanitized_result,
+                            profile.word_delay_ms,
+                            move |done, total| {
+                                let step = (total / 50).max(1);
+                                if done == 0 || done == total || done - last_sent >= step {
+                                    last_sent = done;
+                                    let _ = typing_tx.send(GuiControl::SetTyping { done, total });
+                                }
+                            },
+                        )
+                        .await?;
                     info!("Typed!");
 
                     // Start correction monitoring (background task, non-blocking)
@@ -1442,27 +1517,36 @@ pub async fn run() -> Result<()> {
                             text: sanitized_result.clone(),
                             timestamp: chrono::Utc::now(),
                             instant: std::time::Instant::now(),
-                            window_class: window_target.as_ref().map(|w| w.class().to_string()).unwrap_or_default(),
+                            window_class: window_target
+                                .as_ref()
+                                .map(|w| w.class().to_string())
+                                .unwrap_or_default(),
                             window_title: String::new(),
                         };
                         let _handle = monitor.start_monitoring(context);
-                        debug!("Correction monitoring started for {}s", config.daemon.correction_monitor_duration_secs);
+                        debug!(
+                            "Correction monitoring started for {}s",
+                            config.daemon.correction_monitor_duration_secs
+                        );
                     }
 
                     // Send to GUI via channel
-                    gui_control_tx.send(GuiControl::SetClosing)
+                    gui_control_tx
+                        .send(GuiControl::SetClosing)
                         .map_err(|e| anyhow::anyhow!("Failed to send SetClosing: {}", e))?;
 
                     tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
                 } else {
                     info!("No text to type");
-                    gui_control_tx.send(GuiControl::SetClosing)
+                    gui_control_tx
+                        .send(GuiControl::SetClosing)
                         .map_err(|e| anyhow::anyhow!("Failed to send SetClosing: {}", e))?;
                     tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
                 }
 
                 // Hide GUI and return to Idle
-                gui_control_tx.send(GuiControl::SetHidden)
+                gui_control_tx
+                    .send(GuiControl::SetHidden)
                     .map_err(|e| anyhow::anyhow!("Failed to send SetHidden: {}", e))?;
                 processing_guard.disarm();
 

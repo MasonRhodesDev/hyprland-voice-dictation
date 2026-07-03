@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "dictation-engine"
 version.workspace = true
 edition = "2021"

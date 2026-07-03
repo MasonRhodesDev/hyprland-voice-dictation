@@ -1,18 +1,18 @@
 use anyhow::Result;
-use zbus::interface;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tokio::sync::{Mutex, watch};
+use std::sync::Arc;
+use tokio::sync::{watch, Mutex};
 use tracing::info;
+use zbus::interface;
 
 use crate::HealthState;
 
 /// Daemon state enum shared between lib.rs and dbus_control.rs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonState {
-    Idle,        // Waiting for StartRecording command, GUI hidden
-    Recording,   // Actively recording audio and transcribing, GUI visible
-    Processing,  // Running transcription and typing, GUI visible with spinner
+    Idle,       // Waiting for StartRecording command, GUI hidden
+    Recording,  // Actively recording audio and transcribing, GUI visible
+    Processing, // Running transcription and typing, GUI visible with spinner
 }
 
 impl std::fmt::Display for DaemonState {
@@ -60,7 +60,9 @@ impl VoiceDictationService {
     async fn start_recording(&self) -> zbus::fdo::Result<()> {
         info!("D-Bus: StartRecording called");
         let sender = self.command_sender.lock().await;
-        sender.send(DaemonCommand::StartRecording).await
+        sender
+            .send(DaemonCommand::StartRecording)
+            .await
             .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to send command: {}", e)))?;
         Ok(())
     }
@@ -69,7 +71,9 @@ impl VoiceDictationService {
     async fn stop_recording(&self) -> zbus::fdo::Result<()> {
         info!("D-Bus: StopRecording called");
         let sender = self.command_sender.lock().await;
-        sender.send(DaemonCommand::StopRecording).await
+        sender
+            .send(DaemonCommand::StopRecording)
+            .await
             .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to send command: {}", e)))?;
         Ok(())
     }
@@ -78,7 +82,9 @@ impl VoiceDictationService {
     async fn confirm(&self) -> zbus::fdo::Result<()> {
         info!("D-Bus: Confirm called");
         let sender = self.command_sender.lock().await;
-        sender.send(DaemonCommand::Confirm).await
+        sender
+            .send(DaemonCommand::Confirm)
+            .await
             .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to send command: {}", e)))?;
         Ok(())
     }
@@ -125,7 +131,9 @@ impl VoiceDictationService {
     async fn snapshot_correction(&self) -> zbus::fdo::Result<()> {
         info!("D-Bus: SnapshotCorrection called");
         let sender = self.command_sender.lock().await;
-        sender.send(DaemonCommand::SnapshotCorrection).await
+        sender
+            .send(DaemonCommand::SnapshotCorrection)
+            .await
             .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to send command: {}", e)))?;
         Ok(())
     }
@@ -134,7 +142,9 @@ impl VoiceDictationService {
     async fn shutdown(&self) -> zbus::fdo::Result<()> {
         info!("D-Bus: Shutdown called");
         let sender = self.command_sender.lock().await;
-        sender.send(DaemonCommand::Shutdown).await
+        sender
+            .send(DaemonCommand::Shutdown)
+            .await
             .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to send command: {}", e)))?;
         Ok(())
     }

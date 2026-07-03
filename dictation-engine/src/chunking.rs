@@ -19,22 +19,14 @@ pub struct ChunkConfig {
 
 impl Default for ChunkConfig {
     fn default() -> Self {
-        Self {
-            max_chunk_seconds: 30,
-            overlap_seconds: 2,
-            sample_rate: 16000,
-        }
+        Self { max_chunk_seconds: 30, overlap_seconds: 2, sample_rate: 16000 }
     }
 }
 
 impl ChunkConfig {
     /// Create a new chunk config
     pub fn new(max_chunk_seconds: u32, overlap_seconds: u32, sample_rate: u32) -> Self {
-        Self {
-            max_chunk_seconds,
-            overlap_seconds,
-            sample_rate,
-        }
+        Self { max_chunk_seconds, overlap_seconds, sample_rate }
     }
 
     /// Maximum samples per chunk
@@ -66,12 +58,7 @@ impl<'a> AudioChunks<'a> {
     /// Create a new chunk iterator
     #[allow(dead_code)]
     pub fn new(samples: &'a [i16], config: ChunkConfig) -> Self {
-        Self {
-            samples,
-            config,
-            offset: 0,
-            chunk_num: 0,
-        }
+        Self { samples, config, offset: 0, chunk_num: 0 }
     }
 }
 
@@ -109,7 +96,12 @@ pub struct TimestampedChunkResult {
 ///
 /// Scans for the lowest-energy frame to avoid splitting audio mid-word.
 /// Returns the best split position (start of the quietest frame).
-fn find_silence_boundary(samples: &[i16], target_pos: usize, search_window: usize, frame_size: usize) -> usize {
+fn find_silence_boundary(
+    samples: &[i16],
+    target_pos: usize,
+    search_window: usize,
+    frame_size: usize,
+) -> usize {
     let search_start = target_pos.saturating_sub(search_window / 2);
     let search_end = (target_pos + search_window / 2).min(samples.len());
 
@@ -123,7 +115,8 @@ fn find_silence_boundary(samples: &[i16], target_pos: usize, search_window: usiz
     let mut pos = search_start;
     while pos + frame_size <= search_end {
         let frame = &samples[pos..pos + frame_size];
-        let energy: f64 = frame.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / frame_size as f64;
+        let energy: f64 =
+            frame.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / frame_size as f64;
 
         if energy < best_energy {
             best_energy = energy;
@@ -132,7 +125,10 @@ fn find_silence_boundary(samples: &[i16], target_pos: usize, search_window: usiz
         pos += frame_size;
     }
 
-    debug!("find_silence_boundary: target={}, best={}, energy={:.1}", target_pos, best_pos, best_energy);
+    debug!(
+        "find_silence_boundary: target={}, best={}, energy={:.1}",
+        target_pos, best_pos, best_energy
+    );
     best_pos
 }
 
@@ -151,7 +147,9 @@ fn chunk_boundaries_vad(samples: &[i16], config: &ChunkConfig) -> Vec<(usize, us
         let ideal_end = (offset + max_samples).min(samples.len());
 
         // For the last chunk or if very close to the end, just take it all
-        let chunk_end = if ideal_end >= samples.len() || samples.len() - ideal_end < config.sample_rate as usize {
+        let chunk_end = if ideal_end >= samples.len()
+            || samples.len() - ideal_end < config.sample_rate as usize
+        {
             samples.len()
         } else {
             find_silence_boundary(samples, ideal_end, search_window, frame_size)
@@ -196,9 +194,7 @@ fn merge_chunks_timestamped(chunks: &[TimestampedChunkResult], overlap_seconds: 
         }
 
         // Find where the previous chunk's time coverage ends
-        let prev_end_time = all_words.last()
-            .map(|w| w.end)
-            .unwrap_or(0.0);
+        let prev_end_time = all_words.last().map(|w| w.end).unwrap_or(0.0);
 
         // Skip words from this chunk that fall within the overlap zone
         // (they were already covered by the previous chunk with better context)
@@ -263,7 +259,10 @@ where
 
         debug!(
             "transcribe_chunked_ts: chunk {} ({:.1}s - {:.1}s, {} samples)",
-            chunk_num, chunk_start_sec, chunk_end_sec, chunk.len()
+            chunk_num,
+            chunk_start_sec,
+            chunk_end_sec,
+            chunk.len()
         );
 
         match transcribe_fn(chunk) {
@@ -274,8 +273,12 @@ where
                     word.end += chunk_start_sec;
                 }
                 if !result.text.is_empty() {
-                    debug!("transcribe_chunked_ts: chunk {} -> '{}' ({} words)",
-                           chunk_num, result.text, result.words.len());
+                    debug!(
+                        "transcribe_chunked_ts: chunk {} -> '{}' ({} words)",
+                        chunk_num,
+                        result.text,
+                        result.words.len()
+                    );
                     results.push(result);
                 }
             }
@@ -310,11 +313,7 @@ pub fn merge_chunks(chunks: &[String]) -> String {
 
     for (i, chunk) in chunks[1..].iter().enumerate() {
         let merged = merge_two_chunks(&result, chunk);
-        debug!(
-            "merge_chunks: merged chunk {} -> {} chars",
-            i + 1,
-            merged.len()
-        );
+        debug!("merge_chunks: merged chunk {} -> {} chars", i + 1, merged.len());
         result = merged;
     }
 
@@ -344,10 +343,8 @@ fn merge_two_chunks(first: &str, second: &str) -> String {
         let second_start = &second_words[..overlap_len];
 
         // Case-insensitive comparison for better matching
-        let matches = first_end
-            .iter()
-            .zip(second_start.iter())
-            .all(|(a, b)| a.eq_ignore_ascii_case(b));
+        let matches =
+            first_end.iter().zip(second_start.iter()).all(|(a, b)| a.eq_ignore_ascii_case(b));
 
         if matches {
             best_overlap = overlap_len;
@@ -407,7 +404,8 @@ where
     let mut results: Vec<String> = Vec::new();
 
     for (chunk_num, chunk) in AudioChunks::new(samples, config.clone()) {
-        let chunk_start = chunk_num as f32 * (config.max_chunk_seconds - config.overlap_seconds) as f32;
+        let chunk_start =
+            chunk_num as f32 * (config.max_chunk_seconds - config.overlap_seconds) as f32;
         let chunk_end = chunk_start + chunk.len() as f32 / config.sample_rate as f32;
 
         debug!(
@@ -454,20 +452,14 @@ mod tests {
 
     #[test]
     fn test_merge_with_overlap() {
-        let chunks = vec![
-            "hello world foo".to_string(),
-            "foo bar baz".to_string(),
-        ];
+        let chunks = vec!["hello world foo".to_string(), "foo bar baz".to_string()];
         let merged = merge_chunks(&chunks);
         assert_eq!(merged, "hello world foo bar baz");
     }
 
     #[test]
     fn test_merge_multi_word_overlap() {
-        let chunks = vec![
-            "one two three four".to_string(),
-            "three four five six".to_string(),
-        ];
+        let chunks = vec!["one two three four".to_string(), "three four five six".to_string()];
         let merged = merge_chunks(&chunks);
         assert_eq!(merged, "one two three four five six");
     }
@@ -634,10 +626,7 @@ mod tests {
     #[test]
     fn test_merge_case_insensitive_overlap() {
         // Overlap detection should be case-insensitive
-        let chunks = vec![
-            "Hello World".to_string(),
-            "world foo".to_string(),
-        ];
+        let chunks = vec!["Hello World".to_string(), "world foo".to_string()];
         let merged = merge_chunks(&chunks);
         // Should detect "World" and "world" as overlap
         assert_eq!(merged, "Hello World foo");
@@ -689,15 +678,11 @@ mod tests {
         let chunks = vec![
             TimestampedChunkResult {
                 text: "Hello".to_string(),
-                words: vec![
-                    TimedToken { text: "Hello".to_string(), start: 0.0, end: 0.5 },
-                ],
+                words: vec![TimedToken { text: "Hello".to_string(), start: 0.0, end: 0.5 }],
             },
             TimestampedChunkResult {
                 text: "world".to_string(),
-                words: vec![
-                    TimedToken { text: "world".to_string(), start: 2.0, end: 2.5 },
-                ],
+                words: vec![TimedToken { text: "world".to_string(), start: 2.0, end: 2.5 }],
             },
         ];
         let merged = merge_chunks_timestamped(&chunks, 0.0);
@@ -710,7 +695,7 @@ mod tests {
     fn test_find_silence_boundary_prefers_quiet() {
         // Create audio with a loud section and a quiet gap
         let mut samples = vec![10000i16; 16000]; // 1s of loud audio
-        // Insert 25ms of silence at position 8000
+                                                 // Insert 25ms of silence at position 8000
         for s in &mut samples[8000..8400] {
             *s = 0;
         }

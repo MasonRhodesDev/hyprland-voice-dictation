@@ -25,11 +25,7 @@ struct TrieNode {
 
 impl TrieNode {
     fn new() -> Self {
-        Self {
-            children: HashMap::new(),
-            is_terminal: None,
-            partial_boost: 0.0,
-        }
+        Self { children: HashMap::new(), is_terminal: None, partial_boost: 0.0 }
     }
 }
 
@@ -50,10 +46,7 @@ pub struct HotwordTrie {
 impl HotwordTrie {
     /// Create an empty trie (no boosting)
     pub fn empty() -> Self {
-        Self {
-            root: TrieNode::new(),
-            num_hotwords: 0,
-        }
+        Self { root: TrieNode::new(), num_hotwords: 0 }
     }
 
     /// Build a trie from hotword entries and their token ID sequences.
@@ -114,11 +107,7 @@ impl HotwordTrie {
                     node = child;
                 }
                 None => {
-                    return TrieMatch {
-                        boost: 0.0,
-                        is_prefix: false,
-                        is_complete: false,
-                    };
+                    return TrieMatch { boost: 0.0, is_prefix: false, is_complete: false };
                 }
             }
         }
@@ -191,22 +180,13 @@ pub fn parse_hotwords_file(path: &Path) -> Result<Vec<HotwordEntry>> {
         // Try to parse "word score" or just "word"
         let entry = if let Some((text, score_str)) = line.rsplit_once(' ') {
             if let Ok(score) = score_str.parse::<f32>() {
-                HotwordEntry {
-                    text: text.to_string(),
-                    boost_score: score,
-                }
+                HotwordEntry { text: text.to_string(), boost_score: score }
             } else {
                 // Not a valid float, treat entire line as the word
-                HotwordEntry {
-                    text: line.to_string(),
-                    boost_score: DEFAULT_BOOST_SCORE,
-                }
+                HotwordEntry { text: line.to_string(), boost_score: DEFAULT_BOOST_SCORE }
             }
         } else {
-            HotwordEntry {
-                text: line.to_string(),
-                boost_score: DEFAULT_BOOST_SCORE,
-            }
+            HotwordEntry { text: line.to_string(), boost_score: DEFAULT_BOOST_SCORE }
         };
 
         debug!(
@@ -218,11 +198,7 @@ pub fn parse_hotwords_file(path: &Path) -> Result<Vec<HotwordEntry>> {
         entries.push(entry);
     }
 
-    info!(
-        "Loaded {} hotwords from {}",
-        entries.len(),
-        path.display()
-    );
+    info!("Loaded {} hotwords from {}", entries.len(), path.display());
     Ok(entries)
 }
 
@@ -311,12 +287,8 @@ mod tests {
 
     #[test]
     fn test_boost_for_token() {
-        let entries = vec![
-            (
-                HotwordEntry { text: "test".to_string(), boost_score: 6.0 },
-                vec![10, 20, 30],
-            ),
-        ];
+        let entries =
+            vec![(HotwordEntry { text: "test".to_string(), boost_score: 6.0 }, vec![10, 20, 30])];
         let trie = HotwordTrie::from_token_sequences(&entries);
 
         // Boost for extending empty prefix with first token

@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "voice-dictation"
 version.workspace = true
 edition = "2021"
@@ -39,7 +40,7 @@ version = "0.3.1"
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
-layer-shika-adapters = { path = "vendor/layer-shika-adapters" }
+layer-shika-adapters = { path = "third_party/layer-shika-adapters" }
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

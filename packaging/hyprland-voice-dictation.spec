@@ -33,6 +33,7 @@ BuildRequires:  cargo
 BuildRequires:  cargo-rpm-macros >= 24
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  pkg-config
+BuildRequires:  clang-devel
 BuildRequires:  pipewire-devel
 BuildRequires:  alsa-lib-devel
 BuildRequires:  fontconfig-devel
@@ -55,7 +56,7 @@ package; download it after install with `voice-dictation download-model`.
 %prep
 # -a1 unpacks the vendor tarball (vendor/ + vendor-git-sources.toml at its
 # root) into the source dir; vendor/ merges with the in-tree
-# vendor/layer-shika-adapters path patch.
+# third_party/layer-shika-adapters path patch.
 %autosetup -p1 -a1
 %cargo_prep -v vendor
 # %%cargo_prep only redirects crates.io to the vendored sources. This

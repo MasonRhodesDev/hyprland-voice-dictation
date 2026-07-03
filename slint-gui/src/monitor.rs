@@ -26,17 +26,12 @@ static RESTART_NEEDED: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLoc
 
 /// Check if a compositor event requires a GUI restart
 pub fn is_restart_needed() -> bool {
-    RESTART_NEEDED
-        .get()
-        .map(|f| f.load(Ordering::SeqCst))
-        .unwrap_or(false)
+    RESTART_NEEDED.get().map(|f| f.load(Ordering::SeqCst)).unwrap_or(false)
 }
 
 /// Get the currently active monitor name
 pub fn get_active_monitor() -> Option<String> {
-    ACTIVE_MONITOR
-        .get()
-        .and_then(|m| m.read().ok().map(|s| s.clone()))
+    ACTIVE_MONITOR.get().and_then(|m| m.read().ok().map(|s| s.clone()))
 }
 
 /// Get the active monitor synchronously via Hyprland IPC
@@ -44,12 +39,9 @@ pub fn get_active_monitor_sync() -> Option<String> {
     use hyprland::data::Monitors;
     use hyprland::prelude::*;
 
-    Monitors::get().ok().and_then(|monitors| {
-        monitors
-            .iter()
-            .find(|m| m.focused)
-            .map(|m| m.name.clone())
-    })
+    Monitors::get()
+        .ok()
+        .and_then(|monitors| monitors.iter().find(|m| m.focused).map(|m| m.name.clone()))
 }
 
 /// Refresh Hyprland environment variables and verify socket accessibility
@@ -96,9 +88,7 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::
     // Initialize global state
     let initial = get_active_monitor_sync();
     info!("Initial active monitor from Hyprland IPC: {:?}", initial);
-    let monitor = Arc::new(RwLock::new(
-        initial.unwrap_or_default(),
-    ));
+    let monitor = Arc::new(RwLock::new(initial.unwrap_or_default()));
     let _ = ACTIVE_MONITOR.set(monitor.clone());
 
     let restart_flag = Arc::new(AtomicBool::new(false));
@@ -136,7 +126,10 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::
             listener.add_active_monitor_changed_handler(move |data: MonitorEventData| {
                 if let Ok(mut m) = monitor_clone.write() {
                     let old_monitor = m.clone();
-                    debug!("Active monitor changed from '{}' to '{}'", old_monitor, data.monitor_name);
+                    debug!(
+                        "Active monitor changed from '{}' to '{}'",
+                        old_monitor, data.monitor_name
+                    );
                     *m = data.monitor_name.clone();
 
                     // Trigger GUI reload if flag provided and monitor actually changed
@@ -152,13 +145,19 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::
             // Compositor events that require surface recreation
             let restart_on_add = restart_flag.clone();
             listener.add_monitor_added_handler(move |data| {
-                error!("Monitor added: '{}' — surfaces need recreation, requesting restart", data.name);
+                error!(
+                    "Monitor added: '{}' — surfaces need recreation, requesting restart",
+                    data.name
+                );
                 restart_on_add.store(true, Ordering::SeqCst);
             });
 
             let restart_on_remove = restart_flag.clone();
             listener.add_monitor_removed_handler(move |name| {
-                error!("Monitor removed: '{}' — surfaces need recreation, requesting restart", name);
+                error!(
+                    "Monitor removed: '{}' — surfaces need recreation, requesting restart",
+                    name
+                );
                 restart_on_remove.store(true, Ordering::SeqCst);
             });
 

@@ -1,12 +1,12 @@
 use clap::{Parser, Subcommand};
+use schema_tui::SchemaTUIBuilder;
+use serde_json::Value;
 use std::fs;
 use std::io::{self, Write as IoWrite};
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
-use serde_json::Value;
-use schema_tui::SchemaTUIBuilder;
 use zbus::Connection;
 
 mod utils;
@@ -70,7 +70,9 @@ enum Commands {
         #[arg(long)]
         recording: Option<String>,
     },
-    #[command(about = "Trigger a manual correction snapshot (compare current text field to last injection)")]
+    #[command(
+        about = "Trigger a manual correction snapshot (compare current text field to last injection)"
+    )]
     SnapshotCorrection,
     #[command(about = "Show correction learning statistics")]
     CorrectionStats,
@@ -117,29 +119,29 @@ fn set_state(state: &str) -> std::io::Result<()> {
 
 async fn call_dbus_method(method: &str) -> Result<(), Box<dyn std::error::Error>> {
     let connection = Connection::session().await?;
-    let proxy = zbus::Proxy::new(
-        &connection,
-        DBUS_SERVICE_NAME,
-        DBUS_OBJECT_PATH,
-        DBUS_INTERFACE_NAME,
-    ).await?;
+    let proxy =
+        zbus::Proxy::new(&connection, DBUS_SERVICE_NAME, DBUS_OBJECT_PATH, DBUS_INTERFACE_NAME)
+            .await?;
 
     proxy.call::<_, _, ()>(method, &()).await?;
     Ok(())
 }
 
 fn send_start_recording() -> Result<(), Box<dyn std::error::Error>> {
-    tokio::runtime::Runtime::new()?.block_on(call_dbus_method("StartRecording"))
+    tokio::runtime::Runtime::new()?
+        .block_on(call_dbus_method("StartRecording"))
         .map_err(dbus_error_with_hint)
 }
 
 fn send_stop_recording() -> Result<(), Box<dyn std::error::Error>> {
-    tokio::runtime::Runtime::new()?.block_on(call_dbus_method("StopRecording"))
+    tokio::runtime::Runtime::new()?
+        .block_on(call_dbus_method("StopRecording"))
         .map_err(dbus_error_with_hint)
 }
 
 fn send_confirm() -> Result<(), Box<dyn std::error::Error>> {
-    tokio::runtime::Runtime::new()?.block_on(call_dbus_method("Confirm"))
+    tokio::runtime::Runtime::new()?
+        .block_on(call_dbus_method("Confirm"))
         .map_err(dbus_error_with_hint)
 }
 
@@ -147,17 +149,15 @@ fn dbus_error_with_hint(e: Box<dyn std::error::Error>) -> Box<dyn std::error::Er
     format!(
         "Failed to communicate with daemon: {}\nTry: systemctl --user status voice-dictation",
         e
-    ).into()
+    )
+    .into()
 }
 
 async fn call_health_check() -> Result<(String, String, String), Box<dyn std::error::Error>> {
     let connection = Connection::session().await?;
-    let proxy = zbus::Proxy::new(
-        &connection,
-        DBUS_SERVICE_NAME,
-        DBUS_OBJECT_PATH,
-        DBUS_INTERFACE_NAME,
-    ).await?;
+    let proxy =
+        zbus::Proxy::new(&connection, DBUS_SERVICE_NAME, DBUS_OBJECT_PATH, DBUS_INTERFACE_NAME)
+            .await?;
 
     let result: (String, String, String) = proxy.call("HealthCheck", &()).await?;
     Ok(result)
@@ -176,7 +176,9 @@ fn is_daemon_running() -> bool {
                     DBUS_SERVICE_NAME,
                     DBUS_OBJECT_PATH,
                     DBUS_INTERFACE_NAME,
-                ).await {
+                )
+                .await
+                {
                     proxy.introspect().await.is_ok()
                 } else {
                     false
@@ -191,14 +193,13 @@ fn is_daemon_running() -> bool {
 }
 
 fn check_command_available(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    Command::new("which").arg(cmd).output().map(|output| output.status.success()).unwrap_or(false)
 }
 
-fn check_runtime_dependencies(require_wtype: bool, require_wayland: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn check_runtime_dependencies(
+    require_wtype: bool,
+    require_wayland: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut missing = Vec::new();
     let mut warnings = Vec::new();
 
@@ -356,7 +357,9 @@ fn validate_and_prompt_models(_config_path: &PathBuf) -> Result<(), Box<dyn std:
 
     // Check Parakeet model
     let parakeet_dir = models_dir.join("parakeet");
-    if !parakeet_dir.join("encoder-model.onnx").exists() || !parakeet_dir.join("decoder_joint-model.onnx").exists() {
+    if !parakeet_dir.join("encoder-model.onnx").exists()
+        || !parakeet_dir.join("decoder_joint-model.onnx").exists()
+    {
         eprintln!("Parakeet model not found at {:?}", parakeet_dir);
         eprintln!("The Parakeet model is required for speech recognition.");
         eprintln!("Please install the model files to: {}", parakeet_dir.display());
@@ -489,10 +492,8 @@ fn open_config() -> Result<(), Box<dyn std::error::Error>> {
     // Install/update schema from embedded version
     fs::write(&schema_path, CONFIG_SCHEMA)?;
 
-    let mut tui = SchemaTUIBuilder::new()
-        .schema_file(&schema_path)?
-        .config_file(&config_path)?
-        .build()?;
+    let mut tui =
+        SchemaTUIBuilder::new().schema_file(&schema_path)?.config_file(&config_path)?.build()?;
 
     tui.run()?;
 
@@ -529,7 +530,8 @@ fn debug_list() -> Result<(), Box<dyn std::error::Error>> {
 
     for entry in entries {
         let json_path = entry.path();
-        let wav_name = json_path.with_extension("wav")
+        let wav_name = json_path
+            .with_extension("wav")
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
@@ -540,15 +542,16 @@ fn debug_list() -> Result<(), Box<dyn std::error::Error>> {
                 let duration_ms = meta["duration_ms"].as_u64().unwrap_or(0);
                 let device = meta["active_device"].as_str().unwrap_or("?");
                 let device_short = if device.len() > 6 { &device[..6] } else { device };
-                let text = meta["final_text"].as_str()
+                let text = meta["final_text"]
+                    .as_str()
                     .or_else(|| meta["preview_text"].as_str())
                     .unwrap_or("(no text)");
-                let text_preview = if text.len() > 35 {
-                    format!("{}...", &text[..32])
-                } else {
-                    text.to_string()
-                };
-                println!("{:<35} {:>6}ms {:>6}  {}", wav_name, duration_ms, device_short, text_preview);
+                let text_preview =
+                    if text.len() > 35 { format!("{}...", &text[..32]) } else { text.to_string() };
+                println!(
+                    "{:<35} {:>6}ms {:>6}  {}",
+                    wav_name, duration_ms, device_short, text_preview
+                );
             } else {
                 println!("{:<35} (unreadable metadata)", wav_name);
             }
@@ -569,12 +572,24 @@ fn debug_play(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("File not found: {}", wav_path.display()).into());
     }
 
-    let player = if Command::new("which").arg("paplay").output().map(|o| o.status.success()).unwrap_or(false) {
+    let player = if Command::new("which")
+        .arg("paplay")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
         "paplay"
-    } else if Command::new("which").arg("aplay").output().map(|o| o.status.success()).unwrap_or(false) {
+    } else if Command::new("which")
+        .arg("aplay")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
         "aplay"
     } else {
-        return Err("No audio player found. Install pipewire-utils (paplay) or alsa-utils (aplay).".into());
+        return Err(
+            "No audio player found. Install pipewire-utils (paplay) or alsa-utils (aplay).".into(),
+        );
     };
 
     println!("Playing: {}", wav_path.display());
@@ -624,10 +639,7 @@ async fn get_daemon_pid() -> Option<u32> {
     )
     .await
     .ok()?;
-    proxy
-        .call("GetConnectionUnixProcessID", &(DBUS_SERVICE_NAME))
-        .await
-        .ok()
+    proxy.call("GetConnectionUnixProcessID", &(DBUS_SERVICE_NAME)).await.ok()
 }
 
 fn daemon_exe() -> Option<PathBuf> {
@@ -644,9 +656,8 @@ fn check_binary_consistency() {
     println!("  Version: {}", env!("CARGO_PKG_VERSION"));
 
     let self_exe = std::env::current_exe().ok();
-    let self_canonical = self_exe
-        .as_ref()
-        .map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()));
+    let self_canonical =
+        self_exe.as_ref().map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()));
 
     let bins = binaries_on_path("voice-dictation");
     if bins.len() > 1 {
@@ -730,13 +741,21 @@ fn diagnose() -> Result<(), Box<dyn std::error::Error>> {
     let rust_log_debug = std::env::var("RUST_LOG")
         .map(|v| v.contains("debug") || v.contains("trace"))
         .unwrap_or(false);
-    println!("\nDebug audio recording: {}", if debug_enabled || rust_log_debug { "enabled" } else { "disabled" });
+    println!(
+        "\nDebug audio recording: {}",
+        if debug_enabled || rust_log_debug { "enabled" } else { "disabled" }
+    );
     if !debug_enabled && !rust_log_debug {
         println!("  Enable with: VOICE_DICTATION_DEBUG_AUDIO=1 voice-dictation daemon");
     } else {
         println!("  Recordings saved to: {}", DEBUG_DIR);
-        let count = fs::read_dir(DEBUG_DIR).ok()
-            .map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().extension().map(|x| x == "wav").unwrap_or(false)).count())
+        let count = fs::read_dir(DEBUG_DIR)
+            .ok()
+            .map(|d| {
+                d.filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().map(|x| x == "wav").unwrap_or(false))
+                    .count()
+            })
             .unwrap_or(0);
         println!("  Current recordings: {} (use 'voice-dictation debug list' to view)", count);
     }
@@ -752,20 +771,16 @@ fn download_model() -> Result<(), Box<dyn std::error::Error>> {
 
     fs::create_dir_all(&model_dir)?;
 
-    const BASE_URL: &str = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
-    const FILES: &[&str] = &[
-        "encoder-model.onnx",
-        "encoder-model.onnx.data",
-        "decoder_joint-model.onnx",
-    ];
+    const BASE_URL: &str =
+        "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
+    const FILES: &[&str] =
+        &["encoder-model.onnx", "encoder-model.onnx.data", "decoder_joint-model.onnx"];
 
     println!("Model directory: {}", model_dir.display());
     println!("Source: {}", BASE_URL);
     println!();
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(None)
-        .build()?;
+    let client = reqwest::blocking::Client::builder().timeout(None).build()?;
 
     for filename in FILES {
         let dest = model_dir.join(filename);
@@ -773,7 +788,11 @@ fn download_model() -> Result<(), Box<dyn std::error::Error>> {
         if dest.exists() {
             let size = fs::metadata(&dest)?.len();
             if size > 0 {
-                println!("  {} — already exists ({:.1} MB), skipping", filename, size as f64 / 1_048_576.0);
+                println!(
+                    "  {} — already exists ({:.1} MB), skipping",
+                    filename,
+                    size as f64 / 1_048_576.0
+                );
                 continue;
             }
         }
@@ -785,7 +804,9 @@ fn download_model() -> Result<(), Box<dyn std::error::Error>> {
         let response = client.get(&url).send()?;
         if !response.status().is_success() {
             eprintln!("HTTP {}", response.status());
-            return Err(format!("Failed to download {}: HTTP {}", filename, response.status()).into());
+            return Err(
+                format!("Failed to download {}: HTTP {}", filename, response.status()).into()
+            );
         }
 
         let total = response.content_length();
@@ -870,7 +891,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             test_loop_ui::run(recording.as_deref())?;
         }
         Commands::SnapshotCorrection => {
-            tokio::runtime::Runtime::new()?.block_on(call_dbus_method("SnapshotCorrection"))
+            tokio::runtime::Runtime::new()?
+                .block_on(call_dbus_method("SnapshotCorrection"))
                 .map_err(dbus_error_with_hint)?;
             println!("Correction snapshot triggered");
         }
@@ -883,12 +905,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let data: Value = serde_json::from_str(&content)?;
                 if let Some(corrections) = data["corrections"].as_array() {
                     let total = corrections.len();
-                    let promoted = corrections.iter()
+                    let promoted = corrections
+                        .iter()
                         .filter(|c| c["promoted"].as_bool().unwrap_or(false))
                         .count();
-                    let total_obs: u64 = corrections.iter()
-                        .filter_map(|c| c["count"].as_u64())
-                        .sum();
+                    let total_obs: u64 =
+                        corrections.iter().filter_map(|c| c["count"].as_u64()).sum();
                     println!("Correction Learning Statistics:");
                     println!("  Unique corrections: {}", total);
                     println!("  Total observations: {}", total_obs);
@@ -899,14 +921,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Top corrections:");
                         let mut sorted: Vec<&Value> = corrections.iter().collect();
                         sorted.sort_by(|a, b| {
-                            b["count"].as_u64().unwrap_or(0)
-                                .cmp(&a["count"].as_u64().unwrap_or(0))
+                            b["count"].as_u64().unwrap_or(0).cmp(&a["count"].as_u64().unwrap_or(0))
                         });
                         for c in sorted.iter().take(10) {
                             let orig = c["original"].as_str().unwrap_or("?");
                             let corr = c["corrected"].as_str().unwrap_or("?");
                             let count = c["count"].as_u64().unwrap_or(0);
-                            let prom = if c["promoted"].as_bool().unwrap_or(false) { " [promoted]" } else { "" };
+                            let prom = if c["promoted"].as_bool().unwrap_or(false) {
+                                " [promoted]"
+                            } else {
+                                ""
+                            };
                             println!("  {:>3}x  '{}' → '{}'{}", count, orig, corr, prom);
                         }
                     }
@@ -914,7 +939,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("No corrections recorded yet.");
                 }
             } else {
-                println!("No corrections file found. Correction learning has not recorded any data yet.");
+                println!(
+                    "No corrections file found. Correction learning has not recorded any data yet."
+                );
                 println!("File location: {}", corrections_path.display());
             }
         }
@@ -936,7 +963,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("No corrections recorded yet.");
                             return Ok(());
                         }
-                        println!("{:<4} {:>5}  {:<20} {:<20} {}", "#", "Count", "Original", "Corrected", "Status");
+                        println!(
+                            "{:<4} {:>5}  {:<20} {:<20} {}",
+                            "#", "Count", "Original", "Corrected", "Status"
+                        );
                         println!("{}", "-".repeat(75));
                         for (i, c) in corrections.iter().enumerate() {
                             let orig = c["original"].as_str().unwrap_or("?");
@@ -947,7 +977,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 "pending"
                             };
-                            println!("{:<4} {:>5}  {:<20} {:<20} {}", i + 1, count, orig, corr, status);
+                            println!(
+                                "{:<4} {:>5}  {:<20} {:<20} {}",
+                                i + 1,
+                                count,
+                                orig,
+                                corr,
+                                status
+                            );
                         }
                         println!();
                         println!("File: {}", corrections_path.display());
@@ -998,9 +1035,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         fs::write(&corrections_path, serde_json::to_string_pretty(&data)?)?;
                     }
                     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-                    let status = Command::new(&editor)
-                        .arg(&corrections_path)
-                        .status()?;
+                    let status = Command::new(&editor).arg(&corrections_path).status()?;
                     if !status.success() {
                         eprintln!("{} exited with: {}", editor, status);
                     }

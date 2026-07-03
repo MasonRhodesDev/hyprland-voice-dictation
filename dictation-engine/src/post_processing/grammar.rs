@@ -29,19 +29,13 @@ impl GrammarProcessor {
     /// Create a new grammar processor with Harper's default configuration.
     pub fn new() -> Self {
         let dictionary = MutableDictionary::curated();
-        Self {
-            dictionary,
-            user_dict: None,
-        }
+        Self { dictionary, user_dict: None }
     }
 
     /// Create a new grammar processor with user dictionary integration.
     pub fn new_with_user_dictionary(user_dict: Arc<UserDictionary>) -> Self {
         let dictionary = MutableDictionary::curated();
-        Self {
-            dictionary,
-            user_dict: Some(user_dict),
-        }
+        Self { dictionary, user_dict: Some(user_dict) }
     }
 }
 

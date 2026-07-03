@@ -56,15 +56,16 @@ impl VoiceActivityDetector for DbThresholdVad {
 /// Silero VAD implementation using ONNX model
 pub mod silero {
     use super::*;
-    use ort::session::{Session, builder::GraphOptimizationLevel};
+    use ort::session::{builder::GraphOptimizationLevel, Session};
     use ort::value::Value;
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     use std::path::Path;
     use tracing::warn;
 
     /// Known SHA256 hash of silero_vad.onnx (v5.1 from master branch)
     /// This can be updated if the upstream model changes
-    const SILERO_VAD_SHA256: &str = "b73d9134cc9c86c5a0ac86082fbb74b10d926fe5d0b8a3dd0cee93aa3a2ef5f3";
+    const SILERO_VAD_SHA256: &str =
+        "b73d9134cc9c86c5a0ac86082fbb74b10d926fe5d0b8a3dd0cee93aa3a2ef5f3";
 
     /// Silero VAD detector using ONNX Runtime
     pub struct SileroVadDetector {
@@ -200,16 +201,10 @@ pub mod silero {
                 let chunk: Vec<f32> = self.buffer.drain(..self.min_samples).collect();
 
                 // Prepare input tensors as ort Values
-                let input_array = ndarray::Array2::from_shape_vec(
-                    (1, self.min_samples),
-                    chunk
-                )?;
+                let input_array = ndarray::Array2::from_shape_vec((1, self.min_samples), chunk)?;
                 let input_value = Value::from_array(input_array)?;
 
-                let state_array = ndarray::Array3::from_shape_vec(
-                    (2, 1, 64),
-                    self.state.clone()
-                )?;
+                let state_array = ndarray::Array3::from_shape_vec((2, 1, 64), self.state.clone())?;
                 let state_value = Value::from_array(state_array)?;
 
                 let sr_array = ndarray::Array1::from_vec(self.sr_tensor.clone());
@@ -276,12 +271,18 @@ pub fn create_vad(
                         return Box::new(detector);
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to create Silero VAD: {}, falling back to dB threshold", e);
+                        tracing::warn!(
+                            "Failed to create Silero VAD: {}, falling back to dB threshold",
+                            e
+                        );
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to download Silero model: {}, falling back to dB threshold", e);
+                tracing::warn!(
+                    "Failed to download Silero model: {}, falling back to dB threshold",
+                    e
+                );
             }
         }
     }

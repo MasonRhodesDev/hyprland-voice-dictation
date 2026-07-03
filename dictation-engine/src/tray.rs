@@ -87,58 +87,48 @@ impl Tray for DictationTray {
         // Find selected index
         let selected_idx = match &self.selected_device {
             None => 0,
-            Some(name) => device_names.iter()
-                .position(|d| d.as_deref() == Some(name))
-                .unwrap_or(0),
+            Some(name) => device_names.iter().position(|d| d.as_deref() == Some(name)).unwrap_or(0),
         };
 
-        let mut radio_options = vec![
-            RadioItem {
-                label: "Default".into(),
-                ..Default::default()
-            },
-        ];
+        let mut radio_options = vec![RadioItem { label: "Default".into(), ..Default::default() }];
         for dev in devices {
-            radio_options.push(RadioItem {
-                label: dev.description.clone(),
-                ..Default::default()
-            });
+            radio_options.push(RadioItem { label: dev.description.clone(), ..Default::default() });
         }
 
-        info!("Tray menu: {} cached devices, {} radio options, selected_idx={}",
-              devices.len(), radio_options.len(), selected_idx);
+        info!(
+            "Tray menu: {} cached devices, {} radio options, selected_idx={}",
+            devices.len(),
+            radio_options.len(),
+            selected_idx
+        );
 
         let device_submenu = SubMenu {
             label: "Input Device".into(),
-            submenu: vec![
-                RadioGroup {
-                    selected: selected_idx,
-                    select: Box::new(move |tray: &mut Self, index: usize| {
-                        let new_device = if index == 0 {
-                            None
-                        } else {
-                            tray.cached_devices.get(index - 1).map(|d| d.name.clone())
-                        };
-                        info!("Tray: Selected device {:?}", new_device.as_deref().unwrap_or("Default"));
-                        tray.selected_device = new_device.clone();
-                        if let Err(e) = tray.command_tx.try_send(DaemonCommand::SwitchDevice(new_device)) {
-                            warn!("Tray: failed to send SwitchDevice: {e}");
-                        }
-                    }),
-                    options: radio_options,
-                }
-                .into(),
-            ],
+            submenu: vec![RadioGroup {
+                selected: selected_idx,
+                select: Box::new(move |tray: &mut Self, index: usize| {
+                    let new_device = if index == 0 {
+                        None
+                    } else {
+                        tray.cached_devices.get(index - 1).map(|d| d.name.clone())
+                    };
+                    info!("Tray: Selected device {:?}", new_device.as_deref().unwrap_or("Default"));
+                    tray.selected_device = new_device.clone();
+                    if let Err(e) =
+                        tray.command_tx.try_send(DaemonCommand::SwitchDevice(new_device))
+                    {
+                        warn!("Tray: failed to send SwitchDevice: {e}");
+                    }
+                }),
+                options: radio_options,
+            }
+            .into()],
             ..Default::default()
         };
 
         vec![
             StandardItem {
-                label: if is_idle {
-                    "Start Recording".into()
-                } else {
-                    "Confirm".into()
-                },
+                label: if is_idle { "Start Recording".into() } else { "Confirm".into() },
                 enabled: !matches!(self.state, DaemonState::Processing),
                 activate: Box::new(move |tray: &mut Self| {
                     let cmd = if is_idle {
@@ -171,9 +161,7 @@ impl Tray for DictationTray {
                 label: "Open Test Loop".into(),
                 activate: Box::new(|_tray: &mut Self| {
                     if let Ok(exe) = std::env::current_exe() {
-                        let _ = std::process::Command::new(exe)
-                            .arg("test-loop")
-                            .spawn();
+                        let _ = std::process::Command::new(exe).arg("test-loop").spawn();
                     }
                 }),
                 ..Default::default()
@@ -335,9 +323,7 @@ async fn listen_theme_changes(handle: Handle<DictationTray>) -> anyhow::Result<(
         if let Ok(msg) = msg {
             if let Some(member) = msg.header().member() {
                 if member.as_str() == "Notify" {
-                    if let Ok((path, _, _)) =
-                        msg.body().deserialize::<(&str, Vec<&str>, &str)>()
-                    {
+                    if let Ok((path, _, _)) = msg.body().deserialize::<(&str, Vec<&str>, &str)>() {
                         if path.contains("desktop/interface") {
                             info!("Icon theme changed, debouncing before refresh");
                             // Debounce: wait for all gsettings keys to settle
@@ -346,15 +332,21 @@ async fn listen_theme_changes(handle: Handle<DictationTray>) -> anyhow::Result<(
                             while let Ok(Some(_)) = tokio::time::timeout(
                                 std::time::Duration::from_millis(50),
                                 stream.next(),
-                            ).await {}
+                            )
+                            .await
+                            {}
                             // Single invalidation cycle
-                            handle.update(|tray| {
-                                tray.icon_invalidated = true;
-                            }).await;
+                            handle
+                                .update(|tray| {
+                                    tray.icon_invalidated = true;
+                                })
+                                .await;
                             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                            handle.update(|tray| {
-                                tray.icon_invalidated = false;
-                            }).await;
+                            handle
+                                .update(|tray| {
+                                    tray.icon_invalidated = false;
+                                })
+                                .await;
                             info!("Tray icon refreshed");
                         }
                     }

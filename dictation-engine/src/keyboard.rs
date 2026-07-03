@@ -12,8 +12,7 @@ impl KeyboardInjector {
     }
 
     pub async fn type_text(&self, text: &str, word_delay_ms: u64) -> Result<()> {
-        self.type_text_with_progress(text, word_delay_ms, |_done, _total| {})
-            .await
+        self.type_text_with_progress(text, word_delay_ms, |_done, _total| {}).await
     }
 
     /// Like `type_text`, but calls `on_progress(done, total)` (word counts) as
@@ -35,16 +34,9 @@ impl KeyboardInjector {
             // Rate-limited mode: word-by-word with delays to avoid overwhelming
             // terminal UIs like Claude Code's React/Ink interface (React error #185)
             for (i, word) in words.iter().enumerate() {
-                let chunk = if i == 0 {
-                    (*word).to_string()
-                } else {
-                    format!(" {}", word)
-                };
+                let chunk = if i == 0 { (*word).to_string() } else { format!(" {}", word) };
 
-                let output = tokio::process::Command::new("wtype")
-                    .arg(&chunk)
-                    .output()
-                    .await?;
+                let output = tokio::process::Command::new("wtype").arg(&chunk).output().await?;
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -57,10 +49,7 @@ impl KeyboardInjector {
             }
         } else {
             // Fast mode: type all text at once
-            let output = tokio::process::Command::new("wtype")
-                .arg(text)
-                .output()
-                .await?;
+            let output = tokio::process::Command::new("wtype").arg(text).output().await?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);

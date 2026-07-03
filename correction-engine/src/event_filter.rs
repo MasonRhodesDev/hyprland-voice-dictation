@@ -105,7 +105,7 @@ mod tests {
         let config = make_config(60); // 60s window
 
         let events = vec![
-            make_event(base, Duration::from_secs(5), 3, 1, "firefox"),  // 5s — in window
+            make_event(base, Duration::from_secs(5), 3, 1, "firefox"), // 5s — in window
             make_event(base, Duration::from_secs(30), 3, 1, "firefox"), // 30s — in window
             make_event(base, Duration::from_secs(90), 3, 1, "firefox"), // 90s — out of window
         ];
@@ -120,7 +120,7 @@ mod tests {
         let config = make_config(300);
 
         let events = vec![
-            make_event(base, Duration::from_secs(1), 5, 1, "firefox"),  // pos 5 — in range
+            make_event(base, Duration::from_secs(1), 5, 1, "firefox"), // pos 5 — in range
             make_event(base, Duration::from_secs(2), 15, 1, "firefox"), // pos 15 — out of range
             make_event(base, Duration::from_secs(3), 25, 1, "firefox"), // pos 25 — out of range
         ];
@@ -136,9 +136,9 @@ mod tests {
         let config = make_config(300);
 
         let events = vec![
-            make_event(base, Duration::from_secs(1), 3, 1, "firefox"),       // same app
-            make_event(base, Duration::from_secs(2), 3, 1, "code"),          // different app
-            make_event(base, Duration::from_secs(3), 3, 1, "Firefox-esr"),   // contains match
+            make_event(base, Duration::from_secs(1), 3, 1, "firefox"), // same app
+            make_event(base, Duration::from_secs(2), 3, 1, "code"),    // different app
+            make_event(base, Duration::from_secs(3), 3, 1, "Firefox-esr"), // contains match
         ];
 
         let filtered = filter_events(&events, &context, &config);

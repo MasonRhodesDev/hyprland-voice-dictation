@@ -21,9 +21,7 @@ pub struct IdleInhibitor {
 pub async fn acquire(reason: &str) -> Result<IdleInhibitor> {
     let conn = Connection::system().await?;
     let proxy = LoginManagerProxy::new(&conn).await?;
-    let fd = proxy
-        .inhibit("idle:sleep", "voice-dictation", reason, "block")
-        .await?;
+    let fd = proxy.inhibit("idle:sleep", "voice-dictation", reason, "block").await?;
     info!("Idle/sleep inhibit acquired via logind");
     Ok(IdleInhibitor { _fd: fd })
 }

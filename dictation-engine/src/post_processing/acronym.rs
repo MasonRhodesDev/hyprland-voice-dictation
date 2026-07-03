@@ -130,11 +130,8 @@ impl AcronymProcessor {
             }
 
             // Build the acronym
-            let acronym: String = candidate_words
-                .iter()
-                .map(|w| w.to_uppercase())
-                .collect::<Vec<_>>()
-                .join("");
+            let acronym: String =
+                candidate_words.iter().map(|w| w.to_uppercase()).collect::<Vec<_>>().join("");
 
             // Check if it's in our known acronyms dictionary
             if self.known_acronyms.contains(&acronym) {

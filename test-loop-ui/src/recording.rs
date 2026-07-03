@@ -36,12 +36,7 @@ pub fn list_recordings() -> Result<Vec<Recording>> {
 
     let mut entries: Vec<_> = fs::read_dir(debug_dir)?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext == "json")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|ext| ext == "json").unwrap_or(false))
         .collect();
 
     entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
@@ -57,11 +52,7 @@ pub fn list_recordings() -> Result<Vec<Recording>> {
             .with_context(|| format!("reading {}", json_path.display()))?;
         let metadata: AudioMetadata = serde_json::from_str(&content)
             .with_context(|| format!("parsing {}", json_path.display()))?;
-        recordings.push(Recording {
-            wav_path,
-            json_path,
-            metadata,
-        });
+        recordings.push(Recording { wav_path, json_path, metadata });
     }
 
     Ok(recordings)
@@ -78,9 +69,5 @@ pub fn recording_by_path(wav_path: &Path) -> Result<Recording> {
         .with_context(|| format!("reading {}", json_path.display()))?;
     let metadata: AudioMetadata = serde_json::from_str(&content)
         .with_context(|| format!("parsing {}", json_path.display()))?;
-    Ok(Recording {
-        wav_path: wav_path.to_owned(),
-        json_path,
-        metadata,
-    })
+    Ok(Recording { wav_path: wav_path.to_owned(), json_path, metadata })
 }

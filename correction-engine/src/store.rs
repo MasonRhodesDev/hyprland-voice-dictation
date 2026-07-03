@@ -22,10 +22,7 @@ struct StoreFile {
 
 impl Default for StoreFile {
     fn default() -> Self {
-        Self {
-            version: 1,
-            corrections: Vec::new(),
-        }
+        Self { version: 1, corrections: Vec::new() }
     }
 }
 
@@ -41,10 +38,7 @@ impl CorrectionStore {
         let records = if config.store_path.exists() {
             let content = fs::read_to_string(&config.store_path)?;
             let store_file: StoreFile = serde_json::from_str(&content).unwrap_or_else(|e| {
-                warn!(
-                    "Failed to parse corrections file: {} — starting fresh",
-                    e
-                );
+                warn!("Failed to parse corrections file: {} — starting fresh", e);
                 StoreFile::default()
             });
             store_file.corrections
@@ -53,26 +47,17 @@ impl CorrectionStore {
         };
 
         debug!("Loaded {} correction records", records.len());
-        Ok(Self {
-            records,
-            config: config.clone(),
-        })
+        Ok(Self { records, config: config.clone() })
     }
 
     /// Create an empty store with the given config (for testing).
     pub fn empty(config: MonitorConfig) -> Self {
-        Self {
-            records: Vec::new(),
-            config,
-        }
+        Self { records: Vec::new(), config }
     }
 
     /// Save the correction store to disk.
     pub fn save(&self) -> Result<()> {
-        let store_file = StoreFile {
-            version: 1,
-            corrections: self.records.clone(),
-        };
+        let store_file = StoreFile { version: 1, corrections: self.records.clone() };
 
         // Ensure parent directory exists
         if let Some(parent) = self.config.store_path.parent() {
@@ -113,10 +98,7 @@ impl CorrectionStore {
                 && !self.records[idx].promoted
             {
                 self.records[idx].promoted = true;
-                promote_to_substitution_file(
-                    &self.config.substitutions_path,
-                    &self.records[idx],
-                )?;
+                promote_to_substitution_file(&self.config.substitutions_path, &self.records[idx])?;
                 self.save()?;
                 return Ok(true);
             }
@@ -126,10 +108,7 @@ impl CorrectionStore {
         }
 
         // New correction
-        info!(
-            "New correction recorded: '{}' → '{}'",
-            pair.original, pair.corrected
-        );
+        info!("New correction recorded: '{}' → '{}'", pair.original, pair.corrected);
 
         let mut record = CorrectionRecord {
             original: pair.original,
@@ -157,10 +136,7 @@ impl CorrectionStore {
     /// Look up all corrections matching a given original phrase.
     pub fn lookup(&self, original: &str) -> Vec<&CorrectionRecord> {
         let orig_lower = original.to_lowercase();
-        self.records
-            .iter()
-            .filter(|r| r.original.to_lowercase() == orig_lower)
-            .collect()
+        self.records.iter().filter(|r| r.original.to_lowercase() == orig_lower).collect()
     }
 
     /// Get aggregate statistics about the correction store.
@@ -168,20 +144,10 @@ impl CorrectionStore {
         let total_corrections = self.records.len();
         let total_observations: u32 = self.records.iter().map(|r| r.count).sum();
         let promoted_count = self.records.iter().filter(|r| r.promoted).count();
-        let pending_count = self
-            .records
-            .iter()
-            .filter(|r| !r.promoted && r.count > 0)
-            .count();
+        let pending_count = self.records.iter().filter(|r| !r.promoted && r.count > 0).count();
 
-        CorrectionStats {
-            total_corrections,
-            total_observations,
-            promoted_count,
-            pending_count,
-        }
+        CorrectionStats { total_corrections, total_observations, promoted_count, pending_count }
     }
-
 }
 
 /// Append a correction as a substitution rule to substitutions.txt.
@@ -200,35 +166,21 @@ fn promote_to_substitution_file(
     // Check if this substitution already exists in the file
     if substitutions_path.exists() {
         let content = fs::read_to_string(substitutions_path)?;
-        let needle = format!(
-            "{} -> {}",
-            record.original.to_lowercase(),
-            record.corrected
-        );
+        let needle = format!("{} -> {}", record.original.to_lowercase(), record.corrected);
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.to_lowercase().starts_with(&needle.to_lowercase()) {
-                debug!(
-                    "Substitution already exists: {} -> {}",
-                    record.original, record.corrected
-                );
+                debug!("Substitution already exists: {} -> {}", record.original, record.corrected);
                 return Ok(());
             }
         }
     }
 
     // Append the new substitution
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(substitutions_path)?;
+    let mut file = fs::OpenOptions::new().create(true).append(true).open(substitutions_path)?;
 
     writeln!(file)?; // Ensure we start on a new line
-    writeln!(
-        file,
-        "# Auto-promoted correction (seen {} times)",
-        record.count
-    )?;
+    writeln!(file, "# Auto-promoted correction (seen {} times)", record.count)?;
     writeln!(file, "{} -> {}", record.original, record.corrected)?;
 
     info!(
@@ -302,9 +254,7 @@ mod tests {
         let config = make_config_in(dir.path());
         let mut store = CorrectionStore::empty(config);
 
-        let promoted = store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
+        let promoted = store.record_correction(make_pair("cash", "cache")).unwrap();
         assert!(!promoted);
 
         let records = store.lookup("cash");
@@ -319,15 +269,9 @@ mod tests {
         let config = make_config_in(dir.path());
         let mut store = CorrectionStore::empty(config);
 
-        store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
-        store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
-        store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
+        store.record_correction(make_pair("cash", "cache")).unwrap();
+        store.record_correction(make_pair("cash", "cache")).unwrap();
+        store.record_correction(make_pair("cash", "cache")).unwrap();
 
         let records = store.lookup("cash");
         assert_eq!(records.len(), 1);
@@ -341,17 +285,11 @@ mod tests {
         let mut store = CorrectionStore::empty(config.clone());
 
         // Record 2 times — no promotion yet
-        assert!(!store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap());
-        assert!(!store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap());
+        assert!(!store.record_correction(make_pair("cash", "cache")).unwrap());
+        assert!(!store.record_correction(make_pair("cash", "cache")).unwrap());
 
         // Third time — should trigger promotion
-        let promoted = store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
+        let promoted = store.record_correction(make_pair("cash", "cache")).unwrap();
         assert!(promoted);
 
         // Verify substitutions.txt was written
@@ -368,9 +306,7 @@ mod tests {
         config.auto_promote_threshold = 1; // Promote immediately
         let mut store = CorrectionStore::empty(config.clone());
 
-        store
-            .record_correction(make_pair("shay moy", "chezmoi"))
-            .unwrap();
+        store.record_correction(make_pair("shay moy", "chezmoi")).unwrap();
 
         // Read raw file and verify format
         let content = fs::read_to_string(&config.substitutions_path).unwrap();
@@ -395,12 +331,8 @@ mod tests {
         // Create store, add corrections, save
         {
             let mut store = CorrectionStore::empty(config.clone());
-            store
-                .record_correction(make_pair("cash", "cache"))
-                .unwrap();
-            store
-                .record_correction(make_pair("hear", "here"))
-                .unwrap();
+            store.record_correction(make_pair("cash", "cache")).unwrap();
+            store.record_correction(make_pair("hear", "here")).unwrap();
         }
 
         // Load from disk and verify
@@ -422,15 +354,9 @@ mod tests {
         let config = make_config_in(dir.path());
         let mut store = CorrectionStore::empty(config);
 
-        store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
-        store
-            .record_correction(make_pair("cash", "stash"))
-            .unwrap();
-        store
-            .record_correction(make_pair("hear", "here"))
-            .unwrap();
+        store.record_correction(make_pair("cash", "cache")).unwrap();
+        store.record_correction(make_pair("cash", "stash")).unwrap();
+        store.record_correction(make_pair("hear", "here")).unwrap();
 
         let cash = store.lookup("cash");
         assert_eq!(cash.len(), 2);
@@ -448,18 +374,10 @@ mod tests {
         let config = make_config_in(dir.path());
         let mut store = CorrectionStore::empty(config);
 
-        store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
-        store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
-        store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
-        store
-            .record_correction(make_pair("hear", "here"))
-            .unwrap();
+        store.record_correction(make_pair("cash", "cache")).unwrap();
+        store.record_correction(make_pair("cash", "cache")).unwrap();
+        store.record_correction(make_pair("cash", "cache")).unwrap();
+        store.record_correction(make_pair("hear", "here")).unwrap();
 
         let stats = store.stats();
         assert_eq!(stats.total_corrections, 2); // "cash→cache" and "hear→here"
@@ -475,25 +393,15 @@ mod tests {
         let mut store = CorrectionStore::empty(config.clone());
 
         // Record 3 times to trigger promotion
-        store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
-        store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
-        let promoted = store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
+        store.record_correction(make_pair("cash", "cache")).unwrap();
+        store.record_correction(make_pair("cash", "cache")).unwrap();
+        let promoted = store.record_correction(make_pair("cash", "cache")).unwrap();
         assert!(promoted);
 
         // Record 2 more times — should NOT promote again
-        let promoted = store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
+        let promoted = store.record_correction(make_pair("cash", "cache")).unwrap();
         assert!(!promoted);
-        let promoted = store
-            .record_correction(make_pair("cash", "cache"))
-            .unwrap();
+        let promoted = store.record_correction(make_pair("cash", "cache")).unwrap();
         assert!(!promoted);
 
         // substitutions.txt should have exactly one entry
@@ -507,12 +415,8 @@ mod tests {
         let config = make_config_in(dir.path());
         let mut store = CorrectionStore::empty(config);
 
-        store
-            .record_correction(make_pair("Cash", "cache"))
-            .unwrap();
-        store
-            .record_correction(make_pair("cash", "Cache"))
-            .unwrap();
+        store.record_correction(make_pair("Cash", "cache")).unwrap();
+        store.record_correction(make_pair("cash", "Cache")).unwrap();
 
         // Should match as same correction (case-insensitive)
         let records = store.lookup("cash");

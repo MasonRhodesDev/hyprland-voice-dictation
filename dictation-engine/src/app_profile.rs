@@ -15,11 +15,7 @@ impl AppProfile {
             AppCategory::Terminal => (50, SanitizationRules::for_category(category)),
             _ => (0, SanitizationRules::for_category(category)),
         };
-        Self {
-            category,
-            word_delay_ms,
-            sanitization,
-        }
+        Self { category, word_delay_ms, sanitization }
     }
 
     pub fn from_window_class(class: &str) -> Self {

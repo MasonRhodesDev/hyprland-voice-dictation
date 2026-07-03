@@ -213,9 +213,8 @@ pub fn list_devices(backend_type: BackendType) -> Result<Vec<DeviceInfo>> {
 
 /// Enumerate devices via `pactl --format=json list sources`.
 fn list_devices_pactl() -> Result<Vec<DeviceInfo>> {
-    let output = std::process::Command::new("pactl")
-        .args(["--format=json", "list", "sources"])
-        .output()?;
+    let output =
+        std::process::Command::new("pactl").args(["--format=json", "list", "sources"]).output()?;
 
     if !output.status.success() {
         anyhow::bail!("pactl exited with status {}", output.status);
@@ -224,28 +223,23 @@ fn list_devices_pactl() -> Result<Vec<DeviceInfo>> {
     let sources: Vec<PactlSource> = serde_json::from_slice(&output.stdout)?;
 
     // Find the default source name
-    let default_source = std::process::Command::new("pactl")
-        .args(["get-default-source"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
-            } else {
-                None
-            }
-        });
+    let default_source =
+        std::process::Command::new("pactl").args(["get-default-source"]).output().ok().and_then(
+            |o| {
+                if o.status.success() {
+                    String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
+                } else {
+                    None
+                }
+            },
+        );
 
     let devices: Vec<DeviceInfo> = sources
         .into_iter()
         .filter(|s| s.monitor_source.is_empty())
         .map(|s| {
             let is_default = default_source.as_deref() == Some(&s.name);
-            DeviceInfo {
-                name: s.name,
-                description: s.description,
-                is_default,
-            }
+            DeviceInfo { name: s.name, description: s.description, is_default }
         })
         .collect();
 

@@ -13,10 +13,7 @@ pub enum GuiControl {
     SetListening,
 
     /// Update transcription text during listening
-    UpdateTranscription {
-        text: String,
-        is_final: bool,
-    },
+    UpdateTranscription { text: String, is_final: bool },
 
     /// Update spectrum visualization data
     /// Frequency band values (typically 8-10 bands, 0.0-1.0 range)
@@ -37,10 +34,7 @@ pub enum GuiControl {
     /// Transition to / update typing state as the result is injected.
     /// `done`/`total` are word counts so the GUI can show real progress and
     /// observers can see the work is alive and advancing (not wedged).
-    SetTyping {
-        done: usize,
-        total: usize,
-    },
+    SetTyping { done: usize, total: usize },
 
     /// Transition to closing state and begin shutdown animation
     SetClosing,
@@ -56,10 +50,7 @@ pub enum GuiStatus {
     Ready,
 
     /// State transition animation completed
-    TransitionComplete {
-        from: GuiState,
-        to: GuiState,
-    },
+    TransitionComplete { from: GuiState, to: GuiState },
 
     /// GUI encountered an error
     Error(String),

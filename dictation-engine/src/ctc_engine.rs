@@ -97,7 +97,8 @@ impl CtcEngine {
                 "Beam search (width={}) with {} hotwords requested but not yet active. \
                  Using greedy decoding. The beam search algorithm is implemented and tested \
                  but requires feature extraction support from parakeet-rs.",
-                beam_width, hotword_trie.len()
+                beam_width,
+                hotword_trie.len()
             );
         }
 
@@ -127,7 +128,9 @@ impl CtcEngine {
         }
 
         let f32_samples = Self::samples_to_f32(samples);
-        let mut parakeet = self.parakeet.lock()
+        let mut parakeet = self
+            .parakeet
+            .lock()
             .map_err(|e| anyhow::anyhow!("Parakeet CTC model lock poisoned: {}", e))?;
         let result = parakeet.transcribe_samples(f32_samples, self.sample_rate, 1, None)?;
         Ok(result.text)
@@ -140,14 +143,18 @@ impl CtcEngine {
         }
 
         let f32_samples = Self::samples_to_f32(samples);
-        let mut parakeet = self.parakeet.lock()
+        let mut parakeet = self
+            .parakeet
+            .lock()
             .map_err(|e| anyhow::anyhow!("Parakeet CTC model lock poisoned: {}", e))?;
-        let result = parakeet.transcribe_samples(f32_samples, self.sample_rate, 1, Some(TimestampMode::Words))?;
+        let result = parakeet.transcribe_samples(
+            f32_samples,
+            self.sample_rate,
+            1,
+            Some(TimestampMode::Words),
+        )?;
 
-        Ok(TimestampedChunkResult {
-            text: result.text,
-            words: result.tokens,
-        })
+        Ok(TimestampedChunkResult { text: result.text, words: result.tokens })
     }
 
     /// Run transcription on accumulated audio, chunking if necessary
@@ -158,11 +165,15 @@ impl CtcEngine {
         }
 
         let max_sample = samples.iter().map(|s| s.abs()).max().unwrap_or(0);
-        let rms = (samples.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / samples.len() as f64).sqrt();
+        let rms = (samples.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / samples.len() as f64)
+            .sqrt();
         let duration_secs = samples.len() as f32 / self.sample_rate as f32;
         debug!(
             "transcribe_buffer (CTC): {} samples, max={}, rms={:.1}, duration={:.2}s",
-            samples.len(), max_sample, rms, duration_secs
+            samples.len(),
+            max_sample,
+            rms,
+            duration_secs
         );
 
         let normalized = normalize_audio(samples, 3000.0, 20.0);
@@ -182,7 +193,9 @@ impl CtcEngine {
 
 impl TranscriptionEngine for CtcEngine {
     fn process_audio(&self, samples: &[i16]) -> Result<()> {
-        let mut buffer = self.audio_buffer.lock()
+        let mut buffer = self
+            .audio_buffer
+            .lock()
             .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
         buffer.extend_from_slice(samples);
         Ok(())
@@ -190,7 +203,9 @@ impl TranscriptionEngine for CtcEngine {
 
     fn get_current_text(&self) -> Result<String> {
         // Lock ordering: audio_buffer -> last_transcribed_len -> current_text
-        let buffer = self.audio_buffer.lock()
+        let buffer = self
+            .audio_buffer
+            .lock()
             .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
 
         if buffer.is_empty() || buffer.len() < MIN_AUDIO_SAMPLES {
@@ -199,15 +214,17 @@ impl TranscriptionEngine for CtcEngine {
 
         let current_len = buffer.len();
         let last_len_val = {
-            let last_len = self.last_transcribed_len.lock()
+            let last_len = self
+                .last_transcribed_len
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
             *last_len
         };
 
         // Only re-transcribe when enough new audio accumulated
         if current_len <= last_len_val + RETRANSCRIBE_THRESHOLD {
-            let cached = self.current_text.lock()
-                .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+            let cached =
+                self.current_text.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
             return Ok(cached.clone());
         }
 
@@ -215,18 +232,23 @@ impl TranscriptionEngine for CtcEngine {
         let full_audio = buffer.clone();
         drop(buffer);
 
-        debug!("CTC preview transcription: {} samples ({:.2}s)",
-               full_audio.len(), full_audio.len() as f32 / 16000.0);
+        debug!(
+            "CTC preview transcription: {} samples ({:.2}s)",
+            full_audio.len(),
+            full_audio.len() as f32 / 16000.0
+        );
 
         let full_text = self.transcribe_buffer(&full_audio)?;
 
         {
-            let mut cached = self.current_text.lock()
-                .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+            let mut cached =
+                self.current_text.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
             *cached = full_text.clone();
         }
         {
-            let mut last_len = self.last_transcribed_len.lock()
+            let mut last_len = self
+                .last_transcribed_len
+                .lock()
                 .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
             *last_len = current_len;
         }
@@ -235,7 +257,9 @@ impl TranscriptionEngine for CtcEngine {
     }
 
     fn get_final_result(&self) -> Result<String> {
-        let buffer = self.audio_buffer.lock()
+        let buffer = self
+            .audio_buffer
+            .lock()
             .map_err(|e| anyhow::anyhow!("Audio buffer lock poisoned: {}", e))?;
         let samples = buffer.clone();
         drop(buffer);
@@ -243,15 +267,11 @@ impl TranscriptionEngine for CtcEngine {
     }
 
     fn get_cached_text(&self) -> String {
-        self.current_text.lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+        self.current_text.lock().map(|guard| guard.clone()).unwrap_or_default()
     }
 
     fn get_audio_buffer(&self) -> Vec<i16> {
-        self.audio_buffer.lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+        self.audio_buffer.lock().map(|guard| guard.clone()).unwrap_or_default()
     }
 
     fn reset(&self) {
@@ -359,7 +379,8 @@ pub fn ctc_beam_search_decode(
             // --- Blank extension ---
             {
                 let blank_log_prob = frame_log_probs[blank_id as usize];
-                let new_blank_score = log_add(hyp.blank_score, hyp.non_blank_score) + blank_log_prob;
+                let new_blank_score =
+                    log_add(hyp.blank_score, hyp.non_blank_score) + blank_log_prob;
 
                 let entry = next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
                     tokens: hyp.tokens.clone(),
@@ -372,11 +393,8 @@ pub fn ctc_beam_search_decode(
 
             // --- Non-blank extensions ---
             // Consider top-K tokens per frame for efficiency
-            let top_tokens = top_k_tokens(
-                frame_log_probs.as_slice().unwrap(),
-                beam_width * 3,
-                blank_id,
-            );
+            let top_tokens =
+                top_k_tokens(frame_log_probs.as_slice().unwrap(), beam_width * 3, blank_id);
 
             for &(token_id, token_log_prob) in &top_tokens {
                 let last_token = hyp.tokens.last().copied();
@@ -391,13 +409,15 @@ pub fn ctc_beam_search_decode(
                         0.0
                     };
 
-                    let entry = next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
-                        tokens: hyp.tokens.clone(),
-                        blank_score: f32::NEG_INFINITY,
-                        non_blank_score: f32::NEG_INFINITY,
-                        hotword_context: hyp.hotword_context.clone(),
-                    });
-                    entry.non_blank_score = log_add(entry.non_blank_score, new_non_blank_score + boost);
+                    let entry =
+                        next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
+                            tokens: hyp.tokens.clone(),
+                            blank_score: f32::NEG_INFINITY,
+                            non_blank_score: f32::NEG_INFINITY,
+                            hotword_context: hyp.hotword_context.clone(),
+                        });
+                    entry.non_blank_score =
+                        log_add(entry.non_blank_score, new_non_blank_score + boost);
                 } else {
                     // New token: extend hypothesis
                     let new_non_blank_score =
@@ -428,12 +448,13 @@ pub fn ctc_beam_search_decode(
                         };
                     }
 
-                    let entry = next_beam.entry(new_tokens.clone()).or_insert_with(|| BeamHypothesis {
-                        tokens: new_tokens,
-                        blank_score: f32::NEG_INFINITY,
-                        non_blank_score: f32::NEG_INFINITY,
-                        hotword_context: new_context.clone(),
-                    });
+                    let entry =
+                        next_beam.entry(new_tokens.clone()).or_insert_with(|| BeamHypothesis {
+                            tokens: new_tokens,
+                            blank_score: f32::NEG_INFINITY,
+                            non_blank_score: f32::NEG_INFINITY,
+                            hotword_context: new_context.clone(),
+                        });
                     entry.non_blank_score =
                         log_add(entry.non_blank_score, new_non_blank_score + boost);
                 }
@@ -443,9 +464,7 @@ pub fn ctc_beam_search_decode(
         // Prune beam to top-K by total score
         beam = next_beam.into_values().collect();
         beam.sort_by(|a, b| {
-            b.total_score()
-                .partial_cmp(&a.total_score())
-                .unwrap_or(std::cmp::Ordering::Equal)
+            b.total_score().partial_cmp(&a.total_score()).unwrap_or(std::cmp::Ordering::Equal)
         });
         beam.truncate(beam_width);
     }
@@ -454,9 +473,7 @@ pub fn ctc_beam_search_decode(
     let best = beam
         .into_iter()
         .max_by(|a, b| {
-            a.total_score()
-                .partial_cmp(&b.total_score())
-                .unwrap_or(std::cmp::Ordering::Equal)
+            a.total_score().partial_cmp(&b.total_score()).unwrap_or(std::cmp::Ordering::Equal)
         })
         .unwrap_or(BeamHypothesis {
             tokens: Vec::new(),
@@ -483,11 +500,7 @@ pub fn ctc_beam_search_decode(
 /// Blank frames are inserted between tokens to prevent CTC collapse
 /// from merging adjacent identical tokens during decoding.
 fn build_argmax_logits(token_ids: &[u32], vocab_size: usize) -> Array2<f32> {
-    let num_frames = if token_ids.is_empty() {
-        1
-    } else {
-        token_ids.len() * 2 - 1
-    };
+    let num_frames = if token_ids.is_empty() { 1 } else { token_ids.len() * 2 - 1 };
     let blank_id = 1024; // Parakeet CTC pad_token_id
     let mut logits = Array2::<f32>::from_elem((num_frames, vocab_size), -100.0);
 
@@ -752,12 +765,13 @@ mod tests {
                 {
                     let blp = frame_lp[blank_id as usize];
                     let new_bs = log_add(hyp.blank_score, hyp.non_blank_score) + blp;
-                    let entry = next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
-                        tokens: hyp.tokens.clone(),
-                        blank_score: f32::NEG_INFINITY,
-                        non_blank_score: f32::NEG_INFINITY,
-                        hotword_context: Vec::new(),
-                    });
+                    let entry =
+                        next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
+                            tokens: hyp.tokens.clone(),
+                            blank_score: f32::NEG_INFINITY,
+                            non_blank_score: f32::NEG_INFINITY,
+                            hotword_context: Vec::new(),
+                        });
                     entry.blank_score = log_add(entry.blank_score, new_bs);
                 }
 
@@ -766,23 +780,25 @@ mod tests {
                     let last = hyp.tokens.last().copied();
                     if Some(tid) == last {
                         let new_nbs = hyp.blank_score + tlp;
-                        let entry = next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
-                            tokens: hyp.tokens.clone(),
-                            blank_score: f32::NEG_INFINITY,
-                            non_blank_score: f32::NEG_INFINITY,
-                            hotword_context: Vec::new(),
-                        });
+                        let entry =
+                            next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
+                                tokens: hyp.tokens.clone(),
+                                blank_score: f32::NEG_INFINITY,
+                                non_blank_score: f32::NEG_INFINITY,
+                                hotword_context: Vec::new(),
+                            });
                         entry.non_blank_score = log_add(entry.non_blank_score, new_nbs);
                     } else {
                         let new_nbs = log_add(hyp.blank_score, hyp.non_blank_score) + tlp;
                         let mut new_tokens = hyp.tokens.clone();
                         new_tokens.push(tid);
-                        let entry = next_beam.entry(new_tokens.clone()).or_insert_with(|| BeamHypothesis {
-                            tokens: new_tokens,
-                            blank_score: f32::NEG_INFINITY,
-                            non_blank_score: f32::NEG_INFINITY,
-                            hotword_context: Vec::new(),
-                        });
+                        let entry =
+                            next_beam.entry(new_tokens.clone()).or_insert_with(|| BeamHypothesis {
+                                tokens: new_tokens,
+                                blank_score: f32::NEG_INFINITY,
+                                non_blank_score: f32::NEG_INFINITY,
+                                hotword_context: Vec::new(),
+                            });
                         entry.non_blank_score = log_add(entry.non_blank_score, new_nbs);
                     }
                 }
@@ -790,9 +806,7 @@ mod tests {
 
             beam = next_beam.into_values().collect();
             beam.sort_by(|a, b| {
-                b.total_score()
-                    .partial_cmp(&a.total_score())
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                b.total_score().partial_cmp(&a.total_score()).unwrap_or(std::cmp::Ordering::Equal)
             });
             beam.truncate(beam_width);
         }
@@ -800,9 +814,7 @@ mod tests {
         let best = beam
             .into_iter()
             .max_by(|a, b| {
-                a.total_score()
-                    .partial_cmp(&b.total_score())
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                a.total_score().partial_cmp(&b.total_score()).unwrap_or(std::cmp::Ordering::Equal)
             })
             .unwrap();
 
@@ -866,12 +878,13 @@ mod tests {
                 {
                     let blp = frame_lp[blank_id as usize];
                     let new_bs = log_add(hyp.blank_score, hyp.non_blank_score) + blp;
-                    let entry = next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
-                        tokens: hyp.tokens.clone(),
-                        blank_score: f32::NEG_INFINITY,
-                        non_blank_score: f32::NEG_INFINITY,
-                        hotword_context: hyp.hotword_context.clone(),
-                    });
+                    let entry =
+                        next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
+                            tokens: hyp.tokens.clone(),
+                            blank_score: f32::NEG_INFINITY,
+                            non_blank_score: f32::NEG_INFINITY,
+                            hotword_context: hyp.hotword_context.clone(),
+                        });
                     entry.blank_score = log_add(entry.blank_score, new_bs);
                 }
 
@@ -881,12 +894,13 @@ mod tests {
                     if Some(tid) == last {
                         let new_nbs = hyp.blank_score + tlp;
                         let boost = trie.boost_for_token(&hyp.hotword_context, tid);
-                        let entry = next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
-                            tokens: hyp.tokens.clone(),
-                            blank_score: f32::NEG_INFINITY,
-                            non_blank_score: f32::NEG_INFINITY,
-                            hotword_context: hyp.hotword_context.clone(),
-                        });
+                        let entry =
+                            next_beam.entry(hyp.tokens.clone()).or_insert_with(|| BeamHypothesis {
+                                tokens: hyp.tokens.clone(),
+                                blank_score: f32::NEG_INFINITY,
+                                non_blank_score: f32::NEG_INFINITY,
+                                hotword_context: hyp.hotword_context.clone(),
+                            });
                         entry.non_blank_score = log_add(entry.non_blank_score, new_nbs + boost);
                     } else {
                         let new_nbs = log_add(hyp.blank_score, hyp.non_blank_score) + tlp;
@@ -904,12 +918,13 @@ mod tests {
                                 Vec::new()
                             };
                         }
-                        let entry = next_beam.entry(new_tokens.clone()).or_insert_with(|| BeamHypothesis {
-                            tokens: new_tokens,
-                            blank_score: f32::NEG_INFINITY,
-                            non_blank_score: f32::NEG_INFINITY,
-                            hotword_context: new_context,
-                        });
+                        let entry =
+                            next_beam.entry(new_tokens.clone()).or_insert_with(|| BeamHypothesis {
+                                tokens: new_tokens,
+                                blank_score: f32::NEG_INFINITY,
+                                non_blank_score: f32::NEG_INFINITY,
+                                hotword_context: new_context,
+                            });
                         entry.non_blank_score = log_add(entry.non_blank_score, new_nbs + boost);
                     }
                 }
@@ -917,9 +932,7 @@ mod tests {
 
             beam = next_beam.into_values().collect();
             beam.sort_by(|a, b| {
-                b.total_score()
-                    .partial_cmp(&a.total_score())
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                b.total_score().partial_cmp(&a.total_score()).unwrap_or(std::cmp::Ordering::Equal)
             });
             beam.truncate(beam_width);
         }
@@ -927,9 +940,7 @@ mod tests {
         let best = beam
             .into_iter()
             .max_by(|a, b| {
-                a.total_score()
-                    .partial_cmp(&b.total_score())
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                a.total_score().partial_cmp(&b.total_score()).unwrap_or(std::cmp::Ordering::Equal)
             })
             .unwrap();
 

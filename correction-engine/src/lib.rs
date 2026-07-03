@@ -43,7 +43,9 @@ pub mod types;
 // Re-export primary API types
 pub use connection::{AtspiConnection, MockTextChangeSource, TextChangeSource};
 pub use store::CorrectionStore;
-pub use types::{CorrectionPair, CorrectionStats, InjectionContext, MonitorConfig, TextChangeEvent};
+pub use types::{
+    CorrectionPair, CorrectionStats, InjectionContext, MonitorConfig, TextChangeEvent,
+};
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -65,11 +67,7 @@ impl CorrectionMonitor {
         let connection = AtspiConnection::connect().await;
         let store = CorrectionStore::load(&config)?;
 
-        Ok(Self {
-            source: Arc::new(connection),
-            store: Arc::new(Mutex::new(store)),
-            config,
-        })
+        Ok(Self { source: Arc::new(connection), store: Arc::new(Mutex::new(store)), config })
     }
 
     /// Create a correction monitor with a custom event source (for testing).
@@ -78,11 +76,7 @@ impl CorrectionMonitor {
         store: CorrectionStore,
         config: MonitorConfig,
     ) -> Self {
-        Self {
-            source,
-            store: Arc::new(Mutex::new(store)),
-            config,
-        }
+        Self { source, store: Arc::new(Mutex::new(store)), config }
     }
 
     /// Start monitoring for corrections after text injection.
@@ -165,10 +159,7 @@ impl CorrectionMonitor {
             }
         }
 
-        info!(
-            "Correction monitoring ended. {} events collected.",
-            events.len()
-        );
+        info!("Correction monitoring ended. {} events collected.", events.len());
 
         if events.is_empty() {
             return Ok(Vec::new());
@@ -176,11 +167,7 @@ impl CorrectionMonitor {
 
         // Filter events
         let filtered = event_filter::filter_events(&events, &context, &config);
-        debug!(
-            "After filtering: {} of {} events are relevant",
-            filtered.len(),
-            events.len()
-        );
+        debug!("After filtering: {} of {} events are relevant", filtered.len(), events.len());
 
         if filtered.is_empty() {
             return Ok(Vec::new());

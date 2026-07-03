@@ -18,10 +18,7 @@ pub enum ControlMessage {
     StartRecording,
     StopRecording,
     StatusQuery,
-    StatusResponse {
-        state: String,
-        session_active: bool
-    },
+    StatusResponse { state: String, session_active: bool },
     Shutdown,
 }
 

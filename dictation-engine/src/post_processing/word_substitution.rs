@@ -42,18 +42,12 @@ impl WordSubstitutionProcessor {
             }
         }
 
-        Ok(Self {
-            entries: Arc::new(RwLock::new(entries)),
-            user_dict,
-        })
+        Ok(Self { entries: Arc::new(RwLock::new(entries)), user_dict })
     }
 
     /// Create an empty processor with no substitutions (fallback).
     pub fn empty() -> Self {
-        Self {
-            entries: Arc::new(RwLock::new(Vec::new())),
-            user_dict: None,
-        }
+        Self { entries: Arc::new(RwLock::new(Vec::new())), user_dict: None }
     }
 
     /// Reload substitutions from disk and re-sync to user dictionary.
@@ -70,10 +64,8 @@ impl WordSubstitutionProcessor {
             }
         }
 
-        let mut entries = self
-            .entries
-            .write()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+        let mut entries =
+            self.entries.write().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
         *entries = new_entries;
         Ok(())
     }
@@ -88,9 +80,7 @@ impl WordSubstitutionProcessor {
         let data_dir = dirs::data_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
 
-        let path = data_dir
-            .join("voice-dictation")
-            .join("substitutions.txt");
+        let path = data_dir.join("voice-dictation").join("substitutions.txt");
 
         // Ensure directory exists
         if let Some(parent) = path.parent() {
@@ -123,10 +113,8 @@ impl WordSubstitutionProcessor {
                 if spoken.is_empty() || replacement.is_empty() {
                     return None;
                 }
-                let spoken_words: Vec<String> = spoken
-                    .split_whitespace()
-                    .map(|w| w.to_lowercase())
-                    .collect();
+                let spoken_words: Vec<String> =
+                    spoken.split_whitespace().map(|w| w.to_lowercase()).collect();
                 Some((spoken_words, replacement.to_string()))
             })
             .collect();
@@ -144,10 +132,7 @@ impl TextProcessor for WordSubstitutionProcessor {
             return Ok(String::new());
         }
 
-        let entries = self
-            .entries
-            .read()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+        let entries = self.entries.read().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
 
         if entries.is_empty() {
             return Ok(text.to_string());
@@ -201,10 +186,8 @@ mod tests {
         let entries: Vec<(Vec<String>, String)> = entries
             .into_iter()
             .map(|(spoken, replacement)| {
-                let words: Vec<String> = spoken
-                    .split_whitespace()
-                    .map(|w| w.to_lowercase())
-                    .collect();
+                let words: Vec<String> =
+                    spoken.split_whitespace().map(|w| w.to_lowercase()).collect();
                 (words, replacement.to_string())
             })
             .collect();
@@ -212,10 +195,7 @@ mod tests {
         let mut entries = entries;
         entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
 
-        WordSubstitutionProcessor {
-            entries: Arc::new(RwLock::new(entries)),
-            user_dict: None,
-        }
+        WordSubstitutionProcessor { entries: Arc::new(RwLock::new(entries)), user_dict: None }
     }
 
     #[test]
@@ -256,10 +236,7 @@ mod tests {
 
     #[test]
     fn test_multiple_substitutions_in_one_sentence() {
-        let processor = make_processor(vec![
-            ("shay moy", "chezmoi"),
-            ("cube cuttle", "kubectl"),
-        ]);
+        let processor = make_processor(vec![("shay moy", "chezmoi"), ("cube cuttle", "kubectl")]);
         let result = processor.process("use shay moy and cube cuttle together").unwrap();
         assert_eq!(result, "use chezmoi and kubectl together");
     }
@@ -273,10 +250,7 @@ mod tests {
 
     #[test]
     fn test_longest_match_first() {
-        let processor = make_processor(vec![
-            ("ch ez moy", "chezmoi"),
-            ("ch ez", "chez"),
-        ]);
+        let processor = make_processor(vec![("ch ez moy", "chezmoi"), ("ch ez", "chez")]);
         // "ch ez moy" should match first (3 words) over "ch ez" (2 words)
         let result = processor.process("run ch ez moy now").unwrap();
         assert_eq!(result, "run chezmoi now");
@@ -297,8 +271,7 @@ mod tests {
         writeln!(file, "empty replacement ->").unwrap();
         file.flush().unwrap();
 
-        let entries =
-            WordSubstitutionProcessor::load_substitutions(file.path()).unwrap();
+        let entries = WordSubstitutionProcessor::load_substitutions(file.path()).unwrap();
 
         // Should have 3 valid entries (malformed/empty lines skipped)
         assert_eq!(entries.len(), 3);
@@ -314,9 +287,9 @@ mod tests {
 
     #[test]
     fn test_file_parsing_nonexistent() {
-        let entries = WordSubstitutionProcessor::load_substitutions(
-            Path::new("/tmp/nonexistent_substitutions_test.txt"),
-        )
+        let entries = WordSubstitutionProcessor::load_substitutions(Path::new(
+            "/tmp/nonexistent_substitutions_test.txt",
+        ))
         .unwrap();
         assert!(entries.is_empty());
     }

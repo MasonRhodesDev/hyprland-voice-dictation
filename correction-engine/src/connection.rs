@@ -107,11 +107,7 @@ async fn run_event_listener(tx: mpsc::Sender<TextChangeEvent>) -> Result<()> {
         };
 
         // Extract the application name from the source object
-        let source_app = text_event
-            .item
-            .name_as_str()
-            .unwrap_or("")
-            .to_string();
+        let source_app = text_event.item.name_as_str().unwrap_or("").to_string();
 
         let event = TextChangeEvent {
             operation,
@@ -142,11 +138,7 @@ impl MockTextChangeSource {
     /// Create a new mock source. Returns the source and a sender for injecting events.
     pub fn new(available: bool) -> (Self, mpsc::Sender<TextChangeEvent>) {
         let (tx, rx) = mpsc::channel(256);
-        let source = Self {
-            tx: tx.clone(),
-            rx: tokio::sync::Mutex::new(Some(rx)),
-            available,
-        };
+        let source = Self { tx: tx.clone(), rx: tokio::sync::Mutex::new(Some(rx)), available };
         (source, tx)
     }
 
@@ -160,9 +152,7 @@ impl MockTextChangeSource {
 impl TextChangeSource for MockTextChangeSource {
     async fn subscribe(&self) -> Result<mpsc::Receiver<TextChangeEvent>> {
         let mut rx_guard = self.rx.lock().await;
-        rx_guard
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("MockTextChangeSource already subscribed"))
+        rx_guard.take().ok_or_else(|| anyhow::anyhow!("MockTextChangeSource already subscribed"))
     }
 
     fn is_available(&self) -> bool {

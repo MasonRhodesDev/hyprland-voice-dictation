@@ -106,24 +106,25 @@ impl AudioBackendFactory for PipewireBackend {
         // Resolve device name to PipeWire target serial
         let device_name = config.device_name.clone();
         let target_serial = match &device_name {
-            Some(name) if name != "default" => {
-                match enumerate_audio_sources() {
-                    Ok(sources) => {
-                        let found = sources.iter().find(|s| s.name == *name);
-                        if let Some(source) = found {
-                            info!("Resolved device '{}' to PipeWire serial {}", name, source.object_serial);
-                            Some(source.object_serial)
-                        } else {
-                            warn!("Device '{}' not found in PipeWire sources, using default", name);
-                            None
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to enumerate PipeWire sources: {e}, using default");
+            Some(name) if name != "default" => match enumerate_audio_sources() {
+                Ok(sources) => {
+                    let found = sources.iter().find(|s| s.name == *name);
+                    if let Some(source) = found {
+                        info!(
+                            "Resolved device '{}' to PipeWire serial {}",
+                            name, source.object_serial
+                        );
+                        Some(source.object_serial)
+                    } else {
+                        warn!("Device '{}' not found in PipeWire sources, using default", name);
                         None
                     }
                 }
-            }
+                Err(e) => {
+                    warn!("Failed to enumerate PipeWire sources: {e}, using default");
+                    None
+                }
+            },
             _ => None,
         };
 
@@ -144,11 +145,7 @@ impl AudioBackendFactory for PipewireBackend {
             })
             .context("Failed to spawn PipeWire thread")?;
 
-        Ok(Box::new(PipewireBackend {
-            control_tx,
-            _thread: thread,
-            is_running,
-        }))
+        Ok(Box::new(PipewireBackend { control_tx, _thread: thread, is_running }))
     }
 
     fn list_devices() -> Result<Vec<DeviceInfo>> {
@@ -157,11 +154,7 @@ impl AudioBackendFactory for PipewireBackend {
         let sources = enumerate_audio_sources()?;
         let devices: Vec<DeviceInfo> = sources
             .into_iter()
-            .map(|s| DeviceInfo {
-                description: s.description,
-                name: s.name,
-                is_default: false,
-            })
+            .map(|s| DeviceInfo { description: s.description, name: s.name, is_default: false })
             .collect();
 
         if devices.is_empty() {
@@ -218,19 +211,15 @@ impl Drop for PipewireBackend {
 fn enumerate_audio_sources() -> Result<Vec<AudioSourceInfo>> {
     use std::cell::Cell;
 
-    let mainloop = pw::main_loop::MainLoop::new(None)
-        .context("Failed to create PipeWire MainLoop")?;
+    let mainloop =
+        pw::main_loop::MainLoop::new(None).context("Failed to create PipeWire MainLoop")?;
 
-    let context = pw::context::Context::new(&mainloop)
-        .context("Failed to create PipeWire Context")?;
+    let context =
+        pw::context::Context::new(&mainloop).context("Failed to create PipeWire Context")?;
 
-    let core = context
-        .connect(None)
-        .context("Failed to connect to PipeWire daemon")?;
+    let core = context.connect(None).context("Failed to connect to PipeWire daemon")?;
 
-    let registry = core
-        .get_registry()
-        .context("Failed to get PipeWire Registry")?;
+    let registry = core.get_registry().context("Failed to get PipeWire Registry")?;
 
     let sources: Rc<RefCell<Vec<AudioSourceInfo>>> = Rc::new(RefCell::new(Vec::new()));
     let done = Rc::new(Cell::new(false));
@@ -272,7 +261,9 @@ fn enumerate_audio_sources() -> Result<Vec<AudioSourceInfo>> {
                             .and_then(|s| s.parse::<u32>().ok())
                             .unwrap_or(global.id);
 
-                        if !name.contains(".monitor") && !description.to_lowercase().contains("monitor") {
+                        if !name.contains(".monitor")
+                            && !description.to_lowercase().contains("monitor")
+                        {
                             debug!(
                                 "Found audio source: id={}, serial={}, name='{}', desc='{}'",
                                 global.id, object_serial, name, description
@@ -331,15 +322,13 @@ fn run_pipewire_thread(
     is_running: Arc<AtomicBool>,
     target_serial: Option<u32>,
 ) -> Result<()> {
-    let mainloop = pw::main_loop::MainLoop::new(None)
-        .context("Failed to create PipeWire MainLoop")?;
+    let mainloop =
+        pw::main_loop::MainLoop::new(None).context("Failed to create PipeWire MainLoop")?;
 
-    let context = pw::context::Context::new(&mainloop)
-        .context("Failed to create PipeWire Context")?;
+    let context =
+        pw::context::Context::new(&mainloop).context("Failed to create PipeWire Context")?;
 
-    let core = context
-        .connect(None)
-        .context("Failed to connect to PipeWire daemon")?;
+    let core = context.connect(None).context("Failed to connect to PipeWire daemon")?;
 
     // Build audio format pod
     let format_buffer = build_audio_format_pod(sample_rate)?;

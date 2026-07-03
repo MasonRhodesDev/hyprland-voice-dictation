@@ -56,10 +56,7 @@ impl SanitizationProcessor {
 
     /// Create a processor for a specific app category
     pub fn for_category(category: AppCategory) -> Self {
-        Self {
-            rules: SanitizationRules::for_category(category),
-            category,
-        }
+        Self { rules: SanitizationRules::for_category(category), category }
     }
 }
 
@@ -106,7 +103,7 @@ fn strip_ansi_escapes(text: &str) -> String {
             // Check for CSI sequence: ESC [
             if chars.peek() == Some(&'[') {
                 chars.next(); // consume '['
-                // Skip until we hit a letter (the terminator)
+                              // Skip until we hit a letter (the terminator)
                 while let Some(&c) = chars.peek() {
                     chars.next();
                     if c.is_ascii_alphabetic() {
@@ -118,7 +115,7 @@ fn strip_ansi_escapes(text: &str) -> String {
             // Check for OSC sequence: ESC ]
             if chars.peek() == Some(&']') {
                 chars.next(); // consume ']'
-                // Skip until BEL (\x07) or ST (\x1b\)
+                              // Skip until BEL (\x07) or ST (\x1b\)
                 while let Some(c) = chars.next() {
                     if c == '\x07' {
                         break;

@@ -98,10 +98,8 @@ impl UserDictionary {
 
         // Add to app words
         {
-            let mut app_words = self
-                .app_words
-                .write()
-                .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+            let mut app_words =
+                self.app_words.write().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
             app_words.insert(word_lower);
         }
 
@@ -114,10 +112,8 @@ impl UserDictionary {
         let word_lower = word.to_lowercase();
 
         {
-            let mut app_words = self
-                .app_words
-                .write()
-                .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+            let mut app_words =
+                self.app_words.write().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
             app_words.remove(&word_lower);
         }
 
@@ -139,10 +135,8 @@ impl UserDictionary {
     /// Reload app-specific dictionary from disk.
     pub fn reload_app_words(&self) -> Result<()> {
         let words = Self::load_app_words(&self.app_words_path)?;
-        let mut app_words = self
-            .app_words
-            .write()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+        let mut app_words =
+            self.app_words.write().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
         *app_words = words;
         Ok(())
     }
@@ -151,10 +145,8 @@ impl UserDictionary {
     pub fn reload_system_words(&self) -> Result<()> {
         if let Some(ref path) = self.system_dict_path {
             let words = Self::load_system_words_from_path(path).unwrap_or_default();
-            let mut system_words = self
-                .system_words
-                .write()
-                .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+            let mut system_words =
+                self.system_words.write().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
             *system_words = words;
         }
         Ok(())
@@ -243,10 +235,8 @@ impl UserDictionary {
     }
 
     fn save(&self) -> Result<()> {
-        let app_words = self
-            .app_words
-            .read()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+        let app_words =
+            self.app_words.read().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
 
         let mut words: Vec<_> = app_words.iter().cloned().collect();
         words.sort();

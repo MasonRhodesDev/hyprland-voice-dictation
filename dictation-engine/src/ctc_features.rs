@@ -44,10 +44,7 @@ const PREEMPHASIS: f32 = 0.97;
 /// Array2 of shape `[T, 80]` where T = number of frames.
 pub fn extract_features(samples: &[i16], sample_rate: u32) -> anyhow::Result<Array2<f32>> {
     if sample_rate != SAMPLE_RATE as u32 {
-        anyhow::bail!(
-            "ctc_features requires 16 kHz audio, got {} Hz",
-            sample_rate
-        );
+        anyhow::bail!("ctc_features requires 16 kHz audio, got {} Hz", sample_rate);
     }
 
     if samples.is_empty() {
@@ -82,7 +79,8 @@ pub fn extract_features(samples: &[i16], sample_rate: u32) -> anyhow::Result<Arr
     for feat_idx in 0..num_features {
         let mut col = mel_spec.column_mut(feat_idx);
         let mean: f32 = col.iter().sum::<f32>() / num_frames as f32;
-        let variance: f32 = col.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / num_frames as f32;
+        let variance: f32 =
+            col.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / num_frames as f32;
         let std = variance.sqrt().max(1e-10);
         for val in col.iter_mut() {
             *val = (*val - mean) / std;

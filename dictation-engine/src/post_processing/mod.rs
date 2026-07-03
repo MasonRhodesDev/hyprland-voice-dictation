@@ -35,9 +35,7 @@ pub struct Pipeline {
 impl Pipeline {
     /// Create an empty pipeline.
     pub fn new() -> Self {
-        Self {
-            processors: Vec::new(),
-        }
+        Self { processors: Vec::new() }
     }
 
     /// Add a processor to the pipeline.
@@ -98,9 +96,7 @@ impl Pipeline {
         // Finally apply grammar checking
         if enable_grammar {
             if let Some(dict) = user_dict {
-                pipeline.add_processor(Box::new(GrammarProcessor::new_with_user_dictionary(
-                    dict,
-                )));
+                pipeline.add_processor(Box::new(GrammarProcessor::new_with_user_dictionary(dict)));
             } else {
                 pipeline.add_processor(Box::new(GrammarProcessor::new()));
             }

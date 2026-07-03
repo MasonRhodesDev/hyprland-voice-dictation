@@ -25,7 +25,6 @@ async fn test_control_server_client_communication() {
     let _ = std::fs::remove_file(socket_path);
 }
 
-
 #[tokio::test]
 async fn test_multiple_control_messages() {
     use dictation_engine::control_ipc::{ControlMessage, ControlServer};

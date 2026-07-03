@@ -28,11 +28,8 @@ impl TextProcessor for PunctuationProcessor {
         let mut capitalize_next = true;
 
         for word in text.split_whitespace() {
-            let processed = if capitalize_next {
-                capitalize_first(word)
-            } else {
-                capitalize_pronoun_i(word)
-            };
+            let processed =
+                if capitalize_next { capitalize_first(word) } else { capitalize_pronoun_i(word) };
 
             result.push_str(&processed);
             result.push(' ');
@@ -151,9 +148,7 @@ mod tests {
     #[test]
     fn test_multiple_sentences() {
         let processor = PunctuationProcessor::new();
-        let result = processor
-            .process("hello there. how are you? i am fine!")
-            .unwrap();
+        let result = processor.process("hello there. how are you? i am fine!").unwrap();
         assert_eq!(result, "Hello there. How are you? I am fine!");
     }
 
