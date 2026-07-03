@@ -1,0 +1,19 @@
+name: Package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arch:
+    uses: MasonRhodesDev/packaging-workflows/.github/workflows/arch-package.yml@main
+
+  rpm:
+    uses: MasonRhodesDev/packaging-workflows/.github/workflows/rpm-check.yml@main
+    with:
+      spec-name: hyprland-voice-dictation

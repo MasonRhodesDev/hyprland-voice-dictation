@@ -1,0 +1,17 @@
+name: Security audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly — catches newly-published RUSTSEC advisories in pinned deps.
+    - cron: "17 4 * * 1"
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    uses: MasonRhodesDev/packaging-workflows/.github/workflows/security.yml@main
