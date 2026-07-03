@@ -20,6 +20,7 @@ use std::sync::{Arc, RwLock};
 pub struct WordSubstitutionProcessor {
     /// Substitution entries: (spoken words split into vec, replacement string).
     /// Sorted by descending spoken-form word count (longest match first).
+    #[allow(clippy::type_complexity)]
     entries: Arc<RwLock<Vec<(Vec<String>, String)>>>,
     /// Optional user dictionary to register replacement words with.
     user_dict: Option<Arc<UserDictionary>>,
@@ -120,7 +121,7 @@ impl WordSubstitutionProcessor {
             .collect();
 
         // Sort by descending spoken-form word count (longest match first)
-        entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.0.len()));
 
         Ok(entries)
     }
@@ -193,7 +194,7 @@ mod tests {
             .collect();
         // Sort by descending word count
         let mut entries = entries;
-        entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.0.len()));
 
         WordSubstitutionProcessor { entries: Arc::new(RwLock::new(entries)), user_dict: None }
     }
@@ -260,11 +261,11 @@ mod tests {
     fn test_file_parsing() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, "# Pronunciation corrections").unwrap();
-        writeln!(file, "").unwrap();
+        writeln!(file).unwrap();
         writeln!(file, "shay moy -> chezmoi").unwrap();
         writeln!(file, "ch ez moy -> chezmoi").unwrap();
         writeln!(file, "cube cuttle -> kubectl").unwrap();
-        writeln!(file, "").unwrap();
+        writeln!(file).unwrap();
         writeln!(file, "# Another comment").unwrap();
         writeln!(file, "malformed line without arrow").unwrap();
         writeln!(file, " -> empty spoken").unwrap();

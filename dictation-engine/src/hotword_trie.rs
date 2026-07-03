@@ -226,7 +226,7 @@ mod tests {
         writeln!(f, "kubectl 3.0").unwrap();
         writeln!(f, "kubernetes").unwrap();
         writeln!(f, "# comment").unwrap();
-        writeln!(f, "").unwrap();
+        writeln!(f).unwrap();
         writeln!(f, "nixos 4.5").unwrap();
 
         let entries = parse_hotwords_file(&path).unwrap();

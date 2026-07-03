@@ -46,8 +46,8 @@ impl TextProcessor for GrammarProcessor {
         }
 
         // Parse text into Harper document with plain English parser
-        let mut parser = PlainEnglish;
-        let document = Document::new(text, &mut parser, &self.dictionary);
+        let parser = PlainEnglish;
+        let document = Document::new(text, &parser, &self.dictionary);
 
         // Create linter with curated rules
         let mut linter = LintGroup::new_curated(self.dictionary.clone(), Dialect::American);
@@ -57,7 +57,7 @@ impl TextProcessor for GrammarProcessor {
 
         // Apply suggestions in reverse order to maintain correct positions
         let mut sorted_lints: Vec<Lint> = lints.into_iter().collect();
-        sorted_lints.sort_by(|a, b| b.span.start.cmp(&a.span.start));
+        sorted_lints.sort_by_key(|l| std::cmp::Reverse(l.span.start));
 
         // Build corrected text by applying suggestions
         let mut result = text.to_string();
@@ -100,11 +100,7 @@ fn get_best_suggestion(lint: &Lint) -> Option<String> {
     match &lint.lint_kind {
         LintKind::Spelling => {
             // For spelling errors, get the first suggestion
-            if let Some(suggestion) = lint.suggestions.first() {
-                Some(suggestion_to_string(suggestion))
-            } else {
-                None
-            }
+            lint.suggestions.first().map(suggestion_to_string)
         }
         _ => {
             // For other lints, use the first suggestion if available

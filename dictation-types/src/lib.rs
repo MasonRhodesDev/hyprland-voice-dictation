@@ -1,4 +1,4 @@
-/// GUI control and status types for daemon ↔ GUI communication
+//! GUI control and status types for daemon ↔ GUI communication
 
 /// Commands sent from daemon to GUI
 #[derive(Debug, Clone)]

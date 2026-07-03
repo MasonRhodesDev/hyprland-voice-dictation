@@ -43,6 +43,7 @@ pub struct CtcEngine {
     /// The parakeet CTC model (encoder + greedy decoder)
     parakeet: Arc<Mutex<Parakeet>>,
     /// Hotword trie for future beam search boosting
+    #[allow(dead_code)] // hotword boosting WIP
     hotword_trie: Arc<HotwordTrie>,
     /// Beam width for beam search (0 = greedy only).
     /// Currently always uses greedy; beam search is ready but awaits
@@ -751,7 +752,7 @@ mod tests {
             hotword_context: Vec::new(),
         };
 
-        let trie = HotwordTrie::empty();
+        let _trie = HotwordTrie::empty();
         let beam_width = 5;
         let mut beam = vec![initial];
 

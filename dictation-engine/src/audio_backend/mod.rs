@@ -11,7 +11,7 @@ pub mod pipewire_backend;
 use anyhow::Result;
 use serde::Deserialize;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Configuration for creating an audio backend.
 #[derive(Clone)]
@@ -105,6 +105,7 @@ pub enum BackendType {
 
 impl BackendType {
     /// Parse backend type from string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "auto" => Some(Self::Auto),

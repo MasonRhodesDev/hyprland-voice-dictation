@@ -36,6 +36,7 @@ impl AppCategory {
 ///
 /// Currently returns Terminal mode by default (escapes shell chars).
 /// Future: Plugin system for automatic detection.
+#[allow(dead_code)] // planned per-app profiles
 pub async fn get_focused_app_category() -> AppCategory {
     // Fallback when Hyprland/window detection isn't available
     AppCategory::General

@@ -166,7 +166,7 @@ impl CpalBackend {
 
                 // Check and log drops periodically
                 let current_drops = drops_clone.load(Ordering::Relaxed);
-                if current_drops > last_drop_log && current_drops % 100 == 0 {
+                if current_drops > last_drop_log && current_drops.is_multiple_of(100) {
                     warn!("Audio samples dropped: {} total", current_drops);
                     last_drop_log = current_drops;
                 }

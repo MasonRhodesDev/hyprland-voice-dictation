@@ -207,13 +207,11 @@ fn check_runtime_dependencies(
         missing.push("wtype - required for keyboard input injection");
     }
 
-    if require_wayland {
-        if std::env::var("WAYLAND_DISPLAY").is_err() {
-            if std::env::var("DISPLAY").is_ok() {
-                missing.push("Wayland compositor - X11 detected but Wayland is required");
-            } else {
-                missing.push("Wayland compositor - no display server detected");
-            }
+    if require_wayland && std::env::var("WAYLAND_DISPLAY").is_err() {
+        if std::env::var("DISPLAY").is_ok() {
+            missing.push("Wayland compositor - X11 detected but Wayland is required");
+        } else {
+            missing.push("Wayland compositor - no display server detected");
         }
     }
 
@@ -431,21 +429,23 @@ fn migrate_config(config_path: &PathBuf) -> Result<bool, Box<dyn std::error::Err
         }
 
         // Update preview_model to parakeet
-        if trimmed.starts_with("preview_model") && !trimmed.contains("custom_path") {
-            if trimmed.contains("vosk:") || trimmed.contains("whisper:") {
-                new_lines.push("preview_model = \"parakeet:default\"".to_string());
-                updated_preview = true;
-                continue;
-            }
+        if trimmed.starts_with("preview_model")
+            && !trimmed.contains("custom_path")
+            && (trimmed.contains("vosk:") || trimmed.contains("whisper:"))
+        {
+            new_lines.push("preview_model = \"parakeet:default\"".to_string());
+            updated_preview = true;
+            continue;
         }
 
         // Update final_model to parakeet
-        if trimmed.starts_with("final_model") && !trimmed.contains("custom_path") {
-            if trimmed.contains("vosk:") || trimmed.contains("whisper:") {
-                new_lines.push("final_model = \"parakeet:default\"".to_string());
-                updated_final = true;
-                continue;
-            }
+        if trimmed.starts_with("final_model")
+            && !trimmed.contains("custom_path")
+            && (trimmed.contains("vosk:") || trimmed.contains("whisper:"))
+        {
+            new_lines.push("final_model = \"parakeet:default\"".to_string());
+            updated_final = true;
+            continue;
         }
 
         new_lines.push(line.to_string());
@@ -517,7 +517,7 @@ fn debug_list() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|e| e.path().extension().map(|ext| ext == "json").unwrap_or(false))
         .collect();
 
-    entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    entries.sort_by_key(|a| a.file_name());
 
     if entries.is_empty() {
         println!("No debug recordings found");
@@ -525,7 +525,7 @@ fn debug_list() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    println!("{:<35} {:>8} {:>6}  {}", "File", "Duration", "Device", "Text preview");
+    println!("{:<35} {:>8} {:>6}  Text preview", "File", "Duration", "Device");
     println!("{}", "-".repeat(80));
 
     for entry in entries {
@@ -957,15 +957,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     }
                     let content = fs::read_to_string(&corrections_path)?;
-                    let mut data: Value = serde_json::from_str(&content)?;
+                    let data: Value = serde_json::from_str(&content)?;
                     if let Some(corrections) = data["corrections"].as_array() {
                         if corrections.is_empty() {
                             println!("No corrections recorded yet.");
                             return Ok(());
                         }
                         println!(
-                            "{:<4} {:>5}  {:<20} {:<20} {}",
-                            "#", "Count", "Original", "Corrected", "Status"
+                            "{:<4} {:>5}  {:<20} {:<20} Status",
+                            "#", "Count", "Original", "Corrected"
                         );
                         println!("{}", "-".repeat(75));
                         for (i, c) in corrections.iter().enumerate() {

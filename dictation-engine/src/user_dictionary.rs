@@ -251,8 +251,6 @@ impl UserDictionary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
 
     #[test]
     fn test_new_creates_directory() {

@@ -1,32 +1,69 @@
 //! Monitor detection and active monitor tracking for Hyprland
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
-/// Circuit breaker: max consecutive failures before opening circuit
-const MAX_CONSECUTIVE_FAILURES: u32 = 10; // 20 seconds of failures (10 * 2s retry interval)
+/// If the event listener ran at least this long before returning, it was
+/// genuinely connected (as opposed to failing the connection attempt itself).
+/// Distinguishes "Hyprland restarted under us" from "IPC socket not up yet".
+const CONNECTED_THRESHOLD: Duration = Duration::from_secs(5);
 
-/// Circuit breaker: cool-down period after circuit opens
+/// Delay between reconnect attempts
+const RETRY_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Circuit breaker: max consecutive failed connection attempts before backing off
+const MAX_CONSECUTIVE_FAILURES: u32 = 10;
+
+/// Circuit breaker: cool-down period after repeated failures
 const CIRCUIT_BREAKER_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Health tracking for the monitor listener to implement circuit breaker pattern
-struct MonitorListenerHealth {
-    consecutive_failures: AtomicU32,
-    circuit_open_until: Arc<RwLock<Option<Instant>>>,
+/// Global active monitor name. Empty string means "unknown" and makes the GUI
+/// fall back to showing on all monitors.
+static ACTIVE_MONITOR: OnceLock<Arc<RwLock<String>>> = OnceLock::new();
+
+/// Timestamp of the most recent compositor topology change (monitor add/remove,
+/// config reload, IPC loss). The GUI timer waits for this to settle, then
+/// verifies its surfaces against the live monitor list instead of blindly
+/// restarting the process on every event.
+static COMPOSITOR_CHANGED_AT: OnceLock<Arc<RwLock<Option<Instant>>>> = OnceLock::new();
+
+fn changed_at_cell() -> &'static Arc<RwLock<Option<Instant>>> {
+    COMPOSITOR_CHANGED_AT.get_or_init(|| Arc::new(RwLock::new(None)))
 }
 
-/// Global active monitor name
-static ACTIVE_MONITOR: std::sync::OnceLock<Arc<RwLock<String>>> = std::sync::OnceLock::new();
+/// Record a compositor topology change and refresh the active monitor, since
+/// focus may have moved without an `activemon` event (e.g. the focused monitor
+/// was unplugged).
+pub fn note_compositor_change(reason: &str) {
+    info!("Compositor change ({reason}); will verify surfaces after events settle");
+    if let Ok(mut guard) = changed_at_cell().write() {
+        *guard = Some(Instant::now());
+    }
+    if let Some(name) = get_active_monitor_sync() {
+        set_active_monitor(name);
+    }
+}
 
-/// Flag set when compositor events require a GUI restart (monitor add/remove, config reload, etc.)
-static RESTART_NEEDED: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+/// When the last compositor change happened, if one is pending verification
+pub fn pending_compositor_change() -> Option<Instant> {
+    changed_at_cell().read().ok().and_then(|guard| *guard)
+}
 
-/// Check if a compositor event requires a GUI restart
-pub fn is_restart_needed() -> bool {
-    RESTART_NEEDED.get().map(|f| f.load(Ordering::SeqCst)).unwrap_or(false)
+pub fn clear_compositor_change() {
+    if let Ok(mut guard) = changed_at_cell().write() {
+        *guard = None;
+    }
+}
+
+fn set_active_monitor(name: String) {
+    if let Some(cell) = ACTIVE_MONITOR.get() {
+        if let Ok(mut guard) = cell.write() {
+            *guard = name;
+        }
+    }
 }
 
 /// Get the currently active monitor name
@@ -42,6 +79,15 @@ pub fn get_active_monitor_sync() -> Option<String> {
     Monitors::get()
         .ok()
         .and_then(|monitors| monitors.iter().find(|m| m.focused).map(|m| m.name.clone()))
+}
+
+/// Get the current monitor names via Hyprland IPC. Returns None when IPC is
+/// unavailable (non-Hyprland compositor, Hyprland restarting).
+pub fn get_monitor_names_sync() -> Option<Vec<String>> {
+    use hyprland::data::Monitors;
+    use hyprland::prelude::*;
+
+    Monitors::get().ok().map(|monitors| monitors.iter().map(|m| m.name.clone()).collect())
 }
 
 /// Refresh Hyprland environment variables and verify socket accessibility
@@ -82,7 +128,7 @@ fn refresh_hyprland_environment() -> bool {
 }
 
 /// Spawn a background thread to track active monitor changes
-pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::AtomicBool>>) {
+pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<AtomicBool>>) {
     use hyprland::event_listener::{EventListener, MonitorEventData};
 
     // Initialize global state
@@ -90,33 +136,12 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::
     info!("Initial active monitor from Hyprland IPC: {:?}", initial);
     let monitor = Arc::new(RwLock::new(initial.unwrap_or_default()));
     let _ = ACTIVE_MONITOR.set(monitor.clone());
-
-    let restart_flag = Arc::new(AtomicBool::new(false));
-    let _ = RESTART_NEEDED.set(restart_flag.clone());
-
-    // Create health tracker for circuit breaker
-    let health = Arc::new(MonitorListenerHealth {
-        consecutive_failures: AtomicU32::new(0),
-        circuit_open_until: Arc::new(RwLock::new(None)),
-    });
+    let _ = changed_at_cell();
 
     thread::spawn(move || {
-        let mut connected_once = false;
+        let mut consecutive_failures: u32 = 0;
 
         loop {
-            // Check circuit breaker state
-            if let Ok(circuit) = health.circuit_open_until.read() {
-                if let Some(open_until) = *circuit {
-                    if Instant::now() < open_until {
-                        // Circuit is open, wait before retrying
-                        debug!("Circuit breaker open, waiting before retry");
-                        thread::sleep(Duration::from_secs(10));
-                        continue;
-                    }
-                }
-            }
-
-            // Refresh environment before reconnect attempt
             refresh_hyprland_environment();
 
             let monitor_clone = monitor.clone();
@@ -142,77 +167,67 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<std::sync::atomic::
                 }
             });
 
-            // Compositor events that require surface recreation
-            let restart_on_add = restart_flag.clone();
+            // Topology changes: don't restart the GUI here. layer-shika creates
+            // and destroys surfaces on Wayland output hotplug itself; we only
+            // note the change so the GUI can verify the result once events settle.
             listener.add_monitor_added_handler(move |data| {
-                error!(
-                    "Monitor added: '{}' — surfaces need recreation, requesting restart",
-                    data.name
-                );
-                restart_on_add.store(true, Ordering::SeqCst);
+                note_compositor_change(&format!("monitor added: '{}'", data.name));
             });
-
-            let restart_on_remove = restart_flag.clone();
             listener.add_monitor_removed_handler(move |name| {
-                error!(
-                    "Monitor removed: '{}' — surfaces need recreation, requesting restart",
-                    name
-                );
-                restart_on_remove.store(true, Ordering::SeqCst);
+                note_compositor_change(&format!("monitor removed: '{name}'"));
             });
-
-            let restart_on_config = restart_flag.clone();
             listener.add_config_reloaded_handler(move || {
-                error!("Hyprland config reloaded — monitor layout may have changed, requesting restart");
-                restart_on_config.store(true, Ordering::SeqCst);
+                note_compositor_change("hyprland config reloaded");
             });
 
-            match listener.start_listener() {
-                Ok(_) => {
-                    // Listener returned cleanly (shouldn't happen normally)
-                    health.consecutive_failures.store(0, Ordering::SeqCst);
-                    connected_once = true;
-                    debug!("Hyprland monitor listener connected successfully");
+            let started = Instant::now();
+            let result = listener.start_listener();
+            let was_connected = started.elapsed() >= CONNECTED_THRESHOLD;
+
+            match result {
+                Ok(()) => {
+                    info!("Hyprland event listener ended cleanly, reconnecting");
                 }
-                Err(e) => {
-                    // If we were previously connected and the listener dropped,
-                    // the compositor likely crashed/restarted — signal restart
-                    if connected_once {
-                        error!("Hyprland IPC connection lost (compositor restart?): {e}, requesting restart");
-                        restart_flag.store(true, Ordering::SeqCst);
-                    }
-
-                    // Failure - increment counter and check circuit breaker
-                    let failures = health.consecutive_failures.fetch_add(1, Ordering::SeqCst) + 1;
-
-                    if failures >= MAX_CONSECUTIVE_FAILURES {
-                        // Open circuit breaker
-                        warn!(
-                            "Hyprland monitor listener failed {} times, opening circuit breaker for {}s: {}",
-                            failures,
-                            CIRCUIT_BREAKER_TIMEOUT.as_secs(),
-                            e
-                        );
-
-                        if let Ok(mut circuit) = health.circuit_open_until.write() {
-                            *circuit = Some(Instant::now() + CIRCUIT_BREAKER_TIMEOUT);
-                        }
-
-                        // Reset failure counter for next circuit attempt
-                        health.consecutive_failures.store(0, Ordering::SeqCst);
-                    } else if !connected_once {
-                        warn!(
-                            "Hyprland event listener error (attempt {}/{}): {}",
-                            failures, MAX_CONSECUTIVE_FAILURES, e
-                        );
-                        thread::sleep(Duration::from_secs(2));
-                    }
+                Err(ref e) if was_connected => {
+                    warn!(
+                        "Hyprland IPC connection lost after {}s (compositor restart?): {e}",
+                        started.elapsed().as_secs()
+                    );
+                }
+                Err(ref e) => {
+                    warn!(
+                        "Hyprland event listener connection failed (attempt {}/{}): {e}",
+                        consecutive_failures + 1,
+                        MAX_CONSECUTIVE_FAILURES
+                    );
                 }
             }
 
-            // Mark that we've connected at least once after successful handler registration
-            if !connected_once {
-                connected_once = true;
+            if was_connected {
+                consecutive_failures = 0;
+                // Active-monitor state is now stale. Clear it so the GUI falls
+                // back to showing on all monitors until we reconnect, instead of
+                // pinning to a possibly-gone monitor name.
+                set_active_monitor(String::new());
+                note_compositor_change("hyprland IPC connection lost");
+            } else {
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    warn!(
+                        "Hyprland monitor listener failed {} times, backing off for {}s",
+                        consecutive_failures,
+                        CIRCUIT_BREAKER_TIMEOUT.as_secs()
+                    );
+                    thread::sleep(CIRCUIT_BREAKER_TIMEOUT);
+                    consecutive_failures = 0;
+                }
+            }
+
+            thread::sleep(RETRY_INTERVAL);
+
+            // Re-sync active monitor before the next connection attempt
+            if let Some(name) = get_active_monitor_sync() {
+                set_active_monitor(name);
             }
         }
     });

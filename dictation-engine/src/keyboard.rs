@@ -11,6 +11,7 @@ impl KeyboardInjector {
         Self
     }
 
+    #[allow(dead_code)] // fallback injection path
     pub async fn type_text(&self, text: &str, word_delay_ms: u64) -> Result<()> {
         self.type_text_with_progress(text, word_delay_ms, |_done, _total| {}).await
     }

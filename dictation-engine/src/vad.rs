@@ -71,6 +71,7 @@ pub mod silero {
     pub struct SileroVadDetector {
         session: Session,
         threshold: f32,
+        #[allow(dead_code)]
         sample_rate: i64,
         /// Internal state tensors for streaming
         state: Vec<f32>,
@@ -97,7 +98,7 @@ pub mod silero {
             let min_samples = if sample_rate == 8000 { 256 } else { 512 };
 
             // Initialize state: h and c tensors (2, 1, 64)
-            let state = vec![0.0f32; 2 * 1 * 64];
+            let state = vec![0.0f32; 2 * 64];
             let sr_tensor = vec![sample_rate as i64];
 
             Ok(Self {
@@ -244,7 +245,7 @@ pub mod silero {
 
         fn reset(&mut self) {
             self.buffer.clear();
-            self.state = vec![0.0f32; 2 * 1 * 64];
+            self.state = vec![0.0f32; 2 * 64];
         }
     }
 }

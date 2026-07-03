@@ -12,6 +12,12 @@ use anyhow::Result;
 /// no external dependencies or model files.
 pub struct PunctuationProcessor;
 
+impl Default for PunctuationProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PunctuationProcessor {
     pub fn new() -> Self {
         Self

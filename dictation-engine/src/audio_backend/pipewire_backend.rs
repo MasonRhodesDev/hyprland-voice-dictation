@@ -29,6 +29,7 @@ enum PwCommand {
 #[derive(Clone, Debug)]
 struct AudioSourceInfo {
     /// PipeWire node ID (for logging only)
+    #[allow(dead_code)] // logging/debug only
     id: u32,
     /// Node name (e.g., "alsa_input.usb-...")
     name: String,
@@ -51,6 +52,7 @@ pub struct PipewireBackend {
     /// Handle to the PipeWire thread.
     _thread: thread::JoinHandle<()>,
     /// Whether the stream is currently capturing.
+    #[allow(dead_code)] // held for lifecycle parity with cpal backend
     is_running: Arc<AtomicBool>,
 }
 
@@ -59,7 +61,7 @@ impl PipewireBackend {
     pub fn is_available() -> bool {
         pw::init();
 
-        match pw::main_loop::MainLoop::new(None) {
+        match pw::main_loop::MainLoopRc::new(None) {
             Ok(_) => {
                 debug!("PipeWire is available");
                 true
@@ -212,12 +214,12 @@ fn enumerate_audio_sources() -> Result<Vec<AudioSourceInfo>> {
     use std::cell::Cell;
 
     let mainloop =
-        pw::main_loop::MainLoop::new(None).context("Failed to create PipeWire MainLoop")?;
+        pw::main_loop::MainLoopRc::new(None).context("Failed to create PipeWire MainLoop")?;
 
-    let context =
-        pw::context::Context::new(&mainloop).context("Failed to create PipeWire Context")?;
+    let context = pw::context::ContextRc::new(&mainloop, None)
+        .context("Failed to create PipeWire Context")?;
 
-    let core = context.connect(None).context("Failed to connect to PipeWire daemon")?;
+    let core = context.connect_rc(None).context("Failed to connect to PipeWire daemon")?;
 
     let registry = core.get_registry().context("Failed to get PipeWire Registry")?;
 
@@ -323,12 +325,12 @@ fn run_pipewire_thread(
     target_serial: Option<u32>,
 ) -> Result<()> {
     let mainloop =
-        pw::main_loop::MainLoop::new(None).context("Failed to create PipeWire MainLoop")?;
+        pw::main_loop::MainLoopRc::new(None).context("Failed to create PipeWire MainLoop")?;
 
-    let context =
-        pw::context::Context::new(&mainloop).context("Failed to create PipeWire Context")?;
+    let context = pw::context::ContextRc::new(&mainloop, None)
+        .context("Failed to create PipeWire Context")?;
 
-    let core = context.connect(None).context("Failed to connect to PipeWire daemon")?;
+    let core = context.connect_rc(None).context("Failed to connect to PipeWire daemon")?;
 
     // Build audio format pod
     let format_buffer = build_audio_format_pod(sample_rate)?;
@@ -337,7 +339,7 @@ fn run_pipewire_thread(
 
     let stream_name = if target_serial.is_some() { "targeted" } else { "default" };
     let (stream, _listener) = create_capture_stream(
-        &core,
+        core.clone(),
         target_serial,
         stream_name,
         &format_buffer,
@@ -400,8 +402,9 @@ fn run_pipewire_thread(
 }
 
 /// Create a capture stream for a specific audio source.
+#[allow(clippy::too_many_arguments)]
 fn create_capture_stream(
-    core: &pw::core::Core,
+    core: pw::core::CoreRc,
     target_serial: Option<u32>,
     stream_name: &str,
     format_buffer: &[u8],
@@ -409,7 +412,7 @@ fn create_capture_stream(
     audio_tx: crossbeam_channel::Sender<Vec<i16>>,
     samples_dropped: Arc<AtomicU64>,
     is_running: Arc<AtomicBool>,
-) -> Result<(pw::stream::Stream, pw::stream::StreamListener<()>)> {
+) -> Result<(pw::stream::StreamRc, pw::stream::StreamListener<()>)> {
     let mut props = pw::properties::properties! {
         *pw::keys::MEDIA_TYPE => "Audio",
         *pw::keys::MEDIA_CATEGORY => "Capture",
@@ -422,7 +425,7 @@ fn create_capture_stream(
         props.insert("target.object", serial.to_string());
     }
 
-    let stream = pw::stream::Stream::new(core, stream_name, props)
+    let stream = pw::stream::StreamRc::new(core, stream_name, props)
         .context("Failed to create PipeWire stream")?;
 
     let is_running_clone = is_running.clone();
@@ -475,10 +478,8 @@ fn create_capture_stream(
                                 .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
                                 .collect();
 
-                            if !i16_samples.is_empty() {
-                                if audio_tx.try_send(i16_samples).is_err() {
-                                    samples_dropped.fetch_add(1, Ordering::Relaxed);
-                                }
+                            if !i16_samples.is_empty() && audio_tx.try_send(i16_samples).is_err() {
+                                samples_dropped.fetch_add(1, Ordering::Relaxed);
                             }
                         }
                     }

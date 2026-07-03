@@ -32,6 +32,7 @@ impl AppProfile {
         Self::for_category(category)
     }
 
+    #[allow(dead_code)] // planned per-app profiles
     pub fn detect() -> Self {
         // Synchronous fallback using window_detect
         Self::for_category(AppCategory::General)

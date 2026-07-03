@@ -292,14 +292,14 @@ async fn watch_substitution_file(word_sub: WordSubstitutionProcessor) -> Result<
 
     while let Some(event) = rx.recv().await {
         match event.kind {
-            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
-                if event.paths.iter().any(|p| p == &path) {
-                    info!("Substitution file changed: {:?}, reloading...", path);
-                    if let Err(e) = word_sub.reload() {
-                        warn!("Failed to reload substitutions: {}", e);
-                    } else {
-                        info!("Substitutions reloaded successfully");
-                    }
+            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                if event.paths.iter().any(|p| p == &path) =>
+            {
+                info!("Substitution file changed: {:?}, reloading...", path);
+                if let Err(e) = word_sub.reload() {
+                    warn!("Failed to reload substitutions: {}", e);
+                } else {
+                    info!("Substitutions reloaded successfully");
                 }
             }
             _ => {}
@@ -867,44 +867,74 @@ pub async fn run() -> Result<()> {
         )
     });
 
-    // Wait for GUI to initialize (with timeout)
+    // Wait for GUI to initialize (bounded). The GUI retries shell creation with
+    // backoff (e.g. when outputs are momentarily gone after resume), so a transient
+    // Error is not final — keep listening until Ready or the deadline.
     info!("Waiting for GUI to initialize...");
-    let gui_available = match tokio::time::timeout(Duration::from_secs(5), gui_status_rx.recv())
-        .await
-    {
-        Ok(Some(GuiStatus::Ready)) => {
-            info!("GUI ready");
-            true
+    let gui_init_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut gui_available = false;
+    let mut channel_open = true;
+    while channel_open {
+        match tokio::time::timeout_at(gui_init_deadline, gui_status_rx.recv()).await {
+            Ok(Some(GuiStatus::Ready)) => {
+                info!("GUI ready");
+                gui_available = true;
+                break;
+            }
+            Ok(Some(GuiStatus::Error(e))) => {
+                warn!("GUI initialization error (may retry): {}", e);
+            }
+            Ok(Some(GuiStatus::TransitionComplete { .. })) => {
+                // Early control traffic; not an init verdict.
+            }
+            Ok(Some(GuiStatus::ShuttingDown)) => {
+                warn!("GUI is shutting down during init, continuing without GUI");
+                break;
+            }
+            Ok(None) => {
+                warn!("GUI status channel closed, continuing without GUI");
+                channel_open = false;
+            }
+            Err(_) => {
+                warn!("GUI not ready within 15 seconds; continuing startup");
+                warn!("The GUI keeps retrying in the background and will attach when ready");
+                info!("You can still use voice-dictation start/stop/confirm commands normally");
+                break;
+            }
         }
-        Ok(Some(GuiStatus::Error(e))) => {
-            warn!("GUI initialization failed: {}", e);
-            warn!("Continuing without GUI overlay - daemon will operate in headless mode");
-            false
-        }
-        Ok(Some(GuiStatus::TransitionComplete { .. })) => {
-            warn!("Unexpected TransitionComplete during init, assuming GUI unavailable");
-            false
-        }
-        Ok(Some(GuiStatus::ShuttingDown)) => {
-            warn!("GUI is shutting down during init, continuing without GUI");
-            false
-        }
-        Ok(None) => {
-            warn!("GUI status channel closed, continuing without GUI");
-            false
-        }
-        Err(_) => {
-            warn!("GUI failed to start within 5 seconds (possible compositor compatibility issue)");
-            warn!("Continuing without GUI overlay - daemon will operate in headless mode");
-            info!("You can still use voice-dictation start/stop/confirm commands normally");
-            false
-        }
-    };
+    }
 
     health_state.gui_healthy.store(gui_available, Ordering::Relaxed);
 
     if !gui_available {
-        info!("Running in headless mode (no visual overlay)");
+        info!("Running without visual overlay until the GUI reports ready");
+    }
+
+    // Keep draining GUI status for the daemon's lifetime. This keeps gui_healthy
+    // accurate when the GUI becomes ready later (or degrades), and prevents the
+    // bounded status channel from filling up — a full channel would block the GUI
+    // thread's next blocking_send forever.
+    if channel_open {
+        let gui_health = Arc::clone(&health_state);
+        tokio::spawn(async move {
+            while let Some(status) = gui_status_rx.recv().await {
+                match status {
+                    GuiStatus::Ready => {
+                        info!("GUI reported ready");
+                        gui_health.gui_healthy.store(true, Ordering::Relaxed);
+                    }
+                    GuiStatus::Error(e) => {
+                        warn!("GUI reported error: {}", e);
+                        gui_health.gui_healthy.store(false, Ordering::Relaxed);
+                    }
+                    GuiStatus::ShuttingDown => {
+                        info!("GUI shutting down");
+                        gui_health.gui_healthy.store(false, Ordering::Relaxed);
+                    }
+                    GuiStatus::TransitionComplete { .. } => {}
+                }
+            }
+        });
     }
 
     // Pre-load engine at startup for instant recording start
@@ -948,7 +978,7 @@ pub async fn run() -> Result<()> {
     let mut audio_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut preview_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut media_was_playing = false;
-    let mut idle_inhibit: Option<idle_inhibit::IdleInhibitor> = None;
+    let mut _idle_inhibit: Option<idle_inhibit::IdleInhibitor> = None;
     let mut window_target: Option<window_target::WindowTarget> = None;
     let mut restart_requested = false;
     // Cancellation channel for graceful task shutdown
@@ -989,7 +1019,7 @@ pub async fn run() -> Result<()> {
                             }
                             media_was_playing = pause_media_if_playing();
 
-                            idle_inhibit =
+                            _idle_inhibit =
                                 match idle_inhibit::acquire("Active voice dictation session").await
                                 {
                                     Ok(i) => Some(i),
@@ -1254,7 +1284,7 @@ pub async fn run() -> Result<()> {
                         let _ = device_manager.stop();
                         let _ = gui_control_tx.send(GuiControl::SetHidden);
                         session = None;
-                        idle_inhibit = None;
+                        _idle_inhibit = None;
                         daemon_state = DaemonState::Idle;
                         let _ = state_tx.send(daemon_state);
                         info!("Recovered to Idle state after audio task crash");
@@ -1294,7 +1324,7 @@ pub async fn run() -> Result<()> {
                             let _ = gui_control_tx.send(GuiControl::SetHidden);
 
                             session = None;
-                            idle_inhibit = None;
+                            _idle_inhibit = None;
                             daemon_state = DaemonState::Idle;
                             let _ = state_tx.send(daemon_state);
                             info!("Returned to Idle state");
@@ -1554,7 +1584,7 @@ pub async fn run() -> Result<()> {
                 let _ = device_manager.stop();
 
                 session = None;
-                idle_inhibit = None;
+                _idle_inhibit = None;
                 engine_stopped_at = Some(Instant::now());
                 daemon_state = DaemonState::Idle;
                 let _ = state_tx.send(daemon_state);

@@ -46,9 +46,14 @@ grep -i layer ~/.config/hypr/hyprland.conf 2>/dev/null || echo "No layer config"
 3. Different system library versions (wayland-protocols, etc.)
 4. Missing or incompatible runtime library on mason-desktop
 
-## Design Issue to Fix
-The GUI thread sends `GuiStatus::Ready` before creating the Shell (line 160 in slint-gui/src/lib.rs).
-This should be moved to after successful Shell creation so the daemon knows if GUI initialization actually succeeded.
+## Design Issue (RESOLVED)
+~~The GUI thread sends `GuiStatus::Ready` before creating the Shell.~~
+`GuiStatus::Ready` is now sent only after successful Shell creation. Additionally:
+- Shell creation failures are retried in-process with backoff (handles "no outputs
+  yet" right after resume/hotplug) instead of leaving the daemon headless forever.
+- The daemon keeps draining `GuiStatus` for its whole lifetime, so a GUI that
+  becomes ready late is reflected in `gui_healthy` and the status channel can
+  never fill up and block the GUI thread.
 
 ## Commits
 - 6a226e2: Added comprehensive dependency checking

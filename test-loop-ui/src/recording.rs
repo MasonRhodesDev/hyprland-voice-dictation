@@ -39,7 +39,7 @@ pub fn list_recordings() -> Result<Vec<Recording>> {
         .filter(|e| e.path().extension().map(|ext| ext == "json").unwrap_or(false))
         .collect();
 
-    entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    entries.sort_by_key(|a| a.file_name());
 
     let mut recordings = Vec::new();
     for entry in entries {

@@ -8,7 +8,6 @@ use layer_shika::calloop::TimeoutAction;
 use layer_shika::prelude::*;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use slint_interpreter::Value;
-use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -91,7 +90,7 @@ fn spawn_ui_file_watcher(reload_flag: Arc<AtomicBool>) {
                         let is_slint = event
                             .paths
                             .iter()
-                            .any(|p| p.extension().map_or(false, |ext| ext == "slint"));
+                            .any(|p| p.extension().is_some_and(|ext| ext == "slint"));
                         if is_slint {
                             info!("UI file changed, triggering reload...");
                             reload_flag_clone.store(true, Ordering::SeqCst);
@@ -161,14 +160,36 @@ pub fn run_integrated(
     // Spawn UI file watcher for hot-reload
     spawn_ui_file_watcher(reload_flag.clone());
 
-    // Run the single persistent shell with reload support
-    // Send Ready signal AFTER Shell is created but BEFORE event loop starts
+    // Run the single persistent shell with reload support.
+    // Shell creation can fail transiently — most commonly right after resume or
+    // a monitor hotplug, when the compositor briefly reports zero outputs. Retry
+    // with backoff instead of leaving the daemon permanently headless.
     info!("Creating Wayland layer shell (this may take a few seconds)...");
-    match run_shell(shared_state, reload_flag, gui_status_tx) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            error!("Failed to create/run shell: {}", e);
-            Err(e)
+    let mut backoff = Duration::from_secs(1);
+    loop {
+        match run_shell(shared_state.clone(), reload_flag.clone(), gui_status_tx.clone()) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                // Slint's platform can only be installed once per process. If
+                // shell creation failed after installing it, retrying in-process
+                // can never succeed — escalate to a process restart via systemd.
+                if msg.to_lowercase().contains("platform") {
+                    error!(
+                        "Shell creation failed after Slint platform init ({msg}); \
+                         exiting for systemd restart"
+                    );
+                    std::process::exit(EXIT_CODE_SURFACES_LOST);
+                }
+
+                error!("Failed to create shell: {msg}; retrying in {}s", backoff.as_secs());
+                let _ = gui_status_tx.blocking_send(GuiStatus::Error(format!(
+                    "Wayland layer shell initialization failed: {msg}. Retrying in {}s.",
+                    backoff.as_secs()
+                )));
+                std::thread::sleep(backoff);
+                backoff = (backoff * 2).min(Duration::from_secs(30));
+            }
         }
     }
 }
@@ -324,8 +345,15 @@ const EXIT_CODE_RELOAD: i32 = 64;
 /// Exit code when all layer surfaces are lost (triggers systemd restart via Restart=on-failure)
 const EXIT_CODE_SURFACES_LOST: i32 = 1;
 
-/// Number of timer ticks (~16ms each) to wait before exiting after all surfaces are lost (~3s)
-const SURFACE_LOSS_GRACE_TICKS: u32 = 188;
+/// Number of timer ticks (~16ms each) to wait before exiting after all surfaces are
+/// lost (~10s). Generous on purpose: during resume or DP re-enumeration all outputs
+/// can disappear for several seconds and layer-shika recreates the surfaces when
+/// they come back — exiting early just restarts the daemon into the same churn.
+const SURFACE_LOSS_GRACE_TICKS: u32 = 625;
+
+/// How long compositor topology events must be quiet before we verify that every
+/// monitor has an overlay surface (and restart only if one is missing).
+const COMPOSITOR_SETTLE: Duration = Duration::from_secs(3);
 
 /// Properties the timer callback drives on the active surface. The UI file (which
 /// may be a user-customized copy under ~/.config) must declare all of these as
@@ -391,10 +419,11 @@ fn run_shell(
 
     // Fail loud on UI contract drift (e.g. a customized config copy missing newer
     // properties) instead of silently no-op'ing property updates. We still proceed
-    // with degraded rendering rather than crash-looping the daemon.
+    // with degraded rendering rather than crash-looping the daemon. Log only — a
+    // GuiStatus::Error here would make the daemon mark a GUI that goes on to run
+    // fine as permanently unavailable.
     if let Err(e) = validate_ui_contract(&ui_file) {
         error!("UI contract validation failed: {e}");
-        let _ = gui_status_tx.blocking_send(GuiStatus::Error(format!("UI contract drift: {e}")));
     } else {
         info!("UI contract OK ({} required properties present)", REQUIRED_UI_PROPERTIES.len());
     }
@@ -413,14 +442,7 @@ fn run_shell(
         .keyboard_interactivity(KeyboardInteractivity::None)
         .output_policy(OutputPolicy::AllOutputs) // Surfaces on all monitors
         .build()
-        .map_err(|e| {
-            let _ = gui_status_tx.blocking_send(GuiStatus::Error(format!(
-                "Wayland layer shell initialization failed: {}. \
-                This may indicate a compositor compatibility issue.",
-                e
-            )));
-            format!("Failed to create shell: {}", e)
-        })?;
+        .map_err(|e| format!("Failed to create shell: {}", e))?;
 
     info!("Shell created successfully");
 
@@ -442,8 +464,6 @@ fn run_shell(
 
     let mut empty_surface_ticks: u32 = 0;
     let mut gui_initialized = false;
-    // Track output fingerprints (description + scale) to detect monitor swaps
-    let mut output_fingerprints: HashMap<OutputHandle, (String, Option<i32>)> = HashMap::new();
     // Last gui_state we emitted a log line for, so we log transitions instead of every frame.
     let mut last_logged_state: Option<GuiState> = None;
     // Spinner rotation, advanced here each tick (capped at the timer rate) instead of via a
@@ -462,10 +482,42 @@ fn run_shell(
                 std::process::exit(EXIT_CODE_RELOAD);
             }
 
-            // Check for compositor events requiring restart (monitor add/remove, config reload)
-            if monitor::is_restart_needed() {
-                error!("Compositor change detected, exiting for systemd restart");
-                std::process::exit(EXIT_CODE_SURFACES_LOST);
+            // After compositor topology changes (monitor add/remove, config
+            // reload) settle, verify that every monitor has an overlay surface.
+            // layer-shika reconciles surfaces on Wayland output hotplug itself;
+            // restarting the process is the fallback, not the first response.
+            if let Some(changed_at) = monitor::pending_compositor_change() {
+                if changed_at.elapsed() >= COMPOSITOR_SETTLE {
+                    monitor::clear_compositor_change();
+                    if let Some(expected) = monitor::get_monitor_names_sync() {
+                        let present: std::collections::HashSet<String> = app_state
+                            .surfaces_with_keys()
+                            .filter_map(|(key, _)| {
+                                app_state
+                                    .get_output_info(key.output_handle)
+                                    .and_then(|info| info.name().map(|n| n.to_string()))
+                            })
+                            .collect();
+                        let missing: Vec<&String> =
+                            expected.iter().filter(|n| !present.contains(*n)).collect();
+                        if missing.is_empty() {
+                            info!(
+                                "Compositor change reconciled in place ({} surfaces, monitors {:?})",
+                                present.len(),
+                                expected
+                            );
+                        } else {
+                            error!(
+                                "Monitors {:?} have no overlay surface after compositor change, \
+                                 exiting for systemd restart",
+                                missing
+                            );
+                            std::process::exit(EXIT_CODE_SURFACES_LOST);
+                        }
+                    } else {
+                        debug!("Hyprland IPC unavailable, skipping surface verification");
+                    }
+                }
             }
 
             // Detect lost layer surfaces and exit for systemd restart
@@ -481,32 +533,6 @@ fn run_shell(
                         (empty_surface_ticks as u64 * 16) / 1000
                     );
                     std::process::exit(EXIT_CODE_SURFACES_LOST);
-                }
-            }
-
-            // Detect monitor configuration changes (physical swap, scale change)
-            if gui_initialized {
-                for (key, _surface_state) in app_state.surfaces_with_keys() {
-                    if let Some(info) = app_state.get_output_info(key.output_handle) {
-                        let description = info.description().unwrap_or_default().to_string();
-                        let scale = info.scale();
-                        let fingerprint = (description, scale);
-
-                        if let Some(prev) = output_fingerprints.get(&key.output_handle) {
-                            if *prev != fingerprint {
-                                error!(
-                                    "Monitor configuration changed on output {:?}: {:?} -> {:?}, exiting for systemd restart",
-                                    info.name().unwrap_or("unknown"),
-                                    prev,
-                                    fingerprint,
-                                );
-                                std::process::exit(EXIT_CODE_SURFACES_LOST);
-                            }
-                        } else {
-                            // First time seeing this output, record fingerprint
-                            output_fingerprints.insert(key.output_handle, fingerprint);
-                        }
-                    }
                 }
             }
 
@@ -526,7 +552,7 @@ fn run_shell(
 
                 // Graceful degradation: show on all monitors when detection unavailable
                 let use_all_monitors = active_monitor.is_none()
-                    || active_monitor.as_ref().map_or(false, |s| s.is_empty());
+                    || active_monitor.as_ref().is_some_and(|s| s.is_empty());
                 if use_all_monitors && state.gui_state != GuiState::Hidden {
                     debug!("Monitor detection unavailable, showing GUI on all monitors");
                 }
@@ -580,7 +606,7 @@ fn run_shell(
                         if state.gui_state == GuiState::Listening || state.gui_state == GuiState::PreListening {
                             // Convert spectrum values to a model
                             let spectrum_values: [Value; 8] = [
-                                Value::Number(state.spectrum_values.get(0).copied().unwrap_or(0.0) as f64),
+                                Value::Number(state.spectrum_values.first().copied().unwrap_or(0.0) as f64),
                                 Value::Number(state.spectrum_values.get(1).copied().unwrap_or(0.0) as f64),
                                 Value::Number(state.spectrum_values.get(2).copied().unwrap_or(0.0) as f64),
                                 Value::Number(state.spectrum_values.get(3).copied().unwrap_or(0.0) as f64),

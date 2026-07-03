@@ -48,7 +48,9 @@ hex = "0.4"
 # VAD model download
 reqwest = { version = "0.12", features = ["blocking"] }
 # PipeWire native audio backend
-pipewire = { version = "0.8", optional = true }
+# 0.10+ required: older releases pin bindgen 0.69, which generates broken
+# (opaque) bindings with libclang >= 19 and fails against PipeWire 1.6 headers.
+pipewire = { version = "0.10", optional = true }
 # System tray (StatusNotifierItem)
 ksni = { git = "https://github.com/iovxw/ksni.git", rev = "4d2320c", optional = true }
 futures-util = "0.3"
