@@ -36,7 +36,7 @@ resolver = "2"
 # Single source of truth for the released version. spec Version, PKGBUILD
 # pkgver, and Cargo.lock must match — packaging/build-srpm.sh gates on it.
 [workspace.package]
-version = "0.3.3"
+version = "0.3.4"
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]

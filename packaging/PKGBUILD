@@ -10,10 +10,11 @@
 # cargo dependencies themselves are fetched up front in prepare().
 
 pkgname=hyprland-voice-dictation
-pkgver=0.3.3
+pkgver=0.3.4
 pkgrel=1
 pkgdesc='Offline voice dictation for Hyprland with Parakeet speech recognition'
 arch=('x86_64')
+options=(!lto)  # onig's C objects become GCC LTO bitcode that ld.lld cannot read (same as game-mode/ring)
 url='https://github.com/MasonRhodesDev/hyprland-voice-dictation'
 license=('MIT' 'Apache-2.0')
 depends=('wtype' 'pipewire' 'alsa-lib' 'fontconfig' 'freetype2' 'libxkbcommon'
