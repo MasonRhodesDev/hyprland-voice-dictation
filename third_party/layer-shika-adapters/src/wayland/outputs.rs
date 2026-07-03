@@ -22,6 +22,17 @@ impl OutputMapping {
         handle
     }
 
+    /// Insert a mapping for an output whose handle was already allocated elsewhere
+    /// (e.g. by the `OutputManager` during hotplug registration), so both mappings
+    /// agree on the same handle.
+    pub fn insert_with_handle(&mut self, object_id: ObjectId, handle: OutputHandle) {
+        self.object_to_handle.insert(object_id, handle);
+    }
+
+    pub fn remove_by_handle(&mut self, handle: OutputHandle) {
+        self.object_to_handle.retain(|_, h| *h != handle);
+    }
+
     pub fn get(&self, object_id: &ObjectId) -> Option<OutputHandle> {
         self.object_to_handle.get(object_id).copied()
     }

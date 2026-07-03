@@ -401,10 +401,13 @@ impl Dispatch<WlRegistry, GlobalListContents> for AppState {
                     let output_id = output.id();
 
                     if let Some(manager) = state.output_manager() {
-                        let mut manager_ref = manager.borrow_mut();
-                        let handle = manager_ref.register_output(output, qhandle);
+                        let handle = manager.borrow_mut().register_output(output, qhandle);
                         info!("Registered hot-plugged output with handle {handle:?}");
 
+                        // Register in the app-level mapping/registry too, so
+                        // wl_output name/scale/description events arriving before
+                        // `Done` are captured instead of dropped.
+                        state.register_output_info(&output_id, handle);
                         state.register_registry_name(name, output_id);
                     } else {
                         info!("No output manager available yet (startup initialization)");

@@ -37,6 +37,7 @@ impl SurfaceState {
     ) {
         info!("Layer surface configured with compositor size: {width}x{height}");
         layer_surface.ack_configure(serial);
+        self.mark_configured();
 
         let output_width = self.output_size().width;
         let scale_factor = self.scale_factor();

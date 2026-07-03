@@ -1,5 +1,5 @@
 use std::rc::Rc;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use super::surface_builder::SurfaceStateBuilder;
 use super::component_state::ComponentState;
 use super::rendering_state::RenderingState;
@@ -28,6 +28,11 @@ pub struct SurfaceState {
     rendering: RenderingState<FemtoVGWindow>,
     event_context: RefCell<EventContext>,
     display_metrics: SharedDisplayMetrics,
+    /// Attaching a buffer before the first layer-surface configure is a protocol
+    /// error that kills the whole Wayland connection, so rendering is held back
+    /// until the first configure arrives. Matters for hotplug-created surfaces,
+    /// which are built mid-event-loop.
+    configured: Cell<bool>,
     #[allow(dead_code)]
     pointer: ManagedWlPointer,
 }
@@ -114,8 +119,13 @@ impl SurfaceState {
             rendering,
             event_context: RefCell::new(event_context),
             display_metrics,
+            configured: Cell::new(false),
             pointer,
         })
+    }
+
+    pub fn mark_configured(&self) {
+        self.configured.set(true);
     }
 
     pub fn update_size(&mut self, width: u32, height: u32) {
@@ -211,6 +221,9 @@ impl SurfaceState {
     }
 
     pub fn render_frame_if_dirty(&self) -> Result<()> {
+        if !self.configured.get() {
+            return Ok(());
+        }
         self.rendering.render_frame_if_dirty()
     }
 

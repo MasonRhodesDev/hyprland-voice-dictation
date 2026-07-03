@@ -1,6 +1,7 @@
 use crate::{
     errors::{LayerShikaError, Result},
     rendering::egl::context_factory::RenderContextFactory,
+    rendering::slint_integration::platform::CustomSlintPlatform,
     wayland::{
         config::{LayerSurfaceConfig, WaylandSurfaceConfig},
         shell_adapter::WaylandShellSystem,
@@ -43,6 +44,10 @@ pub struct OutputManagerContext {
     pub pointer: Rc<WlPointer>,
     pub shared_serial: Rc<SharedPointerSerial>,
     pub connection: Rc<Connection>,
+    /// Needed to hand hotplug-created windows to Slint: `ComponentDefinition::create()`
+    /// obtains its window adapter from the platform's pending-window queue, so any
+    /// window built after startup must be pushed there first.
+    pub platform: Rc<CustomSlintPlatform>,
 }
 
 impl OutputManagerContext {
@@ -125,10 +130,21 @@ impl OutputManager {
         let handle = pending_output.info.handle();
         let mut info = pending_output.info;
 
-        let is_primary = app_state.output_registry().is_empty();
+        let is_primary = app_state
+            .get_output_info(handle)
+            .map_or_else(|| app_state.output_registry().is_empty(), OutputInfo::is_primary);
         info.set_primary(is_primary);
 
-        if !self.config.output_policy.should_render(&info) {
+        // Prefer the live registry entry (populated by wl_output events since the
+        // Global event) over the bare pending info, so policies that look at
+        // name/primary see real data.
+        let policy_allows = app_state
+            .get_output_info(handle)
+            .map_or_else(
+                || self.config.output_policy.should_render(&info),
+                |live| self.config.output_policy.should_render(live),
+            );
+        if !policy_allows {
             info!(
                 "Skipping output {:?} due to output policy (primary: {})",
                 output_id, is_primary
@@ -181,6 +197,11 @@ impl OutputManager {
             &self.context.render_factory,
         )?;
 
+        // Queue the window with the Slint platform BEFORE creating the component:
+        // ComponentDefinition::create() pulls its window adapter from this queue.
+        // Without this, hotplug surface creation fails with "no pending popup".
+        self.context.platform.add_window(Rc::clone(&window));
+
         let mut builder = SurfaceStateBuilder::new()
             .with_component_definition(self.config.component_definition.clone())
             .with_compilation_result(self.config.compilation_result.clone())
@@ -219,7 +240,14 @@ impl OutputManager {
     }
 
     pub fn remove_output(&mut self, output_id: &ObjectId, app_state: &mut AppState) {
-        if let Some(handle) = self.output_mapping.remove(output_id) {
+        // Outputs bound at startup only exist in the app-level mapping, so fall
+        // back to it when this manager never registered the output itself.
+        let handle = self
+            .output_mapping
+            .remove(output_id)
+            .or_else(|| app_state.get_handle_by_output_id(output_id));
+
+        if let Some(handle) = handle {
             info!("Removing output {handle:?} (id: {output_id:?})");
 
             let removed_windows = app_state.remove_output(handle);
@@ -231,8 +259,9 @@ impl OutputManager {
                     removed_windows.len()
                 );
             }
-        } else {
-            self.pending_outputs.borrow_mut().remove(output_id);
+        }
+
+        if self.pending_outputs.borrow_mut().remove(output_id).is_some() {
             info!("Removed pending output {output_id:?}");
         }
     }

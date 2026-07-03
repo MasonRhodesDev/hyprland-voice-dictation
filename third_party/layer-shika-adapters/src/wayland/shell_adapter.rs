@@ -65,6 +65,7 @@ struct OutputManagerParams<'a> {
     popup_context: &'a PopupContext,
     pointer: &'a Rc<WlPointer>,
     shared_serial: &'a Rc<SharedPointerSerial>,
+    platform: &'a Rc<CustomSlintPlatform>,
 }
 
 pub struct WaylandShellSystem {
@@ -327,9 +328,21 @@ impl WaylandShellSystem {
             popup_context: &popup_context,
             pointer: &pointer,
             shared_serial: &shared_serial,
+            platform: &platform,
         });
 
         app_state.set_output_manager(Rc::new(RefCell::new(output_manager)));
+
+        // Track registry names for the outputs bound at startup so a later
+        // GlobalRemove can find and clean them up (hotplug removals of
+        // originally-present monitors).
+        for (registry_name, output) in global_ctx
+            .output_registry_names
+            .iter()
+            .zip(global_ctx.outputs.iter())
+        {
+            app_state.register_registry_name(*registry_name, output.id());
+        }
 
         Ok(app_state)
     }
@@ -395,9 +408,18 @@ impl WaylandShellSystem {
                 popup_context: &popup_context,
                 pointer: &pointer,
                 shared_serial: &shared_serial,
+                platform: &platform,
             });
 
             app_state.set_output_manager(Rc::new(RefCell::new(output_manager)));
+        }
+
+        for (registry_name, output) in global_ctx
+            .output_registry_names
+            .iter()
+            .zip(global_ctx.outputs.iter())
+        {
+            app_state.register_registry_name(*registry_name, output.id());
         }
 
         Ok(app_state)
@@ -503,6 +525,7 @@ impl WaylandShellSystem {
             pointer: Rc::clone(params.pointer),
             shared_serial: Rc::clone(params.shared_serial),
             connection: Rc::new(params.connection.clone()),
+            platform: Rc::clone(params.platform),
         };
 
         OutputManager::new(
@@ -601,7 +624,7 @@ impl WaylandShellSystem {
             update_timers_and_animations();
 
             for surface in self.state.all_outputs() {
-                surface.window().render_frame_if_dirty().map_err(|e| {
+                surface.render_frame_if_dirty().map_err(|e| {
                     RenderingError::Operation {
                         message: e.to_string(),
                     }
@@ -616,7 +639,6 @@ impl WaylandShellSystem {
         update_timers_and_animations();
         for surface in self.state.all_outputs() {
             surface
-                .window()
                 .render_frame_if_dirty()
                 .map_err(|e| RenderingError::Operation {
                     message: e.to_string(),
@@ -688,7 +710,6 @@ impl WaylandShellSystem {
 
         for surface in shared_data.all_outputs() {
             surface
-                .window()
                 .render_frame_if_dirty()
                 .map_err(|e| RenderingError::Operation {
                     message: e.to_string(),

@@ -78,6 +78,22 @@ impl AppState {
         self.registry_name_to_output_id.remove(&name)
     }
 
+    /// Register an output in the app-level mapping and registry as soon as it is
+    /// bound, before its surface exists. Without this, `wl_output` events (name,
+    /// description, scale) that arrive between the registry `Global` and `Done`
+    /// events have nowhere to land and are silently dropped, leaving hotplugged
+    /// outputs permanently nameless.
+    pub fn register_output_info(&mut self, output_id: &ObjectId, handle: OutputHandle) {
+        self.output_mapping
+            .insert_with_handle(output_id.clone(), handle);
+        if self.output_registry.get(handle).is_none() {
+            let is_primary = self.output_registry.is_empty();
+            let mut info = OutputInfo::new(handle);
+            info.set_primary(is_primary);
+            self.output_registry.add(info);
+        }
+    }
+
     pub fn add_shell_surface(
         &mut self,
         output_id: &ObjectId,
@@ -121,6 +137,7 @@ impl AppState {
 
     pub fn remove_output(&mut self, handle: OutputHandle) -> Vec<PerOutputSurface> {
         self.output_registry.remove(handle);
+        self.output_mapping.remove_by_handle(handle);
 
         let keys_to_remove: Vec<_> = self
             .surfaces

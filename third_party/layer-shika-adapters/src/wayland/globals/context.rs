@@ -19,6 +19,9 @@ use crate::wayland::surfaces::app_state::AppState;
 pub struct GlobalContext {
     pub compositor: WlCompositor,
     pub outputs: Vec<WlOutput>,
+    /// Registry names (parallel to `outputs`) so removals of startup-bound
+    /// outputs can be matched to their `GlobalRemove` events.
+    pub output_registry_names: Vec<u32>,
     pub layer_shell: ZwlrLayerShellV1,
     pub seat: WlSeat,
     pub xdg_wm_base: Option<XdgWmBase>,
@@ -110,6 +113,7 @@ impl GlobalContext {
         Ok(Self {
             compositor,
             outputs,
+            output_registry_names: output_names,
             layer_shell,
             seat,
             xdg_wm_base,
