@@ -1,0 +1,66 @@
+# cargo-deny configuration — supply-chain gate for a daemon that types into
+# arbitrary windows. Run locally with `cargo deny check`; CI runs it on PRs,
+# pushes, and weekly.
+
+[advisories]
+version = 2
+yanked = "deny"
+# Add RUSTSEC IDs here (with a justifying comment) only if an advisory is
+# confirmed not to affect us and a fix isn't yet available.
+ignore = []
+
+[licenses]
+version = 2
+# Set actually present in the tree (see `cargo metadata`). Beyond the usual
+# permissive licenses this GUI/audio/ML dependency tree pulls in:
+#   - MPL-2.0 (cssparser, option-ext, colored) — file-level copyleft, fine
+#     for an unmodified dependency in a binary.
+#   - GPL-3.0 (slint under its GPL option, hyprland-rs) and AGPL-3.0
+#     (layer-shika) — the shipped binary is effectively (A)GPL-3 as a
+#     combined work; acceptable for this open-source project since the full
+#     source is published.
+#   - LGPL-2.1 WITH GCC-exception-2.0 (systemd/libsystemd-sys bindings).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+    "NCSA",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "AGPL-3.0-or-later",
+    "LGPL-2.1-or-later WITH GCC-exception-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace's own crates (dictation-engine, slint-gui, ...) are path deps
+# with no version — that's a "wildcard" to cargo-deny. Exempt local path
+# deps; still catch a real `foo = "*"` registry wildcard.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Pinned/owned git dependencies (also vendored into the SRPM by
+# packaging/build-srpm.sh):
+#   - schema-tui: our own config-TUI crate
+#   - ksni: tray crate pinned to a rev for a fix not yet on crates.io
+allow-git = [
+    "https://github.com/MasonRhodesDev/schema-tui.git",
+    "https://github.com/iovxw/ksni.git",
+]

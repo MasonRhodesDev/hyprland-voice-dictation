@@ -1,8 +1,10 @@
 # Rust
 /target/
-Cargo.lock
 **/*.rs.bk
 *.pdb
+
+# Correction-engine e2e container output
+docker-output/
 
 # IDE
 .vscode/

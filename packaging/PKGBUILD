@@ -1,0 +1,58 @@
+# Maintainer: Mason Rhodes <mrhodesdev@gmail.com>
+#
+# Arch package for hyprland-voice-dictation. Same payload as the Fedora RPM
+# (packaging/hyprland-voice-dictation.spec); all paths are identical across
+# both distros. Usable directly with makepkg from this directory after a
+# release tag is pushed.
+#
+# NOTE: the `ort` crate's build script downloads prebuilt ONNX Runtime
+# binaries at build time, so build() needs network access even though the
+# cargo dependencies themselves are fetched up front in prepare().
+
+pkgname=hyprland-voice-dictation
+pkgver=0.3.0
+pkgrel=1
+pkgdesc='Offline voice dictation for Hyprland with Parakeet speech recognition'
+arch=('x86_64')
+url='https://github.com/MasonRhodesDev/hyprland-voice-dictation'
+license=('MIT' 'Apache-2.0')
+depends=('wtype' 'pipewire' 'alsa-lib' 'fontconfig' 'freetype2' 'libxkbcommon'
+         'wayland' 'systemd')
+makedepends=('rust' 'cargo' 'pkg-config')
+optdepends=('playerctl: auto-pause media during recording')
+provides=('voice-dictation')
+conflicts=('voice-dictation')
+install="$pkgname.install"
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP') # pin on release: updpkgsums
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/voice-dictation "$pkgdir/usr/bin/voice-dictation"
+  install -Dm644 dist/voice-dictation.service \
+    "$pkgdir/usr/lib/systemd/user/voice-dictation.service"
+  install -Dm755 scripts/download-parakeet-model.sh \
+    "$pkgdir/usr/share/$pkgname/download-parakeet-model.sh"
+  install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

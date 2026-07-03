@@ -1,0 +1,11 @@
+# rpmlint filters for hyprland-voice-dictation. Lets CI gate on rpmlint
+# without tripping over domain vocabulary and our deliberate vendored-source
+# layout.
+
+# Domain terms rpmlint's dictionary doesn't know (Hyprland, Wayland, wtype,
+# Parakeet, ONNX, PipeWire, systemd, ...). Not real defects.
+addFilter("spelling-error")
+
+# Source1 is the cargo-vendor tarball produced by build-srpm.sh, not a URL —
+# intentional (offline, reproducible dependency resolution).
+addFilter("invalid-url Source1")
