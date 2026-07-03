@@ -18,7 +18,7 @@
 %bcond_without check
 
 Name:           hyprland-voice-dictation
-Version:        0.3.2
+Version:        0.3.3
 Release:        1%{?dist}
 Summary:        Offline voice dictation for Hyprland with Parakeet speech recognition
 # Project code is MIT OR Apache-2.0; the binary links a large dependency
@@ -100,6 +100,9 @@ install -Dpm0755 scripts/download-parakeet-model.sh %{buildroot}%{_datadir}/%{na
 %{_datadir}/%{name}/download-parakeet-model.sh
 
 %changelog
+* Fri Jul 03 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.3.3-1
+- pipewire-rs 0.10 migration (builds against pipewire 1.6)
+
 * Fri Jul 03 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.3.2-1
 - Fix first-run CI gates (see git log)
 
