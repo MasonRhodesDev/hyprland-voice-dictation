@@ -25,7 +25,34 @@ Optional: `playerctl` for media pause/resume.
 
 ## Installation
 
-### From source
+### Arch Linux
+
+Add the [mason](https://github.com/MasonRhodesDev/arch-repo) pacman repository to `/etc/pacman.conf`:
+
+```ini
+[mason]
+SigLevel = Optional TrustAll
+Server = https://masonrhodesdev.github.io/arch-repo/x86_64
+```
+
+Then install:
+
+```bash
+sudo pacman -Sy hyprland-voice-dictation
+```
+
+### Fedora
+
+```bash
+sudo dnf copr enable solaris765/hyprland-voice-dictation
+sudo dnf install hyprland-voice-dictation
+```
+
+Both packages install the binary to `/usr/bin/voice-dictation`, the systemd
+user unit, and the standalone model download script under
+`/usr/share/hyprland-voice-dictation/`.
+
+### From source (development)
 
 ```bash
 git clone https://github.com/MasonRhodesDev/hyprland-voice-dictation
@@ -55,18 +82,8 @@ make uninstall
 > the keybind silently misbehave. Use `make install`, which keeps a single binary in
 > `~/.local/bin`. Run `make doctor` (or `voice-dictation diagnose`) any time the keybind
 > seems dead — it reports duplicate binaries on `PATH` and client/daemon skew.
-
-### From release tarball
-
-Download the latest release tarball from the [releases page](https://github.com/MasonRhodesDev/hyprland-voice-dictation/releases), extract, and copy the binary:
-
-```bash
-tar -xzf hyprland-voice-dictation-*-x86_64-linux.tar.gz
-cd hyprland-voice-dictation-*/
-install -Dm755 voice-dictation ~/.local/bin/voice-dictation
-install -Dm644 voice-dictation.service ~/.config/systemd/user/voice-dictation.service
-systemctl --user daemon-reload
-```
+> The packaged installs above are immune to this: they own the single copy in
+> `/usr/bin`. Don't mix a dev install with a packaged one.
 
 ## Download the Model
 
@@ -82,6 +99,8 @@ Alternatively, use the standalone shell script (requires `curl`):
 
 ```bash
 bash scripts/download-parakeet-model.sh
+# or, from a packaged install:
+bash /usr/share/hyprland-voice-dictation/download-parakeet-model.sh
 ```
 
 ## Setup
@@ -195,9 +214,12 @@ dictation-engine/             Core library
   src/post_processing/        Grammar and text cleanup
 dictation-types/              Shared types
 slint-gui/                    Overlay HUD (Slint UI)
+dist/
+  voice-dictation.service     systemd user unit (packaged payload)
 packaging/
-  arch/PKGBUILD               Arch Linux package
-  systemd/voice-dictation.service
+  PKGBUILD                    Arch Linux package
+  hyprland-voice-dictation.spec  Fedora RPM spec (COPR)
+  build-srpm.sh               SRPM builder (vendored cargo deps)
 scripts/
   check-deps.sh               Dependency checker
   download-parakeet-model.sh  Standalone model downloader
