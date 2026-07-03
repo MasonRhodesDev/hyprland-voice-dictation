@@ -4,7 +4,7 @@ After=pipewire.service graphical-session.target
 
 [Service]
 Type=notify
-ExecStart=%h/.local/bin/voice-dictation daemon
+ExecStart=/usr/bin/voice-dictation daemon
 Restart=on-failure
 RestartSec=5
 # Exit code 64 = UI reload requested, should trigger restart
