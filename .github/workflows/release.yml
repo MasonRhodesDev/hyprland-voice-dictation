@@ -2,108 +2,12 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag to release (e.g. v1.2.3)'
-        required: true
+    tags: ['v*']
 
 permissions:
   contents: write
 
 jobs:
   release:
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev \
-            libfontconfig1-dev \
-            libfreetype-dev \
-            libpipewire-0.3-dev \
-            libxkbcommon-dev \
-            libwayland-dev \
-            libsystemd-dev \
-            pkg-config
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build
-        run: cargo build --release
-
-      - name: Get version from tag
-        id: version
-        run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-
-      - name: Create release tarball
-        run: |
-          PKG="hyprland-voice-dictation-${{ steps.version.outputs.version }}"
-          mkdir -p "release-pkg/$PKG"
-
-          cp target/release/voice-dictation "release-pkg/$PKG/"
-          cp packaging/systemd/voice-dictation.service "release-pkg/$PKG/"
-          cp packaging/arch/PKGBUILD "release-pkg/$PKG/"
-          cp scripts/download-parakeet-model.sh "release-pkg/$PKG/"
-          cp README.md "release-pkg/$PKG/"
-          cp LICENSE-MIT "release-pkg/$PKG/"
-          cp LICENSE-APACHE "release-pkg/$PKG/"
-
-          cd release-pkg
-          tar -czf "$PKG-x86_64-linux.tar.gz" "$PKG/"
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: Hyprland Voice Dictation ${{ steps.version.outputs.tag }}
-          body: |
-            ## Installation
-
-            ### Arch Linux (PKGBUILD)
-
-            Download the tarball and run `makepkg -si` from the included `PKGBUILD`, or use an AUR helper once published.
-
-            ### From source
-
-            ```bash
-            git clone https://github.com/MasonRhodesDev/hyprland-voice-dictation
-            cd hyprland-voice-dictation
-            make install
-            ```
-
-            ### Download model
-
-            After installing the binary:
-            ```bash
-            voice-dictation download-model
-            systemctl --user enable --now voice-dictation
-            ```
-
-            ## Files
-
-            - `hyprland-voice-dictation-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz` — pre-built binary + PKGBUILD + scripts
-          files: |
-            release-pkg/hyprland-voice-dictation-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    uses: MasonRhodesDev/packaging-workflows/.github/workflows/release.yml@main
+    secrets: inherit
