@@ -1,6 +1,6 @@
 [package]
 name = "voice-dictation"
-version = "0.3.0"
+version.workspace = true
 edition = "2021"
 
 [features]
@@ -30,6 +30,11 @@ members = [
     "correction-engine",
 ]
 resolver = "2"
+
+# Single source of truth for the released version. spec Version, PKGBUILD
+# pkgver, and Cargo.lock must match — packaging/build-srpm.sh gates on it.
+[workspace.package]
+version = "0.3.0"
 
 [patch.crates-io]
 layer-shika-adapters = { path = "vendor/layer-shika-adapters" }
