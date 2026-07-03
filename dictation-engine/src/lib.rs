@@ -981,6 +981,9 @@ pub async fn run() -> Result<()> {
     let mut _idle_inhibit: Option<idle_inhibit::IdleInhibitor> = None;
     let mut window_target: Option<window_target::WindowTarget> = None;
     let mut restart_requested = false;
+    // Last injection context, kept so SnapshotCorrection can re-arm monitoring
+    #[cfg(feature = "correction")]
+    let mut last_injection: Option<correction_engine::InjectionContext> = None;
     // Cancellation channel for graceful task shutdown
     let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
 
@@ -1251,6 +1254,29 @@ pub async fn run() -> Result<()> {
                             restart_requested = true;
                             let _ = gui_control_tx.send(GuiControl::Exit);
                             break;
+                        }
+                        #[cfg(feature = "correction")]
+                        DaemonCommand::SnapshotCorrection => {
+                            match (correction_monitor.as_ref(), last_injection.clone()) {
+                                (Some(monitor), Some(ctx)) => {
+                                    // Re-arm the monitoring window against the last injection
+                                    // so edits made after the original window expired are
+                                    // still captured as corrections.
+                                    let context = correction_engine::InjectionContext {
+                                        timestamp: chrono::Utc::now(),
+                                        instant: Instant::now(),
+                                        ..ctx
+                                    };
+                                    let _handle = monitor.start_monitoring(context);
+                                    info!("Manual snapshot: re-armed correction monitoring for last injection");
+                                }
+                                (None, _) => {
+                                    warn!("SnapshotCorrection requested but correction learning is disabled");
+                                }
+                                (_, None) => {
+                                    warn!("SnapshotCorrection requested but nothing has been dictated yet");
+                                }
+                            }
                         }
                         _ => {
                             warn!("Ignoring unexpected command in Idle state");
@@ -1553,6 +1579,7 @@ pub async fn run() -> Result<()> {
                                 .unwrap_or_default(),
                             window_title: String::new(),
                         };
+                        last_injection = Some(context.clone());
                         let _handle = monitor.start_monitoring(context);
                         debug!(
                             "Correction monitoring started for {}s",

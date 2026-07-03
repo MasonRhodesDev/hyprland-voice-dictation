@@ -71,7 +71,7 @@ enum Commands {
         recording: Option<String>,
     },
     #[command(
-        about = "Trigger a manual correction snapshot (compare current text field to last injection)"
+        about = "Re-arm correction monitoring for the last dictation (captures late edits as corrections)"
     )]
     SnapshotCorrection,
     #[command(about = "Show correction learning statistics")]
@@ -1096,7 +1096,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::runtime::Runtime::new()?
                 .block_on(call_dbus_method("SnapshotCorrection"))
                 .map_err(dbus_error_with_hint)?;
-            println!("Correction snapshot triggered");
+            println!("Correction monitoring re-armed for the last dictation");
         }
         Commands::CorrectionStats => {
             let home = std::env::var("HOME")?;

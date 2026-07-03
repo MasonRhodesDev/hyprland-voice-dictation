@@ -43,7 +43,7 @@ pub enum DaemonCommand {
     Restart,
     /// Switch audio input device. None = system default, Some(name) = specific device.
     SwitchDevice(Option<String>),
-    /// Trigger a manual correction snapshot (compare current text field to last injection).
+    /// Re-arm correction monitoring against the last injection (captures late edits).
     SnapshotCorrection,
 }
 
@@ -127,7 +127,7 @@ impl VoiceDictationService {
         Ok((gui_status.to_string(), engine_status.to_string(), audio_status.to_string()))
     }
 
-    /// Trigger a manual correction snapshot
+    /// Re-arm correction monitoring against the last injection
     async fn snapshot_correction(&self) -> zbus::fdo::Result<()> {
         info!("D-Bus: SnapshotCorrection called");
         let sender = self.command_sender.lock().await;
