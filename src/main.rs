@@ -81,6 +81,60 @@ enum Commands {
         #[command(subcommand)]
         command: CorrectionCommands,
     },
+    #[command(
+        about = "Manage the user dictionary (words exempt from spell checking)",
+        long_about = "Manage the user dictionary (words exempt from spell checking).\n\n\
+                      Edits ~/.local/share/voice-dictation/user_words.txt directly. The running\n\
+                      daemon hot-reloads the file via its watcher — no restart needed."
+    )]
+    Dict {
+        #[command(subcommand)]
+        command: DictCommands,
+    },
+    #[command(
+        about = "Manage word substitutions (spoken phrase -> replacement)",
+        long_about = "Manage word substitutions (spoken phrase -> replacement).\n\n\
+                      Edits ~/.local/share/voice-dictation/substitutions.txt directly. The running\n\
+                      daemon hot-reloads the file via its watcher — no restart needed."
+    )]
+    Subst {
+        #[command(subcommand)]
+        command: SubstCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum DictCommands {
+    #[command(about = "Add a word to the user dictionary")]
+    Add {
+        #[arg(help = "Word to add")]
+        word: String,
+    },
+    #[command(about = "Remove a word from the user dictionary")]
+    Remove {
+        #[arg(help = "Word to remove")]
+        word: String,
+    },
+    #[command(about = "List all user dictionary words")]
+    List,
+}
+
+#[derive(Subcommand)]
+enum SubstCommands {
+    #[command(about = "Add a substitution (spoken phrase -> replacement)")]
+    Add {
+        #[arg(help = "Spoken phrase as transcribed (e.g. \"shay moy\")")]
+        spoken: String,
+        #[arg(help = "Replacement text (e.g. \"chezmoi\")")]
+        replacement: String,
+    },
+    #[command(about = "Remove a substitution by its spoken phrase")]
+    Remove {
+        #[arg(help = "Spoken phrase of the substitution to remove")]
+        spoken: String,
+    },
+    #[command(about = "List all substitutions")]
+    List,
 }
 
 #[derive(Subcommand)]
@@ -601,6 +655,152 @@ fn debug_play(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn dict_command(command: DictCommands) -> Result<(), Box<dyn std::error::Error>> {
+    use dictation_engine::user_dictionary::UserDictionary;
+
+    let dict = UserDictionary::new()?;
+
+    match command {
+        DictCommands::Add { word } => {
+            let word = word.trim().to_lowercase();
+            if word.is_empty() {
+                return Err("Word must not be empty".into());
+            }
+            if dict.app_words().contains(&word) {
+                println!("'{}' is already in the user dictionary", word);
+                return Ok(());
+            }
+            dict.add(&word)?;
+            println!("Added '{}' to the user dictionary (daemon hot-reloads automatically)", word);
+        }
+        DictCommands::Remove { word } => {
+            let word = word.trim().to_lowercase();
+            if !dict.app_words().contains(&word) {
+                println!("'{}' is not in the user dictionary", word);
+                return Ok(());
+            }
+            dict.remove(&word)?;
+            println!(
+                "Removed '{}' from the user dictionary (daemon hot-reloads automatically)",
+                word
+            );
+        }
+        DictCommands::List => {
+            let words = dict.app_words();
+            if words.is_empty() {
+                println!("User dictionary is empty.");
+            } else {
+                for word in &words {
+                    println!("{}", word);
+                }
+                println!("\n{} word(s)", words.len());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract the spoken part of a `spoken -> replacement` line, normalized to
+/// lowercase words. Returns None for comments, blanks, and malformed lines.
+fn parse_substitution_spoken(line: &str) -> Option<Vec<String>> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') || !trimmed.contains("->") {
+        return None;
+    }
+    let spoken = trimmed.split("->").next()?.trim();
+    if spoken.is_empty() {
+        return None;
+    }
+    Some(spoken.split_whitespace().map(|w| w.to_lowercase()).collect())
+}
+
+fn subst_command(command: SubstCommands) -> Result<(), Box<dyn std::error::Error>> {
+    use dictation_engine::post_processing::WordSubstitutionProcessor;
+
+    let path = WordSubstitutionProcessor::get_substitutions_path()?;
+
+    match command {
+        SubstCommands::Add { spoken, replacement } => {
+            let spoken = spoken.trim();
+            let replacement = replacement.trim();
+            if spoken.is_empty() || replacement.is_empty() {
+                return Err("Spoken phrase and replacement must not be empty".into());
+            }
+
+            let spoken_words: Vec<String> =
+                spoken.split_whitespace().map(|w| w.to_lowercase()).collect();
+            let entries = WordSubstitutionProcessor::load_substitutions(&path)?;
+            if let Some((_, existing)) = entries.iter().find(|(words, _)| *words == spoken_words) {
+                println!(
+                    "Substitution already exists: {} -> {}\nRemove it first: voice-dictation subst remove \"{}\"",
+                    spoken_words.join(" "),
+                    existing,
+                    spoken_words.join(" ")
+                );
+                return Ok(());
+            }
+
+            let mut content =
+                if path.exists() { fs::read_to_string(&path)? } else { String::new() };
+            if !content.is_empty() && !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str(&format!("{} -> {}\n", spoken, replacement));
+            fs::write(&path, content)?;
+            println!(
+                "Added substitution: {} -> {} (daemon hot-reloads automatically)",
+                spoken, replacement
+            );
+        }
+        SubstCommands::Remove { spoken } => {
+            if !path.exists() {
+                println!("No substitutions file found at {}", path.display());
+                return Ok(());
+            }
+            let spoken_words: Vec<String> =
+                spoken.split_whitespace().map(|w| w.to_lowercase()).collect();
+
+            let content = fs::read_to_string(&path)?;
+            let kept: Vec<&str> = content
+                .lines()
+                .filter(|line| parse_substitution_spoken(line).as_ref() != Some(&spoken_words))
+                .collect();
+
+            let removed = content.lines().count() - kept.len();
+            if removed == 0 {
+                println!("No substitution found for '{}'", spoken_words.join(" "));
+                return Ok(());
+            }
+
+            let mut new_content = kept.join("\n");
+            if !new_content.is_empty() {
+                new_content.push('\n');
+            }
+            fs::write(&path, new_content)?;
+            println!(
+                "Removed {} substitution(s) for '{}' (daemon hot-reloads automatically)",
+                removed,
+                spoken_words.join(" ")
+            );
+        }
+        SubstCommands::List => {
+            let entries = WordSubstitutionProcessor::load_substitutions(&path)?;
+            if entries.is_empty() {
+                println!("No substitutions defined.");
+                println!("File: {}", path.display());
+            } else {
+                for (spoken_words, replacement) in &entries {
+                    println!("{} -> {}", spoken_words.join(" "), replacement);
+                }
+                println!("\n{} substitution(s)  File: {}", entries.len(), path.display());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Find all `voice-dictation` executables on `$PATH`, deduplicated by their
 /// canonical target. Returns the PATH-order entries so the first one (the one
 /// that actually wins) is listed first.
@@ -884,6 +1084,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             DebugCommands::Play { filename } => debug_play(&filename)?,
         },
         Commands::Diagnose => diagnose()?,
+        Commands::Dict { command } => dict_command(command)?,
+        Commands::Subst { command } => subst_command(command)?,
         Commands::DownloadModel => download_model()?,
         Commands::TestLoop { recording } => {
             let rt = tokio::runtime::Runtime::new()?;
