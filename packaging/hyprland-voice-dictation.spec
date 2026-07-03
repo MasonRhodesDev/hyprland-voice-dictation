@@ -18,7 +18,7 @@
 %bcond_without check
 
 Name:           hyprland-voice-dictation
-Version:        0.3.0
+Version:        0.3.1
 Release:        1%{?dist}
 Summary:        Offline voice dictation for Hyprland with Parakeet speech recognition
 # Project code is MIT OR Apache-2.0; the binary links a large dependency
@@ -99,6 +99,9 @@ install -Dpm0755 scripts/download-parakeet-model.sh %{buildroot}%{_datadir}/%{na
 %{_datadir}/%{name}/download-parakeet-model.sh
 
 %changelog
+* Fri Jul 03 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.3.1-1
+- Standardized packaging release: shared CI, arch-repo + COPR pipeline
+
 * Thu Jul 02 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.3.0-1
 - Standardized packaging: PKGBUILD + RPM spec share the dist/ payload,
   systemd user unit uses the packaged /usr/bin/voice-dictation path
