@@ -10,6 +10,8 @@
 //! - **`event_filter`**: Pure functions for filtering events by time/position/app
 //! - **`store`**: JSON persistence with frequency counting and auto-promotion
 //! - **`connection`**: AT-SPI2 bus abstraction (trait-based for testability)
+//! - **`wezterm`**: wezterm-native backend (mux CLI pane polling) for
+//!   terminals AT-SPI2 cannot see
 //!
 //! # Usage
 //!
@@ -39,6 +41,7 @@ pub mod diff;
 pub mod event_filter;
 pub mod store;
 pub mod types;
+pub mod wezterm;
 
 // Re-export primary API types
 pub use connection::{AtspiConnection, MockTextChangeSource, TextChangeSource};
@@ -46,6 +49,7 @@ pub use store::CorrectionStore;
 pub use types::{
     CorrectionPair, CorrectionStats, InjectionContext, MonitorConfig, TextChangeEvent,
 };
+pub use wezterm::{WeztermMonitor, WEZTERM_WINDOW_CLASS};
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -165,6 +169,8 @@ impl CorrectionMonitor {
             return Ok(Vec::new());
         }
 
+        info!("Monitoring window summary: {}", summarize_events(&events));
+
         // Filter events
         let filtered = event_filter::filter_events(&events, &context, &config);
         debug!("After filtering: {} of {} events are relevant", filtered.len(), events.len());
@@ -209,9 +215,71 @@ impl CorrectionMonitor {
         self.source.is_available()
     }
 
+    /// Shared handle to the underlying correction store, so alternative
+    /// backends (e.g. [`wezterm::WeztermMonitor`]) can record into the same
+    /// in-memory store instead of clobbering each other's saves.
+    pub fn store_handle(&self) -> Arc<Mutex<CorrectionStore>> {
+        Arc::clone(&self.store)
+    }
+
     /// Get correction statistics.
     pub async fn stats(&self) -> CorrectionStats {
         let store = self.store.lock().await;
         store.stats()
+    }
+}
+
+/// Summarize a monitoring window's events as counts grouped by source
+/// application and event type. Purely diagnostic — helps explain surprise
+/// event floods (e.g. 122 events from a single injection).
+fn summarize_events(events: &[TextChangeEvent]) -> String {
+    let mut per_app: std::collections::BTreeMap<&str, (usize, usize)> =
+        std::collections::BTreeMap::new();
+    for event in events {
+        let entry = per_app.entry(event.source_app.as_str()).or_insert((0, 0));
+        match event.operation {
+            types::TextChangeOp::Insert => entry.0 += 1,
+            types::TextChangeOp::Delete => entry.1 += 1,
+        }
+    }
+    per_app
+        .iter()
+        .map(|(app, (inserts, deletes))| {
+            format!("'{}': {} insert(s), {} delete(s)", app, inserts, deletes)
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::TextChangeOp;
+    use std::time::Instant;
+
+    fn make_event(source_app: &str, operation: TextChangeOp) -> TextChangeEvent {
+        TextChangeEvent {
+            operation,
+            start_pos: 0,
+            length: 1,
+            text: "x".to_string(),
+            timestamp: Instant::now(),
+            source_app: source_app.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_summarize_events_groups_by_app_and_type() {
+        let events = vec![
+            make_event("firefox", TextChangeOp::Insert),
+            make_event("firefox", TextChangeOp::Insert),
+            make_event("firefox", TextChangeOp::Delete),
+            make_event("Code", TextChangeOp::Insert),
+        ];
+
+        assert_eq!(
+            summarize_events(&events),
+            "'Code': 1 insert(s), 0 delete(s); 'firefox': 2 insert(s), 1 delete(s)"
+        );
     }
 }

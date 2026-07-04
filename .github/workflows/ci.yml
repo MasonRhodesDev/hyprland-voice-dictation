@@ -14,3 +14,8 @@ jobs:
     uses: MasonRhodesDev/packaging-workflows/.github/workflows/rust-ci.yml@main
     with:
       pacman-deps: pipewire alsa-lib fontconfig freetype2 libxkbcommon wayland systemd pkgconf
+      # Build without the pipewire audio backend: libspa-sys 0.10 fails to
+      # bindgen against the CI container's PipeWire 1.6 headers. The full
+      # default-feature build (incl. pipewire) is exercised by the arch/makepkg
+      # package job, which is the shipping artifact.
+      cargo-flags: --no-default-features --features tray,correction

@@ -17,6 +17,7 @@ fn make_config(dir: &std::path::Path, duration_secs: u64, threshold: u32) -> Mon
         enabled: true,
         monitor_duration_secs: duration_secs,
         auto_promote_threshold: threshold,
+        max_age_days: 30,
         store_path: dir.join("corrections.json"),
         substitutions_path: dir.join("substitutions.txt"),
     }

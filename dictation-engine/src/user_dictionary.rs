@@ -38,10 +38,17 @@ impl UserDictionary {
     /// 1. ~/.local/share/voice-dictation/user_words.txt (app-specific)
     /// 2. ~/.hunspell_LANG (system Hunspell personal dictionary)
     pub fn new() -> Result<Self> {
-        let app_words_path = Self::get_app_words_path()?;
+        Self::with_paths(Self::get_app_words_path()?, Self::get_hunspell_personal_dict_path())
+    }
+
+    /// Create a user dictionary backed by explicit file paths.
+    ///
+    /// `app_words_path` is the read-write application word list; `system_dict_path`
+    /// is an optional read-only Hunspell personal dictionary. Used by `new()` with
+    /// the default locations, and by tests to avoid touching the real home directory.
+    pub fn with_paths(app_words_path: PathBuf, system_dict_path: Option<PathBuf>) -> Result<Self> {
         let app_words = Self::load_app_words(&app_words_path)?;
 
-        let system_dict_path = Self::get_hunspell_personal_dict_path();
         let system_words = if let Some(ref path) = system_dict_path {
             Self::load_system_words_from_path(path).unwrap_or_default()
         } else {
@@ -251,16 +258,24 @@ impl UserDictionary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    /// Dictionary backed by a tempdir — tests must never touch the real home directory.
+    fn make_dict(dir: &TempDir) -> UserDictionary {
+        UserDictionary::with_paths(dir.path().join("user_words.txt"), None).unwrap()
+    }
 
     #[test]
-    fn test_new_creates_directory() {
-        let dict = UserDictionary::new();
-        assert!(dict.is_ok());
+    fn test_with_paths_nonexistent_file_starts_empty() {
+        let dir = TempDir::new().unwrap();
+        let dict = make_dict(&dir);
+        assert!(dict.app_words().is_empty());
     }
 
     #[test]
     fn test_add_and_contains() {
-        let dict = UserDictionary::new().unwrap();
+        let dir = TempDir::new().unwrap();
+        let dict = make_dict(&dir);
         assert!(!dict.contains("testword"));
 
         dict.add("testword").unwrap();
@@ -270,7 +285,8 @@ mod tests {
 
     #[test]
     fn test_remove() {
-        let dict = UserDictionary::new().unwrap();
+        let dir = TempDir::new().unwrap();
+        let dict = make_dict(&dir);
         dict.add("testword").unwrap();
         assert!(dict.contains("testword"));
 
@@ -280,7 +296,8 @@ mod tests {
 
     #[test]
     fn test_app_words_sorted() {
-        let dict = UserDictionary::new().unwrap();
+        let dir = TempDir::new().unwrap();
+        let dict = make_dict(&dir);
         dict.add("zebra").unwrap();
         dict.add("apple").unwrap();
         dict.add("monkey").unwrap();
@@ -291,8 +308,55 @@ mod tests {
 
     #[test]
     fn test_empty_word_ignored() {
-        let dict = UserDictionary::new().unwrap();
+        let dir = TempDir::new().unwrap();
+        let dict = make_dict(&dir);
         assert!(dict.add("").is_ok());
         assert!(dict.add("   ").is_ok());
+        assert!(dict.app_words().is_empty());
+    }
+
+    #[test]
+    fn test_persistence_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("user_words.txt");
+
+        {
+            let dict = UserDictionary::with_paths(path.clone(), None).unwrap();
+            dict.add("chezmoi").unwrap();
+            dict.add("kubectl").unwrap();
+        }
+
+        let dict = UserDictionary::with_paths(path, None).unwrap();
+        assert_eq!(dict.app_words(), vec!["chezmoi", "kubectl"]);
+    }
+
+    #[test]
+    fn test_system_words_loaded_and_readonly() {
+        let dir = TempDir::new().unwrap();
+        let system_path = dir.path().join("hunspell_en_US");
+        fs::write(&system_path, "Hyprland/S\nwayland\n*ignored\n").unwrap();
+
+        let dict = UserDictionary::with_paths(dir.path().join("user_words.txt"), Some(system_path))
+            .unwrap();
+
+        // Affix flags stripped, lowercased, '*' lines skipped
+        assert!(dict.contains("hyprland"));
+        assert!(dict.contains("wayland"));
+        assert!(!dict.contains("ignored"));
+
+        // System words are not part of the app word list
+        assert!(dict.app_words().is_empty());
+    }
+
+    #[test]
+    fn test_reload_app_words_picks_up_external_edit() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("user_words.txt");
+        let dict = UserDictionary::with_paths(path.clone(), None).unwrap();
+        assert!(!dict.contains("pipewire"));
+
+        fs::write(&path, "pipewire\n").unwrap();
+        dict.reload_app_words().unwrap();
+        assert!(dict.contains("pipewire"));
     }
 }

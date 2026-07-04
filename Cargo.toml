@@ -13,6 +13,8 @@ correction = ["dictation-engine/correction"]  # AT-SPI2 correction learning
 
 [dependencies]
 dictation-engine = { path = "dictation-engine", default-features = false }
+# CLI management of the learned-corrections store (corrections list/remove/clear)
+correction-engine = { path = "correction-engine" }
 slint-gui = { path = "slint-gui" }
 test-loop-ui = { path = "test-loop-ui" }
 schema-tui = { git = "https://github.com/MasonRhodesDev/schema-tui.git" }

@@ -56,6 +56,10 @@ ksni = { git = "https://github.com/iovxw/ksni.git", rev = "4d2320c", optional = 
 futures-util = "0.3"
 # AT-SPI2 correction learning (optional)
 correction-engine = { path = "../correction-engine", optional = true }
+# zwp_input_method_v2 diagnostic probe (`voice-dictation debug ime-probe`)
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -17,6 +17,21 @@
 # --without check; COPR builds run the suite.
 %bcond_without check
 
+# Force cargo to honor the committed Cargo.lock in every phase by appending
+# --locked to the shared option set the %%cargo_build/%%cargo_test/%%cargo_install
+# macros pass to cargo. Without this, %%cargo_install ("cargo install --path .")
+# re-resolves the dependency graph from scratch — unlike "cargo build", it
+# ignores an existing lock file unless told to keep it. Under our vendored,
+# source-replaced config that re-resolution fails for the git dependencies
+# (schema-tui, ksni): cargo will not fetch a git source offline without a lock
+# pinning its commit ("the source git+... requires a lock file to be present
+# first before it can be used against vendored source code"). The committed
+# Cargo.lock already pins those revisions, so --locked makes %%install succeed
+# (the %%build phase already builds fine with the lock). The macro's own option
+# parser rejects a leading "--" argument, so we inject the flag here rather than
+# as `%%cargo_install --locked`.
+%global __cargo_common_opts %{?_smp_mflags} -Z avoid-dev-deps --locked
+
 Name:           hyprland-voice-dictation
 Version:        0.3.4
 Release:        1%{?dist}
@@ -34,6 +49,9 @@ BuildRequires:  cargo-rpm-macros >= 24
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  pkg-config
 BuildRequires:  clang-devel
+# reqwest (VAD model download) pulls native-tls -> openssl-sys, which needs the
+# openssl headers to build.
+BuildRequires:  openssl-devel
 BuildRequires:  pipewire-devel
 BuildRequires:  alsa-lib-devel
 BuildRequires:  fontconfig-devel

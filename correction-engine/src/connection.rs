@@ -95,7 +95,19 @@ async fn run_event_listener(tx: mpsc::Sender<TextChangeEvent>) -> Result<()> {
     let events = atspi.event_stream();
     tokio::pin!(events);
 
-    while let Some(Ok(ev)) = events.next().await {
+    while let Some(item) = events.next().await {
+        // The raw accessibility-bus stream also surfaces non-signal traffic
+        // (e.g. method replies to our own event registration) as errors such as
+        // `MissingInterface`. Those are not fatal — skip them and keep listening
+        // rather than tearing down the whole subscription on the first one.
+        let ev = match item {
+            Ok(ev) => ev,
+            Err(e) => {
+                debug!("Skipping non-event AT-SPI2 stream item: {}", e);
+                continue;
+            }
+        };
+
         // Try to extract a TextChangedEvent from the generic Event
         let Ok(text_event) = TextChangedEvent::try_from(ev) else {
             continue;

@@ -65,6 +65,7 @@ mod tests {
             enabled: true,
             monitor_duration_secs: duration_secs,
             auto_promote_threshold: 3,
+            max_age_days: 30,
             store_path: PathBuf::from("/tmp/test-corrections.json"),
             substitutions_path: PathBuf::from("/tmp/test-substitutions.txt"),
         }

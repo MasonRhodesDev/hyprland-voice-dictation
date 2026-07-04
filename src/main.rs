@@ -71,7 +71,7 @@ enum Commands {
         recording: Option<String>,
     },
     #[command(
-        about = "Trigger a manual correction snapshot (compare current text field to last injection)"
+        about = "Re-arm correction monitoring for the last dictation (captures late edits as corrections)"
     )]
     SnapshotCorrection,
     #[command(about = "Show correction learning statistics")]
@@ -81,18 +81,77 @@ enum Commands {
         #[command(subcommand)]
         command: CorrectionCommands,
     },
+    #[command(
+        about = "Manage the user dictionary (words exempt from spell checking)",
+        long_about = "Manage the user dictionary (words exempt from spell checking).\n\n\
+                      Edits ~/.local/share/voice-dictation/user_words.txt directly. The running\n\
+                      daemon hot-reloads the file via its watcher — no restart needed."
+    )]
+    Dict {
+        #[command(subcommand)]
+        command: DictCommands,
+    },
+    #[command(
+        about = "Manage word substitutions (spoken phrase -> replacement)",
+        long_about = "Manage word substitutions (spoken phrase -> replacement).\n\n\
+                      Edits ~/.local/share/voice-dictation/substitutions.txt directly. The running\n\
+                      daemon hot-reloads the file via its watcher — no restart needed."
+    )]
+    Subst {
+        #[command(subcommand)]
+        command: SubstCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum DictCommands {
+    #[command(about = "Add a word to the user dictionary")]
+    Add {
+        #[arg(help = "Word to add")]
+        word: String,
+    },
+    #[command(about = "Remove a word from the user dictionary")]
+    Remove {
+        #[arg(help = "Word to remove")]
+        word: String,
+    },
+    #[command(about = "List all user dictionary words")]
+    List,
+}
+
+#[derive(Subcommand)]
+enum SubstCommands {
+    #[command(about = "Add a substitution (spoken phrase -> replacement)")]
+    Add {
+        #[arg(help = "Spoken phrase as transcribed (e.g. \"shay moy\")")]
+        spoken: String,
+        #[arg(help = "Replacement text (e.g. \"chezmoi\")")]
+        replacement: String,
+    },
+    #[command(about = "Remove a substitution by its spoken phrase")]
+    Remove {
+        #[arg(help = "Spoken phrase of the substitution to remove")]
+        spoken: String,
+    },
+    #[command(about = "List all substitutions")]
+    List,
 }
 
 #[derive(Subcommand)]
 enum CorrectionCommands {
-    #[command(about = "List all learned corrections")]
+    #[command(about = "List all learned corrections (and blocklisted pairs)")]
     List,
-    #[command(about = "Remove a learned correction by number (from 'corrections list')")]
+    #[command(
+        about = "Remove learned corrections by their original phrase and blocklist them",
+        long_about = "Remove learned corrections by their original phrase (from 'corrections list').\n\n\
+                      Removed pairs go to a persisted blocklist and are never re-recorded or\n\
+                      auto-promoted again."
+    )]
     Remove {
-        #[arg(help = "Correction number to remove (1-based index from 'corrections list')")]
-        number: usize,
+        #[arg(help = "Original (transcribed) phrase of the correction(s) to remove")]
+        original: String,
     },
-    #[command(about = "Remove all learned corrections and start fresh")]
+    #[command(about = "Remove all learned corrections and start fresh (blocklist is kept)")]
     Clear,
     #[command(about = "Open corrections file in $EDITOR")]
     Edit,
@@ -106,6 +165,41 @@ enum DebugCommands {
     Play {
         #[arg(help = "WAV filename to play (from 'debug list' output)")]
         filename: String,
+    },
+    #[command(
+        about = "Probe the wezterm mux plumbing used by the wezterm correction backend",
+        long_about = "Probe the wezterm mux plumbing used by the wezterm correction backend.\n\n\
+                      Read-only: discovers the live wezterm socket, lists panes, and prints the\n\
+                      first lines of the active pane's text — validating everything the daemon\n\
+                      needs for wezterm-native correction detection in one command."
+    )]
+    WeztermProbe,
+    #[command(
+        about = "Time-boxed zwp_input_method_v2 diagnostic probe (holds the compositor IME slot)",
+        long_about = "Bind zwp_input_method_v2 for a fixed number of seconds and log every IME\n\
+                      event (activate/deactivate, surrounding_text, text_change_cause,\n\
+                      content_type), tagged with the focused window class from hyprctl.\n\n\
+                      Never grabs the keyboard. Exits immediately if another IME holds the slot.\n\
+                      --commit sends commit_string into the focused editor for write-path\n\
+                      validation, but ONLY while a window whose class exactly matches\n\
+                      --commit-class is focused (use a throwaway target like `zenity --entry`)."
+    )]
+    ImeProbe {
+        #[arg(long, default_value_t = 30, help = "Seconds to hold the IME slot")]
+        secs: u64,
+        #[arg(long, help = "Emit a machine-readable JSON summary on stdout")]
+        json: bool,
+        #[arg(
+            long,
+            requires = "commit_class",
+            help = "Text to commit_string into the focused editor (write-path test)"
+        )]
+        commit: Option<String>,
+        #[arg(
+            long,
+            help = "Exact window class the commit is restricted to (safety gate, e.g. 'zenity')"
+        )]
+        commit_class: Option<String>,
     },
 }
 
@@ -601,6 +695,276 @@ fn debug_play(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// One-command validation of the wezterm correction backend plumbing:
+/// socket discovery, pane listing, active-pane selection, get-text.
+/// Strictly read-only against the running wezterm.
+fn debug_wezterm_probe() -> Result<(), Box<dyn std::error::Error>> {
+    use correction_engine::wezterm::{discover_socket, WeztermCli, WeztermClient};
+
+    let Some(socket) = discover_socket() else {
+        println!("Socket: NOT FOUND");
+        println!(
+            "No live wezterm socket under $XDG_RUNTIME_DIR/wezterm/ (and $WEZTERM_UNIX_SOCKET \
+             is unset or stale). Is a wezterm GUI instance running?"
+        );
+        return Ok(());
+    };
+    println!("Socket: {}", socket.display());
+
+    let cli = WeztermCli::with_socket(socket);
+    tokio::runtime::Runtime::new()?.block_on(async move {
+        let panes = cli.list_panes().await?;
+        println!("Panes:  {}", panes.len());
+        for p in &panes {
+            println!(
+                "  pane {:<4} {}  workspace={:<10} title={}",
+                p.pane_id,
+                if p.is_active { "[active]" } else { "        " },
+                p.workspace,
+                p.title
+            );
+        }
+
+        let Some(target) = panes.iter().find(|p| p.is_active).or_else(|| panes.first()) else {
+            println!("No panes found — nothing to get-text from.");
+            return Ok(());
+        };
+        println!("Active pane: {}", target.pane_id);
+
+        let text = cli.get_text(target.pane_id).await?;
+        println!("First 5 lines of get-text:");
+        for line in text.lines().take(5) {
+            println!("  | {}", line.trim_end());
+        }
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+    Ok(())
+}
+
+fn corrections_command(command: CorrectionCommands) -> Result<(), Box<dyn std::error::Error>> {
+    use correction_engine::{CorrectionStore, MonitorConfig};
+
+    // Only the store/substitution paths matter for CLI use; the monitor
+    // settings are irrelevant here.
+    let config = MonitorConfig::default();
+
+    match command {
+        CorrectionCommands::List => {
+            let store = CorrectionStore::load(&config)?;
+            let records = store.records();
+            if records.is_empty() {
+                println!("No corrections recorded yet.");
+            } else {
+                println!("{:>5}  {:<20} {:<20} Status", "Count", "Original", "Corrected");
+                println!("{}", "-".repeat(70));
+                for r in records {
+                    let status = if r.promoted { "promoted" } else { "pending" };
+                    println!("{:>5}  {:<20} {:<20} {}", r.count, r.original, r.corrected, status);
+                }
+            }
+            let blocklist = store.blocklist();
+            if !blocklist.is_empty() {
+                println!("\nBlocklisted (never re-learned):");
+                for b in blocklist {
+                    println!("  '{}' → '{}'", b.original, b.corrected);
+                }
+            }
+            println!("\nFile: {}", config.store_path.display());
+        }
+        CorrectionCommands::Remove { original } => {
+            let mut store = CorrectionStore::load(&config)?;
+            let removed = store.remove(&original)?;
+            if removed.is_empty() {
+                println!(
+                    "No correction found for '{}'. Use 'voice-dictation corrections list' to see originals.",
+                    original
+                );
+                return Err("No matching correction".into());
+            }
+            for r in &removed {
+                println!("Removed and blocklisted: '{}' → '{}'", r.original, r.corrected);
+            }
+        }
+        CorrectionCommands::Clear => {
+            print!("Remove all learned corrections? [y/N] ");
+            io::stdout().flush()?;
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            if input.trim().to_lowercase() == "y" {
+                let mut store = CorrectionStore::load(&config)?;
+                let count = store.clear()?;
+                println!("Cleared {} correction(s). Blocklist kept.", count);
+            } else {
+                println!("Cancelled.");
+            }
+        }
+        CorrectionCommands::Edit => {
+            let corrections_path = &config.store_path;
+            if !corrections_path.exists() {
+                // Create empty file
+                if let Some(dir) = corrections_path.parent() {
+                    fs::create_dir_all(dir)?;
+                }
+                let data = serde_json::json!({"version": 1, "corrections": [], "blocklist": []});
+                fs::write(corrections_path, serde_json::to_string_pretty(&data)?)?;
+            }
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+            let status = Command::new(&editor).arg(corrections_path).status()?;
+            if !status.success() {
+                eprintln!("{} exited with: {}", editor, status);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn dict_command(command: DictCommands) -> Result<(), Box<dyn std::error::Error>> {
+    use dictation_engine::user_dictionary::UserDictionary;
+
+    let dict = UserDictionary::new()?;
+
+    match command {
+        DictCommands::Add { word } => {
+            let word = word.trim().to_lowercase();
+            if word.is_empty() {
+                return Err("Word must not be empty".into());
+            }
+            if dict.app_words().contains(&word) {
+                println!("'{}' is already in the user dictionary", word);
+                return Ok(());
+            }
+            dict.add(&word)?;
+            println!("Added '{}' to the user dictionary (daemon hot-reloads automatically)", word);
+        }
+        DictCommands::Remove { word } => {
+            let word = word.trim().to_lowercase();
+            if !dict.app_words().contains(&word) {
+                println!("'{}' is not in the user dictionary", word);
+                return Ok(());
+            }
+            dict.remove(&word)?;
+            println!(
+                "Removed '{}' from the user dictionary (daemon hot-reloads automatically)",
+                word
+            );
+        }
+        DictCommands::List => {
+            let words = dict.app_words();
+            if words.is_empty() {
+                println!("User dictionary is empty.");
+            } else {
+                for word in &words {
+                    println!("{}", word);
+                }
+                println!("\n{} word(s)", words.len());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract the spoken part of a `spoken -> replacement` line, normalized to
+/// lowercase words. Returns None for comments, blanks, and malformed lines.
+fn parse_substitution_spoken(line: &str) -> Option<Vec<String>> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') || !trimmed.contains("->") {
+        return None;
+    }
+    let spoken = trimmed.split("->").next()?.trim();
+    if spoken.is_empty() {
+        return None;
+    }
+    Some(spoken.split_whitespace().map(|w| w.to_lowercase()).collect())
+}
+
+fn subst_command(command: SubstCommands) -> Result<(), Box<dyn std::error::Error>> {
+    use dictation_engine::post_processing::WordSubstitutionProcessor;
+
+    let path = WordSubstitutionProcessor::get_substitutions_path()?;
+
+    match command {
+        SubstCommands::Add { spoken, replacement } => {
+            let spoken = spoken.trim();
+            let replacement = replacement.trim();
+            if spoken.is_empty() || replacement.is_empty() {
+                return Err("Spoken phrase and replacement must not be empty".into());
+            }
+
+            let spoken_words: Vec<String> =
+                spoken.split_whitespace().map(|w| w.to_lowercase()).collect();
+            let entries = WordSubstitutionProcessor::load_substitutions(&path)?;
+            if let Some((_, existing)) = entries.iter().find(|(words, _)| *words == spoken_words) {
+                println!(
+                    "Substitution already exists: {} -> {}\nRemove it first: voice-dictation subst remove \"{}\"",
+                    spoken_words.join(" "),
+                    existing,
+                    spoken_words.join(" ")
+                );
+                return Ok(());
+            }
+
+            let mut content =
+                if path.exists() { fs::read_to_string(&path)? } else { String::new() };
+            if !content.is_empty() && !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str(&format!("{} -> {}\n", spoken, replacement));
+            fs::write(&path, content)?;
+            println!(
+                "Added substitution: {} -> {} (daemon hot-reloads automatically)",
+                spoken, replacement
+            );
+        }
+        SubstCommands::Remove { spoken } => {
+            if !path.exists() {
+                println!("No substitutions file found at {}", path.display());
+                return Ok(());
+            }
+            let spoken_words: Vec<String> =
+                spoken.split_whitespace().map(|w| w.to_lowercase()).collect();
+
+            let content = fs::read_to_string(&path)?;
+            let kept: Vec<&str> = content
+                .lines()
+                .filter(|line| parse_substitution_spoken(line).as_ref() != Some(&spoken_words))
+                .collect();
+
+            let removed = content.lines().count() - kept.len();
+            if removed == 0 {
+                println!("No substitution found for '{}'", spoken_words.join(" "));
+                return Ok(());
+            }
+
+            let mut new_content = kept.join("\n");
+            if !new_content.is_empty() {
+                new_content.push('\n');
+            }
+            fs::write(&path, new_content)?;
+            println!(
+                "Removed {} substitution(s) for '{}' (daemon hot-reloads automatically)",
+                removed,
+                spoken_words.join(" ")
+            );
+        }
+        SubstCommands::List => {
+            let entries = WordSubstitutionProcessor::load_substitutions(&path)?;
+            if entries.is_empty() {
+                println!("No substitutions defined.");
+                println!("File: {}", path.display());
+            } else {
+                for (spoken_words, replacement) in &entries {
+                    println!("{} -> {}", spoken_words.join(" "), replacement);
+                }
+                println!("\n{} substitution(s)  File: {}", entries.len(), path.display());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Find all `voice-dictation` executables on `$PATH`, deduplicated by their
 /// canonical target. Returns the PATH-order entries so the first one (the one
 /// that actually wins) is listed first.
@@ -882,8 +1246,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Debug { command } => match command {
             DebugCommands::List => debug_list()?,
             DebugCommands::Play { filename } => debug_play(&filename)?,
+            DebugCommands::WeztermProbe => debug_wezterm_probe()?,
+            DebugCommands::ImeProbe { secs, json, commit, commit_class } => {
+                dictation_engine::ime_probe::run(dictation_engine::ime_probe::ProbeOptions {
+                    secs,
+                    json,
+                    commit_text: commit,
+                    commit_class,
+                })?;
+            }
         },
         Commands::Diagnose => diagnose()?,
+        Commands::Dict { command } => dict_command(command)?,
+        Commands::Subst { command } => subst_command(command)?,
         Commands::DownloadModel => download_model()?,
         Commands::TestLoop { recording } => {
             let rt = tokio::runtime::Runtime::new()?;
@@ -894,7 +1269,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::runtime::Runtime::new()?
                 .block_on(call_dbus_method("SnapshotCorrection"))
                 .map_err(dbus_error_with_hint)?;
-            println!("Correction snapshot triggered");
+            println!("Correction monitoring re-armed for the last dictation");
         }
         Commands::CorrectionStats => {
             let home = std::env::var("HOME")?;
@@ -945,103 +1320,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("File location: {}", corrections_path.display());
             }
         }
-        Commands::Corrections { command } => {
-            let home = std::env::var("HOME")?;
-            let corrections_path = std::path::PathBuf::from(&home)
-                .join(".local/share/voice-dictation/corrections.json");
-
-            match command {
-                CorrectionCommands::List => {
-                    if !corrections_path.exists() {
-                        println!("No corrections recorded yet.");
-                        return Ok(());
-                    }
-                    let content = fs::read_to_string(&corrections_path)?;
-                    let data: Value = serde_json::from_str(&content)?;
-                    if let Some(corrections) = data["corrections"].as_array() {
-                        if corrections.is_empty() {
-                            println!("No corrections recorded yet.");
-                            return Ok(());
-                        }
-                        println!(
-                            "{:<4} {:>5}  {:<20} {:<20} Status",
-                            "#", "Count", "Original", "Corrected"
-                        );
-                        println!("{}", "-".repeat(75));
-                        for (i, c) in corrections.iter().enumerate() {
-                            let orig = c["original"].as_str().unwrap_or("?");
-                            let corr = c["corrected"].as_str().unwrap_or("?");
-                            let count = c["count"].as_u64().unwrap_or(0);
-                            let status = if c["promoted"].as_bool().unwrap_or(false) {
-                                "promoted"
-                            } else {
-                                "pending"
-                            };
-                            println!(
-                                "{:<4} {:>5}  {:<20} {:<20} {}",
-                                i + 1,
-                                count,
-                                orig,
-                                corr,
-                                status
-                            );
-                        }
-                        println!();
-                        println!("File: {}", corrections_path.display());
-                    }
-                }
-                CorrectionCommands::Remove { number } => {
-                    if !corrections_path.exists() {
-                        println!("No corrections file found.");
-                        return Ok(());
-                    }
-                    let content = fs::read_to_string(&corrections_path)?;
-                    let mut data: Value = serde_json::from_str(&content)?;
-                    if let Some(corrections) = data["corrections"].as_array_mut() {
-                        if number == 0 || number > corrections.len() {
-                            eprintln!("Invalid number {}. Use 'voice-dictation corrections list' to see valid numbers (1-{}).", number, corrections.len());
-                            return Err("Invalid correction number".into());
-                        }
-                        let removed = corrections.remove(number - 1);
-                        let orig = removed["original"].as_str().unwrap_or("?");
-                        let corr = removed["corrected"].as_str().unwrap_or("?");
-                        fs::write(&corrections_path, serde_json::to_string_pretty(&data)?)?;
-                        println!("Removed correction: '{}' → '{}'", orig, corr);
-                    }
-                }
-                CorrectionCommands::Clear => {
-                    if !corrections_path.exists() {
-                        println!("No corrections file found.");
-                        return Ok(());
-                    }
-                    print!("Remove all learned corrections? [y/N] ");
-                    io::stdout().flush()?;
-                    let mut input = String::new();
-                    io::stdin().read_line(&mut input)?;
-                    if input.trim().to_lowercase() == "y" {
-                        let data = serde_json::json!({"version": 1, "corrections": []});
-                        fs::write(&corrections_path, serde_json::to_string_pretty(&data)?)?;
-                        println!("All corrections cleared.");
-                    } else {
-                        println!("Cancelled.");
-                    }
-                }
-                CorrectionCommands::Edit => {
-                    if !corrections_path.exists() {
-                        // Create empty file
-                        let dir = corrections_path.parent().unwrap();
-                        fs::create_dir_all(dir)?;
-                        let data = serde_json::json!({"version": 1, "corrections": []});
-                        fs::write(&corrections_path, serde_json::to_string_pretty(&data)?)?;
-                    }
-                    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-                    let status = Command::new(&editor).arg(&corrections_path).status()?;
-                    if !status.success() {
-                        eprintln!("{} exited with: {}", editor, status);
-                    }
-                }
-            }
-        }
+        Commands::Corrections { command } => corrections_command(command)?,
     }
 
     Ok(())

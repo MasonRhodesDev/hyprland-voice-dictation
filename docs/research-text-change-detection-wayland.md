@@ -5,6 +5,35 @@
 
 ---
 
+> ## ⚠️ VALIDATION ADDENDUM (2026-07-03) — core recommendation REFUTED
+>
+> This report's claims were adversarially validated by live testing on the target
+> system (Hyprland/Arch, at-spi2-core 2.60.4) plus source-level review of current
+> Chromium/Electron/wezterm. Every refutation below survived an independent
+> counter-refutation pass. **Read this addendum before trusting anything in
+> sections 3, 9, or 10.**
+>
+> | Original claim | Verdict | Reality |
+> |---|---|---|
+> | AT-SPI2 gives "70–85% coverage of typical workflows" (§3.6) | **REFUTED** | ~0% for this project's actual targets. Live bus census: only desktop chrome (waybar, swaync, tray applets). wezterm, Discord, Chromium, Claude Desktop: absent. |
+> | Chromium "auto-enables accessibility when it detects AT-SPI clients listening" (§3.6) | **REFUTED** | No such mechanism exists. Chromium's Linux screen-reader detection is `DiscoverOrca()` — a `/proc/*/cmdline` scan for a process named `orca` (`browser_accessibility_state_impl_auralinux.cc`). Registering AT-SPI listeners does nothing; verified live against Chromium 149. Only per-app `--force-renderer-accessibility` exposes web content. |
+> | `ACCESSIBILITY_ENABLED=1` enables Electron a11y (§3.8) | **PARTLY TRUE** | Gates only ATK-bridge root registration (equivalent to `org.a11y.Status IsEnabled`, already true on this system). Does NOT enable the renderer tree. Not a substitute for the launch flag. |
+> | Terminals: "Some (GNOME Terminal, Kitty) expose text" (§3.5) | **REFUTED** | kitty has no screen-reader code (maintainer statement, kitty#9202). wezterm — this project's primary target, never evaluated by this report — has no accessibility implementation at all (wezterm#913, open since 2021). |
+> | EditableText enables in-place fixes where Text works (§3.2, implicit) | **REFUTED for targets** | Works on GTK3/GTK4/Qt6 (verified live). Chromium never implemented AT-SPI EditableText — force-flagged Electron apps are readable but not writable. In-place fixes must use virtual-keyboard backspace-retype. |
+> | "Compositor APIs: 0% (none exist)" (§9) | **PARTLY TRUE** | No a11y API, but Hyprland's plugin API can hook `TextInputV3` surrounding-text/commit state, and `hyprctl sendshortcut` enables window-targeted keystrokes. |
+> | IME approach: "30–50% coverage, config required" (§4.4, §9) | **REFUTED (underrated)** | The `zwp_input_method_v2` slot is free on this system (no fcitx5/ibus). Hyprland exposes the protocol. All Electron targets already run `--enable-wayland-ime` except Claude Desktop (one-line wrapper). Daemon-as-IME yields surrounding_text read + commit_string write for the entire Chromium/Electron class — strictly better than AT-SPI for these targets. |
+> | The shipped AT-SPI correction monitor observes edits | **REFUTED** | Dead on arrival: bus-wide listener, attribution compares D-Bus unique names (`:1.30`) to Hyprland window classes (can never match), and the constant "122 events"/window is desktop-chrome noise. It has never observed a correction. |
+>
+> ### Revised architecture (validated against the real app mix)
+> 1. **wezterm-native backend** (primary target): `wezterm cli get-text` snapshot + windowed diff for correction detection; `send-text`/keystrokes for applying fixes. No protocol layer, full fidelity.
+> 2. **Daemon-as-IME (`zwp_input_method_v2`)** for Chromium/Electron (Discord, Slack, Claude Desktop, Chromium): surrounding_text + commit_string. Needs a Hyprland interop prototype (`set_surrounding_text` relay, `text_change_cause`).
+> 3. **Hotkey correction mode + `hyprctl sendshortcut`**: universal fallback.
+> 4. AT-SPI: demoted to optional, GTK/Qt-only supplement.
+>
+> Validation artifacts: adversarial agent verdicts of 2026-07-03; live-bus probes; Chromium/wezterm/kitty source citations recorded in the session that produced this addendum.
+
+---
+
 ## Table of Contents
 
 1. [Background: How macOS Does It](#1-background-how-macos-does-it)
