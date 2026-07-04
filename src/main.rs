@@ -166,6 +166,14 @@ enum DebugCommands {
         #[arg(help = "WAV filename to play (from 'debug list' output)")]
         filename: String,
     },
+    #[command(
+        about = "Probe the wezterm mux plumbing used by the wezterm correction backend",
+        long_about = "Probe the wezterm mux plumbing used by the wezterm correction backend.\n\n\
+                      Read-only: discovers the live wezterm socket, lists panes, and prints the\n\
+                      first lines of the active pane's text — validating everything the daemon\n\
+                      needs for wezterm-native correction detection in one command."
+    )]
+    WeztermProbe,
 }
 
 fn get_state() -> String {
@@ -657,6 +665,52 @@ fn debug_play(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("{} failed with status: {}", player, status).into());
     }
 
+    Ok(())
+}
+
+/// One-command validation of the wezterm correction backend plumbing:
+/// socket discovery, pane listing, active-pane selection, get-text.
+/// Strictly read-only against the running wezterm.
+fn debug_wezterm_probe() -> Result<(), Box<dyn std::error::Error>> {
+    use correction_engine::wezterm::{discover_socket, WeztermCli, WeztermClient};
+
+    let Some(socket) = discover_socket() else {
+        println!("Socket: NOT FOUND");
+        println!(
+            "No live wezterm socket under $XDG_RUNTIME_DIR/wezterm/ (and $WEZTERM_UNIX_SOCKET \
+             is unset or stale). Is a wezterm GUI instance running?"
+        );
+        return Ok(());
+    };
+    println!("Socket: {}", socket.display());
+
+    let cli = WeztermCli::with_socket(socket);
+    tokio::runtime::Runtime::new()?.block_on(async move {
+        let panes = cli.list_panes().await?;
+        println!("Panes:  {}", panes.len());
+        for p in &panes {
+            println!(
+                "  pane {:<4} {}  workspace={:<10} title={}",
+                p.pane_id,
+                if p.is_active { "[active]" } else { "        " },
+                p.workspace,
+                p.title
+            );
+        }
+
+        let Some(target) = panes.iter().find(|p| p.is_active).or_else(|| panes.first()) else {
+            println!("No panes found — nothing to get-text from.");
+            return Ok(());
+        };
+        println!("Active pane: {}", target.pane_id);
+
+        let text = cli.get_text(target.pane_id).await?;
+        println!("First 5 lines of get-text:");
+        for line in text.lines().take(5) {
+            println!("  | {}", line.trim_end());
+        }
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
     Ok(())
 }
 
@@ -1165,6 +1219,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Debug { command } => match command {
             DebugCommands::List => debug_list()?,
             DebugCommands::Play { filename } => debug_play(&filename)?,
+            DebugCommands::WeztermProbe => debug_wezterm_probe()?,
         },
         Commands::Diagnose => diagnose()?,
         Commands::Dict { command } => dict_command(command)?,
