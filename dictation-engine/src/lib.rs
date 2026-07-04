@@ -21,6 +21,7 @@ pub mod debug_audio;
 pub mod engine;
 pub mod hotword_trie;
 mod idle_inhibit;
+pub mod ime_probe;
 mod keyboard;
 pub mod model_selector;
 pub mod parakeet_engine;

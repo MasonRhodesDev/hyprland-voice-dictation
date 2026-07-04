@@ -2457,6 +2457,7 @@ dependencies = [
  "hex",
  "hound",
  "ksni",
+ "libc",
  "ndarray",
  "notify",
  "ort",
@@ -2476,6 +2477,8 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols-misc",
  "zbus",
 ]
 
