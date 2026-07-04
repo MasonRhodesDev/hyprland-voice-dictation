@@ -158,6 +158,14 @@
           "ui_widget": "number_input"
         },
         {
+          "id": "correction_backend_wezterm",
+          "label": "wezterm Correction Backend",
+          "description": "Detect corrections in wezterm by polling pane text via the wezterm mux CLI (wezterm is invisible to AT-SPI2). Used automatically when dictating into wezterm. Heuristic: TUIs and multiline prompts are detected and skipped.",
+          "type": "boolean",
+          "default": true,
+          "ui_widget": "toggle"
+        },
+        {
           "id": "enable_accessibility_bridge",
           "label": "Enable Accessibility Bridge",
           "description": "Automatically enable the GTK/Qt accessibility bridge on daemon startup. Required for correction learning to detect text edits. Sets org.gnome.desktop.interface toolkit-accessibility to true via gsettings.",

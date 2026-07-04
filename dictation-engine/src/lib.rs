@@ -140,6 +140,11 @@ struct DaemonConfig {
     // Sets org.gnome.desktop.interface toolkit-accessibility to true on startup.
     #[serde(default = "default_enable_accessibility_bridge")]
     enable_accessibility_bridge: bool,
+
+    // Use the wezterm-native correction backend (mux CLI pane polling) when the
+    // injection target is wezterm, which AT-SPI2 cannot see.
+    #[serde(default = "default_correction_backend_wezterm")]
+    correction_backend_wezterm: bool,
 }
 
 fn default_model() -> String {
@@ -191,6 +196,9 @@ fn default_correction_max_age_days() -> u32 {
     30
 }
 fn default_enable_accessibility_bridge() -> bool {
+    true
+}
+fn default_correction_backend_wezterm() -> bool {
     true
 }
 
@@ -661,6 +669,7 @@ pub async fn run() -> Result<()> {
                 correction_auto_promote_threshold: default_correction_auto_promote_threshold(),
                 correction_max_age_days: default_correction_max_age_days(),
                 enable_accessibility_bridge: default_enable_accessibility_bridge(),
+                correction_backend_wezterm: default_correction_backend_wezterm(),
             },
         }
     });
@@ -788,6 +797,50 @@ pub async fn run() -> Result<()> {
         info!("Correction learning disabled");
         None
     };
+
+    // Initialize the wezterm-native correction backend. AT-SPI2 cannot see
+    // wezterm, so injections targeting wezterm are monitored by polling the
+    // mux CLI instead. Socket discovery happens lazily per monitoring run, so
+    // this works regardless of whether wezterm is running at daemon startup.
+    #[cfg(feature = "correction")]
+    let wezterm_monitor =
+        if config.daemon.enable_correction_learning && config.daemon.correction_backend_wezterm {
+            let data_dir =
+                dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
+            let vd_dir = data_dir.join("voice-dictation");
+            let monitor_config = correction_engine::MonitorConfig {
+                enabled: true,
+                monitor_duration_secs: config.daemon.correction_monitor_duration_secs,
+                auto_promote_threshold: config.daemon.correction_auto_promote_threshold,
+                max_age_days: config.daemon.correction_max_age_days,
+                store_path: vd_dir.join("corrections.json"),
+                substitutions_path: vd_dir.join("substitutions.txt"),
+            };
+            // Share the store with the AT-SPI monitor when it exists, so the two
+            // backends don't clobber each other's saves of corrections.json.
+            let monitor = match correction_monitor.as_ref() {
+                Some(atspi_monitor) => Some(correction_engine::WeztermMonitor::with_shared_store(
+                    atspi_monitor.store_handle(),
+                    monitor_config,
+                )),
+                None => match correction_engine::WeztermMonitor::new(monitor_config) {
+                    Ok(m) => Some(m),
+                    Err(e) => {
+                        warn!("Failed to initialize wezterm correction backend: {}", e);
+                        None
+                    }
+                },
+            };
+            if monitor.is_some() {
+                info!(
+                    "wezterm correction backend enabled (live socket now: {})",
+                    correction_engine::WeztermMonitor::is_available()
+                );
+            }
+            monitor
+        } else {
+            None
+        };
 
     // Parse model specification (Parakeet only)
     let model_spec = ModelSpec::parse(&config.daemon.model)
@@ -1266,8 +1319,8 @@ pub async fn run() -> Result<()> {
                         }
                         #[cfg(feature = "correction")]
                         DaemonCommand::SnapshotCorrection => {
-                            match (correction_monitor.as_ref(), last_injection.clone()) {
-                                (Some(monitor), Some(ctx)) => {
+                            match last_injection.clone() {
+                                Some(ctx) => {
                                     // Re-arm the monitoring window against the last injection
                                     // so edits made after the original window expired are
                                     // still captured as corrections.
@@ -1276,13 +1329,23 @@ pub async fn run() -> Result<()> {
                                         instant: Instant::now(),
                                         ..ctx
                                     };
-                                    let _handle = monitor.start_monitoring(context);
-                                    info!("Manual snapshot: re-armed correction monitoring for last injection");
+                                    let is_wezterm = context.window_class
+                                        == correction_engine::WEZTERM_WINDOW_CLASS;
+                                    match (is_wezterm, &wezterm_monitor, &correction_monitor) {
+                                        (true, Some(monitor), _) => {
+                                            let _handle = monitor.start_monitoring(context);
+                                            info!("Manual snapshot: re-armed wezterm correction monitoring for last injection");
+                                        }
+                                        (_, _, Some(monitor)) => {
+                                            let _handle = monitor.start_monitoring(context);
+                                            info!("Manual snapshot: re-armed correction monitoring for last injection");
+                                        }
+                                        _ => {
+                                            warn!("SnapshotCorrection requested but correction learning is disabled");
+                                        }
+                                    }
                                 }
-                                (None, _) => {
-                                    warn!("SnapshotCorrection requested but correction learning is disabled");
-                                }
-                                (_, None) => {
+                                None => {
                                     warn!("SnapshotCorrection requested but nothing has been dictated yet");
                                 }
                             }
@@ -1577,7 +1640,7 @@ pub async fn run() -> Result<()> {
 
                     // Start correction monitoring (background task, non-blocking)
                     #[cfg(feature = "correction")]
-                    if let Some(ref monitor) = correction_monitor {
+                    {
                         let context = correction_engine::InjectionContext {
                             text: sanitized_result.clone(),
                             timestamp: chrono::Utc::now(),
@@ -1589,11 +1652,27 @@ pub async fn run() -> Result<()> {
                             window_title: String::new(),
                         };
                         last_injection = Some(context.clone());
-                        let _handle = monitor.start_monitoring(context);
-                        debug!(
-                            "Correction monitoring started for {}s",
-                            config.daemon.correction_monitor_duration_secs
-                        );
+                        // wezterm is invisible to AT-SPI2 — route injections
+                        // targeting it to the wezterm-native backend instead.
+                        let is_wezterm =
+                            context.window_class == correction_engine::WEZTERM_WINDOW_CLASS;
+                        match (is_wezterm, &wezterm_monitor, &correction_monitor) {
+                            (true, Some(monitor), _) => {
+                                let _handle = monitor.start_monitoring(context);
+                                debug!(
+                                    "wezterm correction monitoring started for {}s",
+                                    config.daemon.correction_monitor_duration_secs
+                                );
+                            }
+                            (_, _, Some(monitor)) => {
+                                let _handle = monitor.start_monitoring(context);
+                                debug!(
+                                    "Correction monitoring started for {}s",
+                                    config.daemon.correction_monitor_duration_secs
+                                );
+                            }
+                            _ => {}
+                        }
                     }
 
                     // Send to GUI via channel
