@@ -103,6 +103,19 @@ impl CorrectionStore {
         Ok(())
     }
 
+    /// Re-read records and blocklist from disk, discarding in-memory state.
+    ///
+    /// The daemon holds a long-lived in-memory store, but the `corrections`
+    /// CLI (`clear`, `remove`, `edit`) mutates corrections.json directly. Without
+    /// this, the daemon's stale in-memory copy clobbers those edits on its next
+    /// save. The daemon's file watcher calls this when the file changes on disk.
+    pub fn reload(&mut self) -> Result<()> {
+        let fresh = Self::load(&self.config)?;
+        self.records = fresh.records;
+        self.blocklist = fresh.blocklist;
+        Ok(())
+    }
+
     /// Record a correction pair. Increments count if seen before.
     /// Returns true if this triggered auto-promotion to substitutions.txt.
     ///
@@ -590,6 +603,28 @@ mod tests {
         assert_eq!(store.blocklist().len(), 1);
         assert!(!store.record_correction(make_pair("cash", "cache")).unwrap());
         assert!(store.lookup("cash").is_empty());
+    }
+
+    #[test]
+    fn test_reload_picks_up_external_clear() {
+        let dir = TempDir::new().unwrap();
+        let config = make_config_in(dir.path());
+
+        // Daemon's long-lived in-memory store learns (and persists) a pair.
+        let mut daemon_store = CorrectionStore::empty(config.clone());
+        daemon_store.record_correction(make_pair("cash", "cache")).unwrap();
+        assert_eq!(daemon_store.records().len(), 1);
+
+        // A separate process (the `corrections` CLI) clears the file on disk.
+        {
+            let mut cli_store = CorrectionStore::load(&config).unwrap();
+            cli_store.clear().unwrap();
+        }
+
+        // Without reload the daemon would clobber the clear on its next save;
+        // reload discards the stale in-memory copy and matches disk.
+        daemon_store.reload().unwrap();
+        assert!(daemon_store.records().is_empty());
     }
 
     #[test]

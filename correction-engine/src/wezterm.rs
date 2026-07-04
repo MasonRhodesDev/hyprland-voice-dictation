@@ -94,6 +94,20 @@ const CHURN_MIN_TOKENS: usize = 20;
 /// treated as churn instead of running a quadratic LCS.
 const MAX_DIFF_TOKENS: usize = 3000;
 
+/// Distinctive shell-prompt glyphs. When dictated text is executed at a shell
+/// prompt, its line is replaced by a prompt echo (e.g. `❯ cmd`) and the pane
+/// fills with command output — not an in-place text edit. These Powerline /
+/// Nerd-font glyphs never occur in dictated natural language, so their
+/// appearance inside the injected span marks shell activity, not a correction.
+/// (Plain `$`/`#`/`>` prompts are intentionally excluded: they legitimately
+/// occur in dictated code and prose, and would cause false positives.)
+const PROMPT_MARKERS: &[char] = &['❯', '➜', '➤', '»', '▶', 'λ', '⟩', '❭'];
+
+/// Whether `s` contains a distinctive shell-prompt glyph.
+fn contains_prompt_marker(s: &str) -> bool {
+    s.chars().any(|c| PROMPT_MARKERS.contains(&c))
+}
+
 // ---------------------------------------------------------------------------
 // Socket discovery
 // ---------------------------------------------------------------------------
@@ -410,6 +424,10 @@ pub enum RevisionOutcome {
     SpanLost,
     /// Most of the pane changed at once — a TUI redraw, not an edit.
     Churn,
+    /// The injected text was executed at a shell prompt: a prompt glyph / command
+    /// output replaced the editable text. Never an in-place edit — stop and
+    /// record nothing.
+    ShellActivity,
 }
 
 /// Char offset of `token_idx` (relative to `span.start`) within the
@@ -476,6 +494,13 @@ pub fn diff_revision(
         let deleted: String = baseline[ca..cb].join(" ");
         let inserted: String = current[r.b_start..r.b_end].join(" ");
         let pos = span_char_offset(baseline, span, ca);
+
+        // A prompt glyph appearing where editable text was means the injected
+        // text was run as a command (its line became a prompt echo). The rest of
+        // the pane is now command output, not an edit — abandon this window.
+        if contains_prompt_marker(&inserted) {
+            return RevisionOutcome::ShellActivity;
+        }
 
         if !deleted.is_empty() {
             events.push(TextChangeEvent {
@@ -562,6 +587,12 @@ impl WeztermMonitor {
 
     pub fn set_poll_interval(&mut self, interval: Duration) {
         self.poll_interval = interval;
+    }
+
+    /// Shared handle to the underlying store, so the daemon can reload it from
+    /// disk when the `corrections` CLI mutates the file externally.
+    pub fn store_handle(&self) -> Arc<Mutex<CorrectionStore>> {
+        Arc::clone(&self.store)
     }
 
     /// Whether a live wezterm GUI socket is reachable right now.
@@ -664,6 +695,16 @@ impl WeztermMonitor {
                 RevisionOutcome::SpanLost => {
                     // Scrolled out / cleared — later polls can't recover it.
                     debug!("wezterm: injected span no longer visible, ending monitoring");
+                    break;
+                }
+                RevisionOutcome::ShellActivity => {
+                    // Injected text was executed at a prompt; any pairs extracted
+                    // before are shell chrome, not edits. Drop and stop.
+                    debug!(
+                        "wezterm: shell prompt/execution detected in span — \
+                         ending monitoring without recording"
+                    );
+                    last_pairs.clear();
                     break;
                 }
                 RevisionOutcome::Churn => {
@@ -928,6 +969,37 @@ mod tests {
 
         let outcome = diff_revision(&baseline, span, &current, &context);
         assert_eq!(outcome, RevisionOutcome::Corrections(Vec::new()));
+    }
+
+    #[test]
+    fn test_contains_prompt_marker() {
+        assert!(contains_prompt_marker("❯ thecvlb"));
+        assert!(contains_prompt_marker("foo ➜ bar"));
+        // Dictated prose/code must not trip it (plain $ / # / > are excluded).
+        assert!(!contains_prompt_marker("the cache is here"));
+        assert!(!contains_prompt_marker("$ git status # comment > out"));
+        assert!(!contains_prompt_marker("spend $5 on C#"));
+    }
+
+    #[test]
+    fn test_diff_revision_shell_execution_is_not_a_correction() {
+        // User dictated "the c v l b" at a shell prompt, then pressed Enter. The
+        // span line became a prompt echo of the run command ("❯ thecvlb") — shell
+        // activity, not an in-place edit. This is the exact live-test garbage case.
+        let context = make_context("the c v l b");
+        let baseline = toks(
+            "prev output line one two three four five six \
+             seven eight nine ten eleven twelve the c v l b",
+        );
+        let span = locate_span(&baseline, &toks("the c v l b")).unwrap();
+        let current = toks(
+            "prev output line one two three four five six \
+             seven eight nine ten eleven twelve ❯ thecvlb",
+        );
+        assert_eq!(
+            diff_revision(&baseline, span, &current, &context),
+            RevisionOutcome::ShellActivity
+        );
     }
 
     #[test]

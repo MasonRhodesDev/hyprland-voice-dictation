@@ -325,6 +325,53 @@ async fn watch_substitution_file(word_sub: WordSubstitutionProcessor) -> Result<
     Ok(())
 }
 
+/// Watch the learned-corrections store and reload it on external changes.
+///
+/// The daemon keeps corrections.json in memory, but the `corrections` CLI
+/// (`clear`, `remove`, `edit`) writes the file directly. Without this reload
+/// the daemon's stale in-memory copy clobbers those edits on its next save.
+#[cfg(feature = "correction")]
+async fn watch_corrections_file(
+    store: Arc<tokio::sync::Mutex<correction_engine::CorrectionStore>>,
+    path: std::path::PathBuf,
+) -> Result<()> {
+    info!("Watching corrections file: {:?}", path);
+
+    let (tx, mut rx) = mpsc::channel(100);
+
+    let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+        if let Ok(event) = res {
+            let _ = tx.blocking_send(event);
+        }
+    })?;
+
+    if path.exists() {
+        watcher.watch(&path, RecursiveMode::NonRecursive)?;
+    } else if let Some(parent) = path.parent() {
+        if parent.exists() {
+            watcher.watch(parent, RecursiveMode::NonRecursive)?;
+        }
+    }
+
+    while let Some(event) = rx.recv().await {
+        match event.kind {
+            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                if event.paths.iter().any(|p| p == &path) =>
+            {
+                debug!("Corrections file changed: {:?}, reloading...", path);
+                if let Err(e) = store.lock().await.reload() {
+                    warn!("Failed to reload corrections store: {}", e);
+                } else {
+                    debug!("Corrections store reloaded from disk");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 /// Health state shared between subsystems and D-Bus service.
 pub struct HealthState {
     /// Whether audio is flowing (updated by audio forwarding thread)
@@ -842,6 +889,27 @@ pub async fn run() -> Result<()> {
         } else {
             None
         };
+
+    // Reload the in-memory store when the `corrections` CLI edits the file, so
+    // external clear/remove/edit aren't clobbered by the daemon's next save.
+    // Both backends share one store, so either handle points at the same data.
+    #[cfg(feature = "correction")]
+    {
+        let store_handle = correction_monitor
+            .as_ref()
+            .map(|m| m.store_handle())
+            .or_else(|| wezterm_monitor.as_ref().map(|m| m.store_handle()));
+        if let Some(store) = store_handle {
+            let data_dir =
+                dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
+            let corrections_path = data_dir.join("voice-dictation").join("corrections.json");
+            tokio::spawn(async move {
+                if let Err(e) = watch_corrections_file(store, corrections_path).await {
+                    error!("Corrections file watcher error: {}", e);
+                }
+            });
+        }
+    }
 
     // Parse model specification (Parakeet only)
     let model_spec = ModelSpec::parse(&config.daemon.model)
