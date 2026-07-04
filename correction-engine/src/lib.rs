@@ -10,6 +10,8 @@
 //! - **`event_filter`**: Pure functions for filtering events by time/position/app
 //! - **`store`**: JSON persistence with frequency counting and auto-promotion
 //! - **`connection`**: AT-SPI2 bus abstraction (trait-based for testability)
+//! - **`wezterm`**: wezterm-native backend (mux CLI pane polling) for
+//!   terminals AT-SPI2 cannot see
 //!
 //! # Usage
 //!
@@ -39,6 +41,7 @@ pub mod diff;
 pub mod event_filter;
 pub mod store;
 pub mod types;
+pub mod wezterm;
 
 // Re-export primary API types
 pub use connection::{AtspiConnection, MockTextChangeSource, TextChangeSource};
@@ -46,6 +49,7 @@ pub use store::CorrectionStore;
 pub use types::{
     CorrectionPair, CorrectionStats, InjectionContext, MonitorConfig, TextChangeEvent,
 };
+pub use wezterm::{WeztermMonitor, WEZTERM_WINDOW_CLASS};
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -209,6 +213,13 @@ impl CorrectionMonitor {
     /// Check if AT-SPI2 is available on this system.
     pub fn is_available(&self) -> bool {
         self.source.is_available()
+    }
+
+    /// Shared handle to the underlying correction store, so alternative
+    /// backends (e.g. [`wezterm::WeztermMonitor`]) can record into the same
+    /// in-memory store instead of clobbering each other's saves.
+    pub fn store_handle(&self) -> Arc<Mutex<CorrectionStore>> {
+        Arc::clone(&self.store)
     }
 
     /// Get correction statistics.
