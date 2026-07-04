@@ -9060,6 +9060,7 @@ name = "voice-dictation"
 version = "0.3.4"
 dependencies = [
  "clap",
+ "correction-engine",
  "dictation-engine",
  "reqwest",
  "schema-tui",

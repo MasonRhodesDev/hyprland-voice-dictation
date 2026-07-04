@@ -132,6 +132,10 @@ struct DaemonConfig {
     #[serde(default = "default_correction_auto_promote_threshold")]
     correction_auto_promote_threshold: u32,
 
+    // Unpromoted corrections older than this many days are pruned on daemon start
+    #[serde(default = "default_correction_max_age_days")]
+    correction_max_age_days: u32,
+
     // Enable the GTK/Qt accessibility bridge (required for correction detection).
     // Sets org.gnome.desktop.interface toolkit-accessibility to true on startup.
     #[serde(default = "default_enable_accessibility_bridge")]
@@ -182,6 +186,9 @@ fn default_correction_monitor_duration_secs() -> u64 {
 }
 fn default_correction_auto_promote_threshold() -> u32 {
     3
+}
+fn default_correction_max_age_days() -> u32 {
+    30
 }
 fn default_enable_accessibility_bridge() -> bool {
     true
@@ -652,6 +659,7 @@ pub async fn run() -> Result<()> {
                 enable_correction_learning: default_enable_correction_learning(),
                 correction_monitor_duration_secs: default_correction_monitor_duration_secs(),
                 correction_auto_promote_threshold: default_correction_auto_promote_threshold(),
+                correction_max_age_days: default_correction_max_age_days(),
                 enable_accessibility_bridge: default_enable_accessibility_bridge(),
             },
         }
@@ -758,6 +766,7 @@ pub async fn run() -> Result<()> {
             enabled: true,
             monitor_duration_secs: config.daemon.correction_monitor_duration_secs,
             auto_promote_threshold: config.daemon.correction_auto_promote_threshold,
+            max_age_days: config.daemon.correction_max_age_days,
             store_path: vd_dir.join("corrections.json"),
             substitutions_path: vd_dir.join("substitutions.txt"),
         };

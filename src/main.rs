@@ -139,14 +139,19 @@ enum SubstCommands {
 
 #[derive(Subcommand)]
 enum CorrectionCommands {
-    #[command(about = "List all learned corrections")]
+    #[command(about = "List all learned corrections (and blocklisted pairs)")]
     List,
-    #[command(about = "Remove a learned correction by number (from 'corrections list')")]
+    #[command(
+        about = "Remove learned corrections by their original phrase and blocklist them",
+        long_about = "Remove learned corrections by their original phrase (from 'corrections list').\n\n\
+                      Removed pairs go to a persisted blocklist and are never re-recorded or\n\
+                      auto-promoted again."
+    )]
     Remove {
-        #[arg(help = "Correction number to remove (1-based index from 'corrections list')")]
-        number: usize,
+        #[arg(help = "Original (transcribed) phrase of the correction(s) to remove")]
+        original: String,
     },
-    #[command(about = "Remove all learned corrections and start fresh")]
+    #[command(about = "Remove all learned corrections and start fresh (blocklist is kept)")]
     Clear,
     #[command(about = "Open corrections file in $EDITOR")]
     Edit,
@@ -655,6 +660,84 @@ fn debug_play(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn corrections_command(command: CorrectionCommands) -> Result<(), Box<dyn std::error::Error>> {
+    use correction_engine::{CorrectionStore, MonitorConfig};
+
+    // Only the store/substitution paths matter for CLI use; the monitor
+    // settings are irrelevant here.
+    let config = MonitorConfig::default();
+
+    match command {
+        CorrectionCommands::List => {
+            let store = CorrectionStore::load(&config)?;
+            let records = store.records();
+            if records.is_empty() {
+                println!("No corrections recorded yet.");
+            } else {
+                println!("{:>5}  {:<20} {:<20} Status", "Count", "Original", "Corrected");
+                println!("{}", "-".repeat(70));
+                for r in records {
+                    let status = if r.promoted { "promoted" } else { "pending" };
+                    println!("{:>5}  {:<20} {:<20} {}", r.count, r.original, r.corrected, status);
+                }
+            }
+            let blocklist = store.blocklist();
+            if !blocklist.is_empty() {
+                println!("\nBlocklisted (never re-learned):");
+                for b in blocklist {
+                    println!("  '{}' → '{}'", b.original, b.corrected);
+                }
+            }
+            println!("\nFile: {}", config.store_path.display());
+        }
+        CorrectionCommands::Remove { original } => {
+            let mut store = CorrectionStore::load(&config)?;
+            let removed = store.remove(&original)?;
+            if removed.is_empty() {
+                println!(
+                    "No correction found for '{}'. Use 'voice-dictation corrections list' to see originals.",
+                    original
+                );
+                return Err("No matching correction".into());
+            }
+            for r in &removed {
+                println!("Removed and blocklisted: '{}' → '{}'", r.original, r.corrected);
+            }
+        }
+        CorrectionCommands::Clear => {
+            print!("Remove all learned corrections? [y/N] ");
+            io::stdout().flush()?;
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            if input.trim().to_lowercase() == "y" {
+                let mut store = CorrectionStore::load(&config)?;
+                let count = store.clear()?;
+                println!("Cleared {} correction(s). Blocklist kept.", count);
+            } else {
+                println!("Cancelled.");
+            }
+        }
+        CorrectionCommands::Edit => {
+            let corrections_path = &config.store_path;
+            if !corrections_path.exists() {
+                // Create empty file
+                if let Some(dir) = corrections_path.parent() {
+                    fs::create_dir_all(dir)?;
+                }
+                let data = serde_json::json!({"version": 1, "corrections": [], "blocklist": []});
+                fs::write(corrections_path, serde_json::to_string_pretty(&data)?)?;
+            }
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+            let status = Command::new(&editor).arg(corrections_path).status()?;
+            if !status.success() {
+                eprintln!("{} exited with: {}", editor, status);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn dict_command(command: DictCommands) -> Result<(), Box<dyn std::error::Error>> {
     use dictation_engine::user_dictionary::UserDictionary;
 
@@ -1147,103 +1230,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("File location: {}", corrections_path.display());
             }
         }
-        Commands::Corrections { command } => {
-            let home = std::env::var("HOME")?;
-            let corrections_path = std::path::PathBuf::from(&home)
-                .join(".local/share/voice-dictation/corrections.json");
-
-            match command {
-                CorrectionCommands::List => {
-                    if !corrections_path.exists() {
-                        println!("No corrections recorded yet.");
-                        return Ok(());
-                    }
-                    let content = fs::read_to_string(&corrections_path)?;
-                    let data: Value = serde_json::from_str(&content)?;
-                    if let Some(corrections) = data["corrections"].as_array() {
-                        if corrections.is_empty() {
-                            println!("No corrections recorded yet.");
-                            return Ok(());
-                        }
-                        println!(
-                            "{:<4} {:>5}  {:<20} {:<20} Status",
-                            "#", "Count", "Original", "Corrected"
-                        );
-                        println!("{}", "-".repeat(75));
-                        for (i, c) in corrections.iter().enumerate() {
-                            let orig = c["original"].as_str().unwrap_or("?");
-                            let corr = c["corrected"].as_str().unwrap_or("?");
-                            let count = c["count"].as_u64().unwrap_or(0);
-                            let status = if c["promoted"].as_bool().unwrap_or(false) {
-                                "promoted"
-                            } else {
-                                "pending"
-                            };
-                            println!(
-                                "{:<4} {:>5}  {:<20} {:<20} {}",
-                                i + 1,
-                                count,
-                                orig,
-                                corr,
-                                status
-                            );
-                        }
-                        println!();
-                        println!("File: {}", corrections_path.display());
-                    }
-                }
-                CorrectionCommands::Remove { number } => {
-                    if !corrections_path.exists() {
-                        println!("No corrections file found.");
-                        return Ok(());
-                    }
-                    let content = fs::read_to_string(&corrections_path)?;
-                    let mut data: Value = serde_json::from_str(&content)?;
-                    if let Some(corrections) = data["corrections"].as_array_mut() {
-                        if number == 0 || number > corrections.len() {
-                            eprintln!("Invalid number {}. Use 'voice-dictation corrections list' to see valid numbers (1-{}).", number, corrections.len());
-                            return Err("Invalid correction number".into());
-                        }
-                        let removed = corrections.remove(number - 1);
-                        let orig = removed["original"].as_str().unwrap_or("?");
-                        let corr = removed["corrected"].as_str().unwrap_or("?");
-                        fs::write(&corrections_path, serde_json::to_string_pretty(&data)?)?;
-                        println!("Removed correction: '{}' → '{}'", orig, corr);
-                    }
-                }
-                CorrectionCommands::Clear => {
-                    if !corrections_path.exists() {
-                        println!("No corrections file found.");
-                        return Ok(());
-                    }
-                    print!("Remove all learned corrections? [y/N] ");
-                    io::stdout().flush()?;
-                    let mut input = String::new();
-                    io::stdin().read_line(&mut input)?;
-                    if input.trim().to_lowercase() == "y" {
-                        let data = serde_json::json!({"version": 1, "corrections": []});
-                        fs::write(&corrections_path, serde_json::to_string_pretty(&data)?)?;
-                        println!("All corrections cleared.");
-                    } else {
-                        println!("Cancelled.");
-                    }
-                }
-                CorrectionCommands::Edit => {
-                    if !corrections_path.exists() {
-                        // Create empty file
-                        let dir = corrections_path.parent().unwrap();
-                        fs::create_dir_all(dir)?;
-                        let data = serde_json::json!({"version": 1, "corrections": []});
-                        fs::write(&corrections_path, serde_json::to_string_pretty(&data)?)?;
-                    }
-                    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-                    let status = Command::new(&editor).arg(&corrections_path).status()?;
-                    if !status.success() {
-                        eprintln!("{} exited with: {}", editor, status);
-                    }
-                }
-            }
-        }
+        Commands::Corrections { command } => corrections_command(command)?,
     }
 
     Ok(())

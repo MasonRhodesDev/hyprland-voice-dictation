@@ -53,6 +53,17 @@ pub struct CorrectionRecord {
     pub promoted: bool,
 }
 
+/// A rejected correction pair — persisted so it's never re-recorded or promoted again.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlockedPair {
+    /// The original (transcribed) form, lowercase
+    pub original: String,
+    /// The rejected corrected form, lowercase
+    pub corrected: String,
+    /// When the pair was removed/blocked
+    pub blocked_at: DateTime<Utc>,
+}
+
 /// Aggregate statistics about the correction store.
 #[derive(Debug, Clone, Default)]
 pub struct CorrectionStats {
@@ -75,6 +86,8 @@ pub struct MonitorConfig {
     pub monitor_duration_secs: u64,
     /// Number of times a correction must be seen before auto-promotion
     pub auto_promote_threshold: u32,
+    /// Unpromoted pairs older than this (by last_seen) are pruned on load
+    pub max_age_days: u32,
     /// Path to the corrections JSON store
     pub store_path: PathBuf,
     /// Path to the substitutions.txt file (for auto-promotion output)
@@ -90,6 +103,7 @@ impl Default for MonitorConfig {
             enabled: true,
             monitor_duration_secs: 60,
             auto_promote_threshold: 3,
+            max_age_days: 30,
             store_path: vd_dir.join("corrections.json"),
             substitutions_path: vd_dir.join("substitutions.txt"),
         }

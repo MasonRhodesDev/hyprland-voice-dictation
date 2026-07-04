@@ -148,6 +148,16 @@
           "ui_widget": "number_input"
         },
         {
+          "id": "correction_max_age_days",
+          "label": "Correction Max Age",
+          "description": "Unpromoted corrections not seen for this many days are pruned when the daemon starts.",
+          "type": "number",
+          "default": 30,
+          "min": 1,
+          "max": 365,
+          "ui_widget": "number_input"
+        },
+        {
           "id": "enable_accessibility_bridge",
           "label": "Enable Accessibility Bridge",
           "description": "Automatically enable the GTK/Qt accessibility bridge on daemon startup. Required for correction learning to detect text edits. Sets org.gnome.desktop.interface toolkit-accessibility to true via gsettings.",
