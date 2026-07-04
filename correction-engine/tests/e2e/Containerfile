@@ -2,6 +2,7 @@ FROM fedora:42
 
 RUN dnf install -y \
     dbus-daemon \
+    dbus-x11 \
     at-spi2-core \
     at-spi2-atk \
     weston \
