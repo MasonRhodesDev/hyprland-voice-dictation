@@ -33,7 +33,7 @@
 %global __cargo_common_opts %{?_smp_mflags} -Z avoid-dev-deps --locked
 
 Name:           hyprland-voice-dictation
-Version:        0.3.4
+Version:        0.4.0
 Release:        1%{?dist}
 Summary:        Offline voice dictation for Hyprland with Parakeet speech recognition
 # Project code is MIT OR Apache-2.0; the binary links a large dependency
@@ -118,6 +118,12 @@ install -Dpm0755 scripts/download-parakeet-model.sh %{buildroot}%{_datadir}/%{na
 %{_datadir}/%{name}/download-parakeet-model.sh
 
 %changelog
+* Sat Jul 04 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.4.0-1
+- Correction/dictionary UX: dict/subst/corrections CLI, learned-correction
+  store with hot-reload, wezterm-native correction backend, IME probe
+- Reject shell-execution as corrections; hot-reload corrections.json on CLI edits
+- Real AT-SPI2 e2e test; fix AT-SPI listener dying on first stream error
+
 * Fri Jul 03 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.3.4-1
 - Disable makepkg LTO (onig C objects vs ld.lld)
 
