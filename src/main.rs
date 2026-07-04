@@ -174,6 +174,33 @@ enum DebugCommands {
                       needs for wezterm-native correction detection in one command."
     )]
     WeztermProbe,
+    #[command(
+        about = "Time-boxed zwp_input_method_v2 diagnostic probe (holds the compositor IME slot)",
+        long_about = "Bind zwp_input_method_v2 for a fixed number of seconds and log every IME\n\
+                      event (activate/deactivate, surrounding_text, text_change_cause,\n\
+                      content_type), tagged with the focused window class from hyprctl.\n\n\
+                      Never grabs the keyboard. Exits immediately if another IME holds the slot.\n\
+                      --commit sends commit_string into the focused editor for write-path\n\
+                      validation, but ONLY while a window whose class exactly matches\n\
+                      --commit-class is focused (use a throwaway target like `zenity --entry`)."
+    )]
+    ImeProbe {
+        #[arg(long, default_value_t = 30, help = "Seconds to hold the IME slot")]
+        secs: u64,
+        #[arg(long, help = "Emit a machine-readable JSON summary on stdout")]
+        json: bool,
+        #[arg(
+            long,
+            requires = "commit_class",
+            help = "Text to commit_string into the focused editor (write-path test)"
+        )]
+        commit: Option<String>,
+        #[arg(
+            long,
+            help = "Exact window class the commit is restricted to (safety gate, e.g. 'zenity')"
+        )]
+        commit_class: Option<String>,
+    },
 }
 
 fn get_state() -> String {
@@ -1220,6 +1247,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             DebugCommands::List => debug_list()?,
             DebugCommands::Play { filename } => debug_play(&filename)?,
             DebugCommands::WeztermProbe => debug_wezterm_probe()?,
+            DebugCommands::ImeProbe { secs, json, commit, commit_class } => {
+                dictation_engine::ime_probe::run(dictation_engine::ime_probe::ProbeOptions {
+                    secs,
+                    json,
+                    commit_text: commit,
+                    commit_class,
+                })?;
+            }
         },
         Commands::Diagnose => diagnose()?,
         Commands::Dict { command } => dict_command(command)?,
