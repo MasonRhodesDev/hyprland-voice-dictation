@@ -165,6 +165,8 @@ impl CorrectionMonitor {
             return Ok(Vec::new());
         }
 
+        info!("Monitoring window summary: {}", summarize_events(&events));
+
         // Filter events
         let filtered = event_filter::filter_events(&events, &context, &config);
         debug!("After filtering: {} of {} events are relevant", filtered.len(), events.len());
@@ -213,5 +215,60 @@ impl CorrectionMonitor {
     pub async fn stats(&self) -> CorrectionStats {
         let store = self.store.lock().await;
         store.stats()
+    }
+}
+
+/// Summarize a monitoring window's events as counts grouped by source
+/// application and event type. Purely diagnostic — helps explain surprise
+/// event floods (e.g. 122 events from a single injection).
+fn summarize_events(events: &[TextChangeEvent]) -> String {
+    let mut per_app: std::collections::BTreeMap<&str, (usize, usize)> =
+        std::collections::BTreeMap::new();
+    for event in events {
+        let entry = per_app.entry(event.source_app.as_str()).or_insert((0, 0));
+        match event.operation {
+            types::TextChangeOp::Insert => entry.0 += 1,
+            types::TextChangeOp::Delete => entry.1 += 1,
+        }
+    }
+    per_app
+        .iter()
+        .map(|(app, (inserts, deletes))| {
+            format!("'{}': {} insert(s), {} delete(s)", app, inserts, deletes)
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::TextChangeOp;
+    use std::time::Instant;
+
+    fn make_event(source_app: &str, operation: TextChangeOp) -> TextChangeEvent {
+        TextChangeEvent {
+            operation,
+            start_pos: 0,
+            length: 1,
+            text: "x".to_string(),
+            timestamp: Instant::now(),
+            source_app: source_app.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_summarize_events_groups_by_app_and_type() {
+        let events = vec![
+            make_event("firefox", TextChangeOp::Insert),
+            make_event("firefox", TextChangeOp::Insert),
+            make_event("firefox", TextChangeOp::Delete),
+            make_event("Code", TextChangeOp::Insert),
+        ];
+
+        assert_eq!(
+            summarize_events(&events),
+            "'Code': 1 insert(s), 0 delete(s); 'firefox': 2 insert(s), 1 delete(s)"
+        );
     }
 }
