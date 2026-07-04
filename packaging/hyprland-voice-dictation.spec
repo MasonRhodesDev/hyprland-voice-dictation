@@ -34,6 +34,9 @@ BuildRequires:  cargo-rpm-macros >= 24
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  pkg-config
 BuildRequires:  clang-devel
+# reqwest (VAD model download) pulls native-tls -> openssl-sys, which needs the
+# openssl headers to build.
+BuildRequires:  openssl-devel
 BuildRequires:  pipewire-devel
 BuildRequires:  alsa-lib-devel
 BuildRequires:  fontconfig-devel
