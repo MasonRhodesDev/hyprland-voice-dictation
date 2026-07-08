@@ -14,6 +14,27 @@ Offline voice dictation for Hyprland using NVIDIA Parakeet TDT speech recognitio
 - **systemd daemon** — persistent background service with watchdog support
 - **playerctl integration** — auto-pause/resume media during recording
 
+## How it works
+
+The whole pipeline runs on-device inside one daemon — no audio ever leaves the machine.
+
+```mermaid
+flowchart TD
+    key["Hyprland keybind"] -->|"exec voice-dictation toggle"| cli["CLI client"]
+    cli -->|"D-Bus com.voicedictation.Control"| engine
+
+    subgraph engine["voice-dictation daemon"]
+        cap["PipeWire / ALSA capture"] --> vad["Silero VAD"]
+        vad --> asr["Parakeet TDT — ONNX Runtime, fully local"]
+        asr --> post["Post-processing: Harper grammar, user dictionary, hotword substitution"]
+        post --> inject["wtype injection into focused window"]
+    end
+
+    engine -->|"live transcription over unix socket"| hud["Slint layer-shell overlay HUD"]
+    engine -->|"ksni StatusNotifierItem"| tray["System tray: status, device selection"]
+    systemd["systemd Type=notify watchdog"] -->|"supervises, restarts on stall"| engine
+```
+
 ## Requirements
 
 - Wayland compositor (Hyprland, Sway, etc.)
@@ -157,7 +178,9 @@ Commands:
 
 ## Configuration
 
-Run `voice-dictation config` to open the interactive configuration TUI.
+Run `voice-dictation config` to open the interactive configuration TUI, which covers all daemon settings:
+
+![voice-dictation config TUI showing daemon settings: audio device, Parakeet model, grammar and capitalization toggles, correction learning](.github/screenshots/config-tui.png)
 
 Config file: `~/.config/voice-dictation/config.toml`
 
