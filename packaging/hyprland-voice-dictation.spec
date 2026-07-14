@@ -33,7 +33,7 @@
 %global __cargo_common_opts %{?_smp_mflags} -Z avoid-dev-deps --locked
 
 Name:           hyprland-voice-dictation
-Version:        0.4.0
+Version:        0.4.1
 Release:        1%{?dist}
 Summary:        Offline voice dictation for Hyprland with Parakeet speech recognition
 # Project code is MIT OR Apache-2.0; the binary links a large dependency
@@ -49,6 +49,8 @@ BuildRequires:  cargo-rpm-macros >= 24
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  pkg-config
 BuildRequires:  clang-devel
+# ort-sys links the system ONNX Runtime (no network in COPR for its downloader)
+BuildRequires:  pkgconfig(libonnxruntime)
 # reqwest (VAD model download) pulls native-tls -> openssl-sys, which needs the
 # openssl headers to build.
 BuildRequires:  openssl-devel
@@ -118,6 +120,10 @@ install -Dpm0755 scripts/download-parakeet-model.sh %{buildroot}%{_datadir}/%{na
 %{_datadir}/%{name}/download-parakeet-model.sh
 
 %changelog
+* Tue Jul 14 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.4.1-1
+- BuildRequires pkgconfig(libonnxruntime): COPR builders have no network for
+  ort-sys' prebuilt-binary fallback
+
 * Sat Jul 04 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.4.0-1
 - Correction/dictionary UX: dict/subst/corrections CLI, learned-correction
   store with hot-reload, wezterm-native correction backend, IME probe
