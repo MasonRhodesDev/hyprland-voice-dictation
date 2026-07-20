@@ -24,6 +24,7 @@ mod idle_inhibit;
 pub mod ime_probe;
 mod keyboard;
 pub mod model_selector;
+pub mod openai_engine;
 pub mod parakeet_engine;
 pub mod post_processing;
 pub mod stream_engine;
