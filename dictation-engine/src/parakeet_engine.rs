@@ -182,6 +182,12 @@ fn normalize_audio(samples: &[i16], target_rms: f32, max_gain: f32) -> Vec<i16> 
         .collect()
 }
 
+impl crate::stream_engine::LocalModel for ParakeetEngine {
+    fn transcribe(&self, samples: &[i16]) -> anyhow::Result<String> {
+        self.transcribe_buffer(samples)
+    }
+}
+
 impl TranscriptionEngine for ParakeetEngine {
     fn process_audio(&self, samples: &[i16]) -> Result<()> {
         // ONLY buffer audio here - never run transcription

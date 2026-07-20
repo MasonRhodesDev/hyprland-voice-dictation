@@ -26,6 +26,7 @@ mod keyboard;
 pub mod model_selector;
 pub mod parakeet_engine;
 pub mod post_processing;
+pub mod stream_engine;
 #[cfg(feature = "tray")]
 mod tray;
 pub mod user_dictionary;
