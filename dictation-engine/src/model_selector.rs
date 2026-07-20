@@ -17,6 +17,7 @@ use crate::ctc_engine::CtcEngine;
 use crate::engine::TranscriptionEngine;
 use crate::hotword_trie;
 use crate::parakeet_engine::ParakeetEngine;
+use crate::stream_engine::{LocalEngineDriver, LocalModel, StreamingEngine};
 
 /// Parsed model specification from config
 #[derive(Debug, Clone)]
@@ -122,6 +123,34 @@ impl ModelSpec {
             let model_path = self.model_path();
             let engine = ParakeetEngine::new(model_path, sample_rate)?;
             Ok(Arc::new(engine))
+        }
+    }
+
+    /// Create an event-emitting [`StreamingEngine`] for this spec by wrapping the
+    /// selected local model in a `LocalEngineDriver`. This is the daemon's engine
+    /// factory; the older `create_engine` (pull-based trait) is retained for
+    /// test-loop-ui.
+    pub fn create_streaming_engine(&self, sample_rate: u32) -> Result<Arc<dyn StreamingEngine>> {
+        let model = self.build_local_model(sample_rate)?;
+        Ok(Arc::new(LocalEngineDriver::new(model)))
+    }
+
+    /// Construct the selected local model as a `LocalModel` trait object.
+    fn build_local_model(&self, sample_rate: u32) -> Result<Arc<dyn LocalModel>> {
+        let model_path = self.model_path();
+        if self.is_ctc_direct() {
+            info!(
+                "Creating CTC Direct engine (ONNX + beam search) for model '{}'",
+                self.model_name
+            );
+            Ok(Arc::new(CtcDirectEngine::new(model_path, sample_rate)?))
+        } else if self.is_ctc() {
+            info!("Creating parakeet CTC engine with model '{}'", self.model_name);
+            let hotwords_path = Some(hotword_trie::default_hotwords_path());
+            Ok(Arc::new(CtcEngine::new(model_path, sample_rate, hotwords_path, 10)?))
+        } else {
+            info!("Creating parakeet TDT engine with model '{}'", self.model_name);
+            Ok(Arc::new(ParakeetEngine::new(model_path, sample_rate)?))
         }
     }
 }
