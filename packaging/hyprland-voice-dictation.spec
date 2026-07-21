@@ -33,7 +33,7 @@
 %global __cargo_common_opts %{?_smp_mflags} -Z avoid-dev-deps --locked
 
 Name:           hyprland-voice-dictation
-Version:        0.4.1
+Version:        0.5.0
 Release:        1%{?dist}
 Summary:        Offline voice dictation for Hyprland with Parakeet speech recognition
 # Project code is MIT OR Apache-2.0; the binary links a large dependency
@@ -120,6 +120,14 @@ install -Dpm0755 scripts/download-parakeet-model.sh %{buildroot}%{_datadir}/%{na
 %{_datadir}/%{name}/download-parakeet-model.sh
 
 %changelog
+* Tue Jul 21 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.5.0-1
+- Event-emitting StreamingEngine contract + LocalEngineDriver (streaming
+  partials and correct finalize); daemon loop rewired to consume engine events
+- Opt-in OpenAI transcription engine: set model = "openai:whisper-1" with
+  OPENAI_API_KEY (batch transcription, no streaming partials)
+- Minimal (style2) overlay now renders live transcription text; UI split into
+  reusable components
+
 * Tue Jul 14 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.4.1-1
 - BuildRequires pkgconfig(libonnxruntime): COPR builders have no network for
   ort-sys' prebuilt-binary fallback
