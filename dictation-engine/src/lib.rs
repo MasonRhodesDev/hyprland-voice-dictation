@@ -1347,6 +1347,7 @@ pub async fn run() -> Result<()> {
                                         ev = event_rx.recv() => {
                                             match ev {
                                                 Some(TranscriptEvent::Partial(text_raw)) => {
+                                                    debug!("preview: received partial ({} chars), forwarding UpdateTranscription", text_raw.len());
                                                     let text_processed = match pipeline.process(&text_raw) {
                                                         Ok(processed) => processed,
                                                         Err(e) => {

@@ -76,6 +76,7 @@ impl StreamingEngine for OpenAiEngine {
 
     fn finish(&self) {
         let audio = self.buffer.lock().map(|b| b.clone()).unwrap_or_default();
+        debug!("openai finish: {} samples @ {} Hz", audio.len(), self.sample_rate);
         let sample_rate = self.sample_rate;
         let model = self.model.clone();
         let api_key = self.api_key.clone();
@@ -125,6 +126,7 @@ async fn transcribe(
     sample_rate: u32,
 ) -> Result<String> {
     let wav = encode_wav(samples, sample_rate)?;
+    debug!("openai upload: {} wav bytes ({} samples @ {} Hz)", wav.len(), samples.len(), sample_rate);
 
     let part = reqwest::multipart::Part::bytes(wav)
         .file_name("audio.wav")

@@ -224,7 +224,10 @@ fn run_worker(
                     }
                 };
                 match model.transcribe(&audio) {
-                    Ok(text) => emit(&event_tx, TranscriptEvent::Final(text)),
+                    Ok(text) => {
+                        debug!("driver: final at {} samples -> {:?}", audio.len(), text);
+                        emit(&event_tx, TranscriptEvent::Final(text));
+                    }
                     Err(e) => emit(
                         &event_tx,
                         TranscriptEvent::Error(EngineError::Transcription(e.to_string())),
@@ -252,6 +255,7 @@ fn run_worker(
                     match model.transcribe(&audio) {
                         Ok(text) => {
                             last_len = cur;
+                            debug!("driver: partial at {} samples -> {:?}", cur, text);
                             emit(&event_tx, TranscriptEvent::Partial(text));
                         }
                         Err(e) => emit(
