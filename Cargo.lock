@@ -2470,6 +2470,7 @@ dependencies = [
  "sha2",
  "shellexpand",
  "slint-gui",
+ "strsim",
  "systemd",
  "tempfile",
  "tokenizers",

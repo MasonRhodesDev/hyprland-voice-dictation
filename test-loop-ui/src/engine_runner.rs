@@ -93,6 +93,7 @@ pub fn rerun_on_wav(wav_path: &Path) -> Result<String> {
         None,
         config.daemon.enable_word_substitution,
         word_sub,
+        false, // no user dictionary here, so fuzzy vocab is a no-op
     );
     let processed = pipeline.process(&raw)?;
 

@@ -99,6 +99,13 @@ struct DaemonConfig {
     #[serde(default = "default_enable_word_substitution")]
     enable_word_substitution: bool,
 
+    // Fuzzy-match transcribed words against the user dictionary to fix
+    // vendor/product names and acronyms (e.g. "life md" → "lifemd",
+    // "hyperland" → "hyprland"). Works with any engine; corrections improve as
+    // you add words with `dict add`.
+    #[serde(default = "default_enable_fuzzy_vocab")]
+    enable_fuzzy_vocab: bool,
+
     // Audio capture
     #[serde(default = "default_silence_threshold_db")]
     silence_threshold_db: f32,
@@ -160,6 +167,9 @@ fn default_enable_punctuation() -> bool {
     true
 }
 fn default_enable_grammar() -> bool {
+    true
+}
+fn default_enable_fuzzy_vocab() -> bool {
     true
 }
 fn default_enable_word_substitution() -> bool {
@@ -730,6 +740,7 @@ pub async fn run() -> Result<()> {
                 enable_punctuation: default_enable_punctuation(),
                 enable_grammar: default_enable_grammar(),
                 enable_word_substitution: default_enable_word_substitution(),
+                enable_fuzzy_vocab: default_enable_fuzzy_vocab(),
                 silence_threshold_db: default_silence_threshold_db(),
                 debug_audio: default_debug_audio(),
                 trailing_buffer_ms: default_trailing_buffer_ms(),
@@ -1314,6 +1325,7 @@ pub async fn run() -> Result<()> {
                             let enable_acronyms = config.daemon.enable_acronyms;
                             let enable_punctuation = config.daemon.enable_punctuation;
                             let enable_word_substitution = config.daemon.enable_word_substitution;
+                            let enable_fuzzy_vocab = config.daemon.enable_fuzzy_vocab;
                             let word_sub_preview = word_sub.clone();
                             let user_dict_preview = Arc::clone(&user_dict);
                             let mut cancel_rx_preview = cancel_tx.subscribe();
@@ -1325,6 +1337,7 @@ pub async fn run() -> Result<()> {
                                     Some(user_dict_preview),
                                     enable_word_substitution,
                                     word_sub_preview,
+                                    enable_fuzzy_vocab,
                                 );
 
                                 let mut last_text = String::new();
@@ -1653,6 +1666,7 @@ pub async fn run() -> Result<()> {
                         Some(Arc::clone(&user_dict)),
                         config.daemon.enable_word_substitution,
                         word_sub.clone(),
+                        config.daemon.enable_fuzzy_vocab,
                     );
                     let processed_result = pipeline.process(&preview_text)?;
 
