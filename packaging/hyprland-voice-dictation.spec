@@ -33,7 +33,7 @@
 %global __cargo_common_opts %{?_smp_mflags} -Z avoid-dev-deps --locked
 
 Name:           hyprland-voice-dictation
-Version:        0.5.0
+Version:        0.5.1
 Release:        1%{?dist}
 Summary:        Offline voice dictation for Hyprland with Parakeet speech recognition
 # Project code is MIT OR Apache-2.0; the binary links a large dependency
@@ -120,6 +120,12 @@ install -Dpm0755 scripts/download-parakeet-model.sh %{buildroot}%{_datadir}/%{na
 %{_datadir}/%{name}/download-parakeet-model.sh
 
 %changelog
+* Fri Jul 24 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.5.1-1
+- Fuzzy vocabulary post-correction: snap transcribed words onto the user
+  dictionary to fix vendor/product names and split words (e.g. "aws agent
+  tools" -> "aws-agent-tools", "hyperland" -> "hyprland"). Engine-agnostic;
+  toggle with enable_fuzzy_vocab.
+
 * Tue Jul 21 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.5.0-1
 - Event-emitting StreamingEngine contract + LocalEngineDriver (streaming
   partials and correct finalize); daemon loop rewired to consume engine events
