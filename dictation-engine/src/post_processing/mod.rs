@@ -1,4 +1,5 @@
 mod acronym;
+mod fuzzy_vocab;
 mod grammar;
 mod punctuation;
 mod sanitize;
@@ -9,6 +10,7 @@ use anyhow::Result;
 use std::sync::Arc;
 
 pub use acronym::AcronymProcessor;
+pub use fuzzy_vocab::FuzzyVocabularyProcessor;
 pub use grammar::GrammarProcessor;
 pub use punctuation::PunctuationProcessor;
 pub use sanitize::SanitizationProcessor;
@@ -59,13 +61,17 @@ impl Pipeline {
             None,
             false,
             None,
+            false,
         )
     }
 
     /// Create a pipeline from configuration with optional user dictionary and word substitution.
     ///
-    /// Enables processors based on configuration flags.
-    /// Processors are applied in order: acronyms → punctuation → word substitution → grammar.
+    /// Enables processors based on configuration flags. Processors are applied
+    /// in order: acronyms → punctuation → word substitution → fuzzy vocabulary
+    /// → grammar. Fuzzy vocabulary runs before grammar so corrected proper
+    /// nouns are already in the user dictionary Harper trusts.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_config_with_dict(
         enable_acronyms: bool,
         enable_punctuation: bool,
@@ -73,6 +79,7 @@ impl Pipeline {
         user_dict: Option<Arc<UserDictionary>>,
         enable_word_substitution: bool,
         word_sub: Option<WordSubstitutionProcessor>,
+        enable_fuzzy_vocab: bool,
     ) -> Self {
         let mut pipeline = Self::new();
 
@@ -86,10 +93,18 @@ impl Pipeline {
             pipeline.add_processor(Box::new(PunctuationProcessor::new()));
         }
 
-        // Apply word substitutions (shay moy → chezmoi)
+        // Apply exact word substitutions (shay moy → chezmoi)
         if enable_word_substitution {
             if let Some(ws) = word_sub {
                 pipeline.add_processor(Box::new(ws));
+            }
+        }
+
+        // Snap remaining near-misses onto the user's glossary (life md → lifemd,
+        // hyperland → hyprland). Needs the dictionary as its glossary source.
+        if enable_fuzzy_vocab {
+            if let Some(ref dict) = user_dict {
+                pipeline.add_processor(Box::new(FuzzyVocabularyProcessor::new(Arc::clone(dict))));
             }
         }
 

@@ -24,8 +24,10 @@ mod idle_inhibit;
 pub mod ime_probe;
 mod keyboard;
 pub mod model_selector;
+pub mod openai_engine;
 pub mod parakeet_engine;
 pub mod post_processing;
+pub mod stream_engine;
 #[cfg(feature = "tray")]
 mod tray;
 pub mod user_dictionary;
@@ -56,10 +58,10 @@ fn resume_media() {
 
 use audio_backend::{AudioBackend, AudioBackendConfig, BackendType};
 use dbus_control::DaemonCommand;
-use engine::TranscriptionEngine;
 use keyboard::KeyboardInjector;
 use model_selector::ModelSpec;
 use post_processing::{Pipeline, SanitizationProcessor, TextProcessor, WordSubstitutionProcessor};
+use stream_engine::{StreamingEngine, TranscriptEvent};
 use user_dictionary::UserDictionary;
 
 // Re-export DaemonState from dbus_control
@@ -69,7 +71,7 @@ use dbus_control::DaemonState;
 struct RecordingSession {
     #[allow(dead_code)]
     start_time: Instant,
-    engine: Arc<dyn TranscriptionEngine>,
+    engine: Arc<dyn StreamingEngine>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +98,13 @@ struct DaemonConfig {
     enable_grammar: bool,
     #[serde(default = "default_enable_word_substitution")]
     enable_word_substitution: bool,
+
+    // Fuzzy-match transcribed words against the user dictionary to fix
+    // vendor/product names and acronyms (e.g. "life md" → "lifemd",
+    // "hyperland" → "hyprland"). Works with any engine; corrections improve as
+    // you add words with `dict add`.
+    #[serde(default = "default_enable_fuzzy_vocab")]
+    enable_fuzzy_vocab: bool,
 
     // Audio capture
     #[serde(default = "default_silence_threshold_db")]
@@ -158,6 +167,9 @@ fn default_enable_punctuation() -> bool {
     true
 }
 fn default_enable_grammar() -> bool {
+    true
+}
+fn default_enable_fuzzy_vocab() -> bool {
     true
 }
 fn default_enable_word_substitution() -> bool {
@@ -622,7 +634,7 @@ impl DeviceManager {
 #[allow(dead_code)]
 async fn drain_audio_channel(
     audio_rx: &Arc<Mutex<mpsc::UnboundedReceiver<Vec<i16>>>>,
-    engine: &Arc<dyn TranscriptionEngine>,
+    engine: &Arc<dyn StreamingEngine>,
     timeout_ms: u64,
 ) -> usize {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
@@ -652,6 +664,29 @@ async fn drain_audio_channel(
 
     debug!("Drained {} audio chunks from channel", drained);
     drained
+}
+
+/// Await the engine's `Final` event after `finish()`, skipping any stray partials.
+/// Returns an empty string on error, closed stream, or timeout (logged).
+async fn recv_final_transcript(rx: &mut stream_engine::EventStream) -> String {
+    loop {
+        match tokio::time::timeout(Duration::from_secs(60), rx.recv()).await {
+            Ok(Some(TranscriptEvent::Final(text))) => return text,
+            Ok(Some(TranscriptEvent::Partial(_))) => continue,
+            Ok(Some(TranscriptEvent::Error(e))) => {
+                error!("Final transcription error: {}", e);
+                return String::new();
+            }
+            Ok(None) => {
+                error!("Engine event stream closed before Final");
+                return String::new();
+            }
+            Err(_) => {
+                error!("Final transcription timed out");
+                return String::new();
+            }
+        }
+    }
 }
 
 /// Guarantees the GUI is driven out of the Processing state even if the processing
@@ -705,6 +740,7 @@ pub async fn run() -> Result<()> {
                 enable_punctuation: default_enable_punctuation(),
                 enable_grammar: default_enable_grammar(),
                 enable_word_substitution: default_enable_word_substitution(),
+                enable_fuzzy_vocab: default_enable_fuzzy_vocab(),
                 silence_threshold_db: default_silence_threshold_db(),
                 debug_audio: default_debug_audio(),
                 trailing_buffer_ms: default_trailing_buffer_ms(),
@@ -1070,8 +1106,8 @@ pub async fn run() -> Result<()> {
 
     // Pre-load engine at startup for instant recording start
     info!("Pre-loading Parakeet engine (blocking call before D-Bus)...");
-    let mut preview_engine: Option<Arc<dyn TranscriptionEngine>> =
-        Some(model_spec.create_engine(sample_rate)?);
+    let mut preview_engine: Option<Arc<dyn StreamingEngine>> =
+        Some(model_spec.create_streaming_engine(sample_rate)?);
     let mut engine_stopped_at: Option<Instant> = None;
     info!("Parakeet engine loaded and ready");
 
@@ -1185,7 +1221,8 @@ pub async fn run() -> Result<()> {
                             // Recreate engine if it was released due to idle timeout
                             if preview_engine.is_none() {
                                 info!("Recreating transcription engine (was released for idle memory savings)...");
-                                preview_engine = Some(model_spec.create_engine(sample_rate)?);
+                                preview_engine =
+                                    Some(model_spec.create_streaming_engine(sample_rate)?);
                                 health_state.engine_healthy.store(true, Ordering::Relaxed);
                                 info!("Engine recreated and ready");
                             }
@@ -1282,16 +1319,17 @@ pub async fn run() -> Result<()> {
                                 debug!("Audio task: exiting gracefully");
                             }));
 
-                            // Start preview task
-                            let engine_clone = Arc::clone(&session_engine);
+                            // Start preview task (consumes the engine's event stream).
+                            // Subscribe before spawning so no early partials are missed.
+                            let mut event_rx = session_engine.subscribe();
                             let gui_control_tx_preview = gui_control_tx.clone();
                             let enable_acronyms = config.daemon.enable_acronyms;
                             let enable_punctuation = config.daemon.enable_punctuation;
                             let enable_word_substitution = config.daemon.enable_word_substitution;
+                            let enable_fuzzy_vocab = config.daemon.enable_fuzzy_vocab;
                             let word_sub_preview = word_sub.clone();
                             let user_dict_preview = Arc::clone(&user_dict);
                             let mut cancel_rx_preview = cancel_tx.subscribe();
-                            let audio_notify_rx = Arc::clone(&audio_notify);
                             preview_task = Some(tokio::spawn(async move {
                                 let pipeline = Pipeline::from_config_with_dict(
                                     enable_acronyms,
@@ -1300,12 +1338,17 @@ pub async fn run() -> Result<()> {
                                     Some(user_dict_preview),
                                     enable_word_substitution,
                                     word_sub_preview,
+                                    enable_fuzzy_vocab,
                                 );
 
                                 let mut last_text = String::new();
                                 let mut last_text_change = Instant::now();
                                 const TEXT_SETTLED_THRESHOLD_MS: u64 = 300;
-                                const MAX_PREVIEW_WAIT_MS: u64 = 200;
+                                // Periodic tick re-evaluates "settled" when no new partials
+                                // arrive (e.g. the user stopped speaking), mirroring the old
+                                // 200ms poll cadence.
+                                let mut settle_tick =
+                                    tokio::time::interval(Duration::from_millis(200));
 
                                 loop {
                                     tokio::select! {
@@ -1316,15 +1359,10 @@ pub async fn run() -> Result<()> {
                                                 break;
                                             }
                                         }
-                                        _ = async {
-                                            // Wake on new audio or after max wait (for settled detection)
-                                            tokio::select! {
-                                                _ = audio_notify_rx.notified() => {}
-                                                _ = tokio::time::sleep(Duration::from_millis(MAX_PREVIEW_WAIT_MS)) => {}
-                                            }
-                                        } => {
-                                            match engine_clone.get_current_text() {
-                                                Ok(text_raw) => {
+                                        ev = event_rx.recv() => {
+                                            match ev {
+                                                Some(TranscriptEvent::Partial(text_raw)) => {
+                                                    debug!("preview: received partial ({} chars), forwarding UpdateTranscription", text_raw.len());
                                                     let text_processed = match pipeline.process(&text_raw) {
                                                         Ok(processed) => processed,
                                                         Err(e) => {
@@ -1337,8 +1375,7 @@ pub async fn run() -> Result<()> {
                                                         debug!("[Preview] Raw: '{}' -> Processed: '{}'", text_raw, text_processed);
                                                     }
 
-                                                    let text_changed = text_processed != last_text;
-                                                    if text_changed {
+                                                    if text_processed != last_text {
                                                         last_text = text_processed.clone();
                                                         last_text_change = Instant::now();
                                                     }
@@ -1350,14 +1387,30 @@ pub async fn run() -> Result<()> {
                                                         text: text_processed,
                                                         is_final: false,
                                                     });
-
                                                     let _ = gui_control_tx_preview.send(GuiControl::UpdateVadState {
                                                         is_speaking,
                                                         text_settled,
                                                     });
                                                 }
-                                                Err(e) => error!("Failed to get text: {}", e),
+                                                // Final is finalized by the Processing state; ignore here.
+                                                Some(TranscriptEvent::Final(_)) => {}
+                                                Some(TranscriptEvent::Error(e)) => {
+                                                    error!("Preview: engine error: {}", e);
+                                                }
+                                                None => {
+                                                    debug!("Preview task: event stream closed");
+                                                    break;
+                                                }
                                             }
+                                        }
+                                        _ = settle_tick.tick() => {
+                                            // No new text; re-evaluate settled state only.
+                                            let text_settled = last_text_change.elapsed().as_millis() >= TEXT_SETTLED_THRESHOLD_MS as u128;
+                                            let is_speaking = !last_text.is_empty() && !text_settled;
+                                            let _ = gui_control_tx_preview.send(GuiControl::UpdateVadState {
+                                                is_speaking,
+                                                text_settled,
+                                            });
                                         }
                                     }
                                 }
@@ -1595,16 +1648,16 @@ pub async fn run() -> Result<()> {
                     .clone();
 
                 // Check if any audio was captured
-                let audio_buffer_len = session_engine.as_ref().get_audio_buffer().len();
+                let audio_buffer_len = session_engine.get_audio_buffer().len();
                 info!("Audio buffer contains {} samples", audio_buffer_len);
 
                 if audio_buffer_len > 0 {
-                    // Run final transcription on full buffer (including trailing audio)
-                    let preview_text =
-                        session_engine.as_ref().get_final_result().unwrap_or_else(|e| {
-                            warn!("Final transcription failed: {}, falling back to cached text", e);
-                            session_engine.as_ref().get_cached_text()
-                        });
+                    // Finalize: subscribe fresh, signal end-of-utterance, then await the
+                    // Final event (the engine transcribes the full buffer, including
+                    // trailing audio). Replaces the old synchronous get_final_result().
+                    let mut final_rx = session_engine.subscribe();
+                    session_engine.finish();
+                    let preview_text = recv_final_transcript(&mut final_rx).await;
                     info!("Transcription: '{}'", preview_text);
 
                     // Apply post-processing pipeline
@@ -1615,6 +1668,7 @@ pub async fn run() -> Result<()> {
                         Some(Arc::clone(&user_dict)),
                         config.daemon.enable_word_substitution,
                         word_sub.clone(),
+                        config.daemon.enable_fuzzy_vocab,
                     );
                     let processed_result = pipeline.process(&preview_text)?;
 

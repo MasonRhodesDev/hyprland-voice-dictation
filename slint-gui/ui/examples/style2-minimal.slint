@@ -1,135 +1,215 @@
-// style2-minimal.slint - Minimal mirrored spectrum pill
+// style2-minimal.slint - Mirrored spectrum pill + live text
+// (copy to ~/.config/voice-dictation/ui/dictation.slint to use)
 // ============================================================================
-// STYLE 2 (Minimal) - Horizontal pill with mirrored spectrum
-//   - Compact pill shape, no text
-//   - Spectrum bars mirrored vertically (up and down from center)
-//   - Same processing/closing modes as Style 1
+// Composed from small functional components (Slint style):
+//   SpectrumBars        - mirrored frequency bars with a fixed footprint
+//   DotRing             - 8-dot ring, shared by processing + closing
+//   ListeningPill       - the pill: spectrum + optional live transcription
+//   ProcessingIndicator - spinner + typing progress bar
+//   ClosingIndicator    - collapsing dot ring
+// The exported Dictation just centers whichever indicator the mode selects.
 // ============================================================================
 // PROPERTIES (set from Rust daemon):
 //
-// mode: int - Current display mode:
-//             0 = hidden (window stays open but nothing visible)
-//             1 = listening (mirrored spectrum)
-//             2 = processing (spinner)
-//             3 = closing (collapse animation)
-//
+// mode: int - 0=hidden, 1=listening, 2=processing, 3=closing
 // spectrum: [float] - 8 frequency band values (0.0-1.0) for listening mode
-// text: string - (unused in this style)
+// text: string - Live transcription, shown centered below the spectrum
 // fade: float - Overall opacity (0.0-1.0) for transitions
+// spinner-angle: float - Spinner rotation in degrees (advanced by Rust each tick)
+// progress: float - Typing progress (0.0-1.0), shown during processing/typing
 // closing-progress: float - Collapse animation progress (0.0-1.0)
 // pre-listening: bool - (unused in this style)
 // ============================================================================
 
-export component Dictation inherits Window {
-    // Mode selection
-    in property <int> mode: 0;  // 0=hidden, 1=listening, 2=processing, 3=closing
-
-    // Listening mode properties
-    in property <[float]> spectrum: [0.3, 0.5, 0.8, 0.4, 0.6, 0.9, 0.3, 0.7];
-    in property <string> text: "";  // Unused in this style
-    in property <bool> pre-listening: false;  // Unused in this style
-
-    // Shared properties
+// Mirrored spectrum bars. Fixed footprint so a parent layout can center it.
+// 8 bars * 5px + 7 gaps * 8px = 96px total, centered in 134px = 19px offset.
+component SpectrumBars inherits Rectangle {
+    in property <[float]> spectrum;
     in property <float> fade: 1.0;
 
-    // Closing mode properties
-    in property <float> closing-progress: 0.0;
+    width: 134px;
+    height: 40px;
+    background: transparent;
 
-    // Animation states
-    property <float> spinner-angle: 0;
-    property <float> closing-radius: 10.0 * (1.0 - closing-progress);
-    property <float> closing-alpha: 1.0 - closing-progress;
+    for value[i] in spectrum: Rectangle {
+        x: 19px + i * 13px;
+        y: 18px - value * 13px;           // Center minus half of variable height
+        width: 5px;
+        height: 4px + value * 26px;       // 4px min (dot) + up to 26px from activity
+        background: white.with_alpha(fade);
+        border-radius: 2px;
+
+        animate y, height {
+            duration: 80ms;
+            easing: ease-out;
+        }
+    }
+}
+
+// 8 dots arranged in a ring. `radius` collapses them for the closing animation.
+component DotRing inherits Rectangle {
+    in property <float> angle;
+    in property <float> radius: 10.0;
+    in property <float> alpha: 1.0;
+
+    width: 30px;
+    height: 30px;
+
+    for i in 8: Rectangle {
+        x: 15px + radius * 1px * cos(angle * 1deg + i * 45deg) - 3px;
+        y: 15px + radius * 1px * sin(angle * 1deg + i * 45deg) - 3px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: white.with_alpha(alpha * (0.3 + 0.7 * (i / 7)));
+    }
+}
+
+// ========== LISTENING MODE - Mirrored Spectrum Pill + live text ==========
+// The pill hugs its content; contents are centered. Text appears only once
+// words arrive, so an idle mic stays a clean minimal pill.
+component ListeningPill inherits Rectangle {
+    in property <[float]> spectrum;
+    in property <string> text;
+    in property <float> fade: 1.0;
+
+    background: #000000.with_alpha(0.9 * fade);
+    border-radius: 20px;
+    clip: true;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+        alignment: center;
+
+        HorizontalLayout {
+            alignment: center;
+            SpectrumBars {
+                spectrum: root.spectrum;
+                fade: root.fade;
+            }
+        }
+
+        if root.text != "": Text {
+            text: root.text;
+            color: white.with_alpha(root.fade);
+            font-size: 14px;
+            horizontal-alignment: center;
+            overflow: elide;
+            max-width: 320px;
+        }
+    }
+}
+
+// ========== PROCESSING MODE - spinner + typing progress ==========
+component ProcessingIndicator inherits Rectangle {
+    in property <float> spinner-angle;
+    in property <float> progress;
+    in property <float> fade: 1.0;
+
+    width: 60px;
+    height: 60px;
+    background: #000000.with_alpha(0.9 * fade);
+    border-radius: 30px;
+
+    DotRing {
+        x: 15px;
+        y: 15px;
+        angle: spinner-angle;
+        radius: 10.0;
+        alpha: fade;
+    }
+
+    // Typing progress bar — only visible once typing starts (progress > 0).
+    if progress > 0.0: Rectangle {
+        x: 14px;
+        y: 50px;
+        width: 32px;
+        height: 3px;
+        border-radius: 1.5px;
+        background: white.with_alpha(0.25 * fade);
+
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width * progress;
+            height: parent.height;
+            border-radius: parent.border-radius;
+            background: white.with_alpha(0.9 * fade);
+        }
+    }
+}
+
+// ========== CLOSING MODE - collapsing dot ring ==========
+component ClosingIndicator inherits Rectangle {
+    in property <float> spinner-angle;
+    in property <float> closing-progress;
+
+    property <float> alpha: 1.0 - closing-progress;
+
+    width: 60px;
+    height: 60px;
+    background: #000000.with_alpha(0.9 * alpha);
+    border-radius: 30px;
+
+    DotRing {
+        x: 15px;
+        y: 15px;
+        angle: spinner-angle;
+        radius: 10.0 * (1.0 - closing-progress);
+        alpha: root.alpha;
+    }
+}
+
+export component Dictation inherits Window {
+    // Mode selection: 0=hidden, 1=listening, 2=processing, 3=closing
+    in property <int> mode: 0;
+
+    // Listening mode
+    in property <[float]> spectrum: [0.3, 0.5, 0.8, 0.4, 0.6, 0.9, 0.3, 0.7];
+    in property <string> text: "";              // Live transcription (shown when non-empty)
+    in property <bool> pre-listening: false;    // Unused in this style
+
+    // Shared
+    in property <float> fade: 1.0;
+    in property <float> spinner-angle: 0;       // Advanced by Rust each timer tick
+    in property <float> progress: 0.0;          // Typing progress (mode == 2)
+    in property <float> closing-progress: 0.0;
 
     background: transparent;
     default-font-family: "Noto Sans";
     default-font-size: 16px;
 
-    // Spinner animation (runs when in processing or closing mode)
-    animate spinner-angle {
-        duration: 1000ms;
-        iteration-count: -1;
-        easing: linear;
-    }
+    // Center whichever indicator the current mode selects. mode == 0 renders
+    // nothing (the window stays open but empty).
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: transparent;
 
-    init => {
-        spinner-angle = 360;
-    }
+        VerticalLayout {
+            alignment: center;
 
-    // ========== LISTENING MODE (mode == 1) - Mirrored Spectrum Pill ==========
-    if mode == 1: Rectangle {
-        width: 134px;
-        height: 40px;
-        background: #000000.with_alpha(0.9 * fade);
-        border-radius: 20px;
-        clip: true;  // Prevent children from affecting box size
+            HorizontalLayout {
+                alignment: center;
 
-        // Spectrum bars - absolutely positioned from center with smoothing
-        // Min 4px height (dots), max 30px, higher amplitude multiplier
-        // 8 bars * 5px + 7 gaps * 8px = 96px total, centered in 134px = 19px offset
-        for value[i] in spectrum: Rectangle {
-            x: 19px + i * 13px;
-            y: 18px - value * 13px;           // Center minus half of variable height
-            width: 5px;
-            height: 4px + value * 26px;       // 4px min (dot) + up to 26px from activity
-            background: white.with_alpha(fade);
-            border-radius: 2px;
+                if mode == 1: ListeningPill {
+                    spectrum: root.spectrum;
+                    text: root.text;
+                    fade: root.fade;
+                }
 
-            animate y, height {
-                duration: 80ms;
-                easing: ease-out;
+                if mode == 2: ProcessingIndicator {
+                    spinner-angle: root.spinner-angle;
+                    progress: root.progress;
+                    fade: root.fade;
+                }
+
+                if mode == 3: ClosingIndicator {
+                    spinner-angle: root.spinner-angle;
+                    closing-progress: root.closing-progress;
+                }
             }
         }
     }
-
-    // ========== PROCESSING MODE (mode == 2) ==========
-    if mode == 2: Rectangle {
-        width: 60px;
-        height: 60px;
-        background: #000000.with_alpha(0.9 * fade);
-        border-radius: 30px;
-
-        // Spinner - 8 dots in a circle
-        Rectangle {
-            x: 15px;
-            y: 15px;
-            width: 30px;
-            height: 30px;
-
-            for i in 8: Rectangle {
-                x: 15px + 10px * cos(spinner-angle * 1deg + i * 45deg) - 3px;
-                y: 15px + 10px * sin(spinner-angle * 1deg + i * 45deg) - 3px;
-                width: 6px;
-                height: 6px;
-                border-radius: 3px;
-                background: white.with_alpha(fade * (0.3 + 0.7 * (i / 7)));
-            }
-        }
-    }
-
-    // ========== CLOSING MODE (mode == 3) ==========
-    if mode == 3: Rectangle {
-        width: 60px;
-        height: 60px;
-        background: #000000.with_alpha(0.9 * closing-alpha);
-        border-radius: 30px;
-
-        // Collapsing dots
-        Rectangle {
-            x: 15px;
-            y: 15px;
-            width: 30px;
-            height: 30px;
-
-            for i in 8: Rectangle {
-                x: 15px + closing-radius * 1px * cos(spinner-angle * 1deg + i * 45deg) - 3px;
-                y: 15px + closing-radius * 1px * sin(spinner-angle * 1deg + i * 45deg) - 3px;
-                width: 6px;
-                height: 6px;
-                border-radius: 3px;
-                background: white.with_alpha(closing-alpha * (0.3 + 0.7 * (i / 7)));
-            }
-        }
-    }
-
-    // mode == 0 (hidden): nothing rendered, window stays open
 }

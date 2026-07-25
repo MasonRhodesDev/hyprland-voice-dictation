@@ -30,6 +30,8 @@ systemd = "0.10"
 dirs = "5"
 notify = "6"
 hound = "3.5"
+# Fuzzy vocabulary matching (Jaro-Winkler / Levenshtein) for post-correction
+strsim = "0.11"
 crossbeam-channel = "0.5"
 chrono = { version = "0.4", features = ["serde"] }
 # Silero VAD (neural voice activity detection)
@@ -46,7 +48,7 @@ rustfft = "6.4"
 sha2 = "0.10"
 hex = "0.4"
 # VAD model download
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = { version = "0.12", features = ["blocking", "multipart"] }
 # PipeWire native audio backend
 # 0.10+ required: older releases pin bindgen 0.69, which generates broken
 # (opaque) bindings with libclang >= 19 and fails against PipeWire 1.6 headers.

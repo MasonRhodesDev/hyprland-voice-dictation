@@ -192,6 +192,12 @@ impl CtcEngine {
     }
 }
 
+impl crate::stream_engine::LocalModel for CtcEngine {
+    fn transcribe(&self, samples: &[i16]) -> anyhow::Result<String> {
+        self.transcribe_buffer(samples)
+    }
+}
+
 impl TranscriptionEngine for CtcEngine {
     fn process_audio(&self, samples: &[i16]) -> Result<()> {
         let mut buffer = self

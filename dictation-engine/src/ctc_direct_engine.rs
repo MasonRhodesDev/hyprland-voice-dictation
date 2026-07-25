@@ -210,6 +210,12 @@ impl CtcDirectEngine {
 // TranscriptionEngine impl — mirrors parakeet_engine.rs / ctc_engine.rs
 // ---------------------------------------------------------------------------
 
+impl crate::stream_engine::LocalModel for CtcDirectEngine {
+    fn transcribe(&self, samples: &[i16]) -> anyhow::Result<String> {
+        self.transcribe_buffer(samples)
+    }
+}
+
 impl TranscriptionEngine for CtcDirectEngine {
     fn process_audio(&self, samples: &[i16]) -> Result<()> {
         let mut buffer = self
