@@ -304,12 +304,14 @@ mod tests {
         let mut rx = driver.subscribe();
 
         // Enough new audio to clear MIN + RETRANSCRIBE_THRESHOLD → one partial.
-        driver
-            .process_audio(&vec![0i16; MIN_AUDIO_SAMPLES + RETRANSCRIBE_THRESHOLD + 1])
-            .unwrap();
+        driver.process_audio(&vec![0i16; MIN_AUDIO_SAMPLES + RETRANSCRIBE_THRESHOLD + 1]).unwrap();
 
-        let ev = timeout(RECV_TIMEOUT, rx.recv()).await.expect("partial timed out").expect("closed");
-        assert!(matches!(ev, TranscriptEvent::Partial(ref t) if t.starts_with("len=")), "got {ev:?}");
+        let ev =
+            timeout(RECV_TIMEOUT, rx.recv()).await.expect("partial timed out").expect("closed");
+        assert!(
+            matches!(ev, TranscriptEvent::Partial(ref t) if t.starts_with("len=")),
+            "got {ev:?}"
+        );
 
         driver.finish();
 

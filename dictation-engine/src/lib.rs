@@ -58,10 +58,10 @@ fn resume_media() {
 
 use audio_backend::{AudioBackend, AudioBackendConfig, BackendType};
 use dbus_control::DaemonCommand;
-use stream_engine::{StreamingEngine, TranscriptEvent};
 use keyboard::KeyboardInjector;
 use model_selector::ModelSpec;
 use post_processing::{Pipeline, SanitizationProcessor, TextProcessor, WordSubstitutionProcessor};
+use stream_engine::{StreamingEngine, TranscriptEvent};
 use user_dictionary::UserDictionary;
 
 // Re-export DaemonState from dbus_control
@@ -1221,7 +1221,8 @@ pub async fn run() -> Result<()> {
                             // Recreate engine if it was released due to idle timeout
                             if preview_engine.is_none() {
                                 info!("Recreating transcription engine (was released for idle memory savings)...");
-                                preview_engine = Some(model_spec.create_streaming_engine(sample_rate)?);
+                                preview_engine =
+                                    Some(model_spec.create_streaming_engine(sample_rate)?);
                                 health_state.engine_healthy.store(true, Ordering::Relaxed);
                                 info!("Engine recreated and ready");
                             }
@@ -1346,7 +1347,8 @@ pub async fn run() -> Result<()> {
                                 // Periodic tick re-evaluates "settled" when no new partials
                                 // arrive (e.g. the user stopped speaking), mirroring the old
                                 // 200ms poll cadence.
-                                let mut settle_tick = tokio::time::interval(Duration::from_millis(200));
+                                let mut settle_tick =
+                                    tokio::time::interval(Duration::from_millis(200));
 
                                 loop {
                                     tokio::select! {

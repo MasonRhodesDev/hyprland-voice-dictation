@@ -39,10 +39,8 @@ impl OpenAiEngine {
     /// Construct the engine. Fails if `OPENAI_API_KEY` is unset/empty so the
     /// selector can fall back to the default engine and log the reason.
     pub fn new(model: String, sample_rate: u32) -> Result<Self> {
-        let api_key = std::env::var("OPENAI_API_KEY")
-            .ok()
-            .filter(|k| !k.is_empty())
-            .ok_or_else(|| {
+        let api_key =
+            std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty()).ok_or_else(|| {
                 anyhow::anyhow!("OPENAI_API_KEY is not set; the openai engine cannot be used")
             })?;
 
@@ -126,21 +124,17 @@ async fn transcribe(
     sample_rate: u32,
 ) -> Result<String> {
     let wav = encode_wav(samples, sample_rate)?;
-    debug!("openai upload: {} wav bytes ({} samples @ {} Hz)", wav.len(), samples.len(), sample_rate);
+    debug!(
+        "openai upload: {} wav bytes ({} samples @ {} Hz)",
+        wav.len(),
+        samples.len(),
+        sample_rate
+    );
 
-    let part = reqwest::multipart::Part::bytes(wav)
-        .file_name("audio.wav")
-        .mime_str("audio/wav")?;
-    let form = reqwest::multipart::Form::new()
-        .text("model", model.to_string())
-        .part("file", part);
+    let part = reqwest::multipart::Part::bytes(wav).file_name("audio.wav").mime_str("audio/wav")?;
+    let form = reqwest::multipart::Form::new().text("model", model.to_string()).part("file", part);
 
-    let resp = client
-        .post(TRANSCRIPTIONS_URL)
-        .bearer_auth(api_key)
-        .multipart(form)
-        .send()
-        .await?;
+    let resp = client.post(TRANSCRIPTIONS_URL).bearer_auth(api_key).multipart(form).send().await?;
 
     let status = resp.status();
     let body = resp.text().await?;

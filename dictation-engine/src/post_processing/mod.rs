@@ -104,8 +104,7 @@ impl Pipeline {
         // hyperland → hyprland). Needs the dictionary as its glossary source.
         if enable_fuzzy_vocab {
             if let Some(ref dict) = user_dict {
-                pipeline
-                    .add_processor(Box::new(FuzzyVocabularyProcessor::new(Arc::clone(dict))));
+                pipeline.add_processor(Box::new(FuzzyVocabularyProcessor::new(Arc::clone(dict))));
             }
         }
 

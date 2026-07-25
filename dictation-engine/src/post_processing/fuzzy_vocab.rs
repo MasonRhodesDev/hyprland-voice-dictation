@@ -18,14 +18,14 @@ use std::sync::Arc;
 ///    This deterministically fixes splits (`node red` → `node-red`), multi-part
 ///    names (`aws agent tools` → `aws-agent-tools`), and normalizes casing to
 ///    the dictionary form (`LifeMD` → `lifemd`). Zero false-positive risk.
-///
-/// Canonical output uses the dictionary's spelling, which is always lowercase
-/// (the dictionary lowercases on load), so this corrects recognition — not
-/// mixed-case styling.
 /// 2. **Guarded single-token fuzzy** — for longer tokens only, accept a
 ///    glossary term when the Jaro-Winkler similarity is high, or when the
 ///    phonetic keys match and similarity is at least moderate. This catches
 ///    spelling/ASR variants (`hyperland` → `hyprland`).
+///
+/// Canonical output uses the dictionary's spelling, which is always lowercase
+/// (the dictionary lowercases on load), so this corrects recognition — not
+/// mixed-case styling.
 ///
 /// The glossary is read fresh on every call, so `dict add` takes effect on the
 /// next utterance without a restart.
@@ -109,8 +109,7 @@ impl TextProcessor for FuzzyVocabularyProcessor {
                 if n > 1 && !joinable(&tokens[i..i + n]) {
                     continue;
                 }
-                let joined: String =
-                    tokens[i..i + n].iter().map(|t| normalize(&t.core)).collect();
+                let joined: String = tokens[i..i + n].iter().map(|t| normalize(&t.core)).collect();
                 if joined.is_empty() {
                     continue;
                 }
@@ -249,8 +248,8 @@ fn best_fuzzy_match(norm: &str, entries: &[FuzzyEntry]) -> Option<String> {
             return None; // exact — leave it (already correct)
         }
         let sim = strsim::jaro_winkler(norm, &entry.normalized);
-        let accept = sim >= HIGH_SIMILARITY
-            || (token_phon == entry.phonetic && sim >= PHONETIC_SIMILARITY);
+        let accept =
+            sim >= HIGH_SIMILARITY || (token_phon == entry.phonetic && sim >= PHONETIC_SIMILARITY);
         if accept && best.map(|(b, _)| sim > b).unwrap_or(true) {
             best = Some((sim, &entry.canonical));
         }
