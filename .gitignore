@@ -34,6 +34,8 @@ CURRENT_PLAN.md
 .plans/
 
 # Gas Town (added by gt)
+.beads/
+HANDOFF.md
 .runtime/
 .claude/
 .opencode/
