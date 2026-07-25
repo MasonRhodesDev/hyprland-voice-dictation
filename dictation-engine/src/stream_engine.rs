@@ -304,7 +304,7 @@ mod tests {
         let mut rx = driver.subscribe();
 
         // Enough new audio to clear MIN + RETRANSCRIBE_THRESHOLD → one partial.
-        driver.process_audio(&vec![0i16; MIN_AUDIO_SAMPLES + RETRANSCRIBE_THRESHOLD + 1]).unwrap();
+        driver.process_audio(&[0i16; MIN_AUDIO_SAMPLES + RETRANSCRIBE_THRESHOLD + 1]).unwrap();
 
         let ev =
             timeout(RECV_TIMEOUT, rx.recv()).await.expect("partial timed out").expect("closed");
@@ -337,7 +337,7 @@ mod tests {
         let mut rx = driver.subscribe();
 
         // Below MIN_AUDIO_SAMPLES → no partial, but finish must still finalize.
-        driver.process_audio(&vec![0i16; 1000]).unwrap();
+        driver.process_audio(&[0i16; 1000]).unwrap();
         driver.finish();
 
         let ev = timeout(RECV_TIMEOUT, rx.recv()).await.expect("final timed out").expect("closed");
@@ -358,7 +358,7 @@ mod tests {
     fn reset_clears_buffer() {
         let calls = Arc::new(AtomicUsize::new(0));
         let driver = LocalEngineDriver::new(Arc::new(CountModel { calls }));
-        driver.process_audio(&vec![1i16; 100]).unwrap();
+        driver.process_audio(&[1i16; 100]).unwrap();
         assert_eq!(driver.get_audio_buffer().len(), 100);
         driver.reset();
         assert!(driver.get_audio_buffer().is_empty());
