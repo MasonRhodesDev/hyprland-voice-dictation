@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   release:
-    uses: MasonRhodesDev/packaging-workflows/.github/workflows/release.yml@d85cbe2888dc868016c85452f7c339405b8528c1
+    uses: MasonRhodesDev/packaging-workflows/.github/workflows/release.yml@429e647539b02e85ea59b38c441f83a86ee77835
     secrets: inherit
     with:
       spec-name: hyprland-voice-dictation
