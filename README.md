@@ -52,7 +52,8 @@ Add the [mason](https://github.com/MasonRhodesDev/arch-repo) pacman repository t
 
 ```ini
 [mason]
-SigLevel = Optional TrustAll
+# Import the signing key first: https://github.com/MasonRhodesDev/arch-repo#use-it
+SigLevel = Required DatabaseRequired
 Server = https://masonrhodesdev.github.io/arch-repo/x86_64
 ```
 

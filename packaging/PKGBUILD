@@ -25,7 +25,7 @@ provides=('voice-dictation')
 conflicts=('voice-dictation')
 install="$pkgname.install"
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=('SKIP') # pin on release: updpkgsums
+sha256sums=('44c83208b270b8b3e5dce58df8d095709e43b2106d80d46389355bbeb26580e0')
 
 prepare() {
   cd "$pkgname-$pkgver"
