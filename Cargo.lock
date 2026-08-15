@@ -7322,7 +7322,7 @@ dependencies = [
 [[package]]
 name = "schema-tui"
 version = "0.1.0"
-source = "git+https://github.com/MasonRhodesDev/schema-tui.git#90bf1526f31cf20852b9c02fb3d17c94746fc425"
+source = "git+https://github.com/MasonRhodesDev/schema-tui.git?rev=90bf1526f31cf20852b9c02fb3d17c94746fc425#90bf1526f31cf20852b9c02fb3d17c94746fc425"
 dependencies = [
  "anyhow",
  "crossterm",

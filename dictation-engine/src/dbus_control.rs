@@ -168,6 +168,9 @@ pub async fn create_dbus_service(
         health_state,
     };
 
+    // Live well-known name is com.voicedictation.Daemon. The interface is
+    // com.voicedictation.Control (some surface docs label the interface).
+    // Do not rename this bus name — CLI and keybinds depend on it.
     let connection = zbus::connection::Builder::session()?
         .name("com.voicedictation.Daemon")?
         .serve_at("/com/voicedictation/Control", service)?

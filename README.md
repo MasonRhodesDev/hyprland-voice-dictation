@@ -21,7 +21,7 @@ The whole pipeline runs on-device inside one daemon — no audio ever leaves the
 ```mermaid
 flowchart TD
     key["Hyprland keybind"] -->|"exec voice-dictation toggle"| cli["CLI client"]
-    cli -->|"D-Bus com.voicedictation.Control"| engine
+    cli -->|"D-Bus com.voicedictation.Daemon"| engine
 
     subgraph engine["voice-dictation daemon"]
         cap["PipeWire / ALSA capture"] --> vad["Silero VAD"]

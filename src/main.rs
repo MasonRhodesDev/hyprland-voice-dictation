@@ -11,7 +11,8 @@ use zbus::Connection;
 
 mod utils;
 
-const STATE_FILE: &str = "/tmp/voice-dictation-state";
+// Well-known bus name (live). Interface is com.voicedictation.Control.
+// Do not rename: CLI, keybinds, and other clients depend on this name.
 const DBUS_SERVICE_NAME: &str = "com.voicedictation.Daemon";
 const DBUS_OBJECT_PATH: &str = "/com/voicedictation/Control";
 const DBUS_INTERFACE_NAME: &str = "com.voicedictation.Control";
@@ -203,12 +204,21 @@ enum DebugCommands {
     },
 }
 
-fn get_state() -> String {
-    fs::read_to_string(STATE_FILE).unwrap_or_else(|_| "stopped".to_string()).trim().to_string()
+async fn call_status() -> Result<(String, bool), Box<dyn std::error::Error>> {
+    let connection = Connection::session().await?;
+    let proxy =
+        zbus::Proxy::new(&connection, DBUS_SERVICE_NAME, DBUS_OBJECT_PATH, DBUS_INTERFACE_NAME)
+            .await?;
+
+    let result: (String, bool) = proxy.call("Status", &()).await?;
+    Ok(result)
 }
 
-fn set_state(state: &str) -> std::io::Result<()> {
-    fs::write(STATE_FILE, state)
+fn get_state() -> Result<String, Box<dyn std::error::Error>> {
+    tokio::runtime::Runtime::new()?
+        .block_on(call_status())
+        .map(|(state, _session_active)| state)
+        .map_err(dbus_error_with_hint)
 }
 
 async fn call_dbus_method(method: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -344,48 +354,37 @@ fn start_recording() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Daemon not running".into());
     }
 
-    let state = get_state();
+    let state = get_state()?;
     if state == "recording" {
         println!("Already recording");
         return Ok(());
     }
 
     send_start_recording()?;
-
-    set_state("recording")?;
     println!("Voice dictation started - recording");
 
     Ok(())
 }
 
 fn stop_recording() -> Result<(), Box<dyn std::error::Error>> {
-    let state = get_state();
-    if state == "stopped" {
+    if !is_daemon_running() {
+        eprintln!("Daemon not running");
+        return Ok(());
+    }
+
+    let state = get_state()?;
+    if state == "idle" || state == "stopped" {
         println!("Not recording");
         return Ok(());
     }
 
-    if !is_daemon_running() {
-        eprintln!("Daemon not running");
-        set_state("stopped")?;
-        return Ok(());
-    }
-
     send_stop_recording()?;
-
-    set_state("stopped")?;
     println!("Recording canceled");
 
     Ok(())
 }
 
 fn confirm_recording() -> Result<(), Box<dyn std::error::Error>> {
-    let state = get_state();
-    if state != "recording" {
-        eprintln!("Not in recording state (current: {})", state);
-        return Err("Invalid state".into());
-    }
-
     if !is_daemon_running() {
         eprintln!("Error: Daemon not running");
         eprintln!("Start the daemon with: systemctl --user start voice-dictation");
@@ -393,22 +392,34 @@ fn confirm_recording() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Daemon not running".into());
     }
 
+    let state = get_state()?;
+    if state != "recording" {
+        eprintln!("Not in recording state (current: {})", state);
+        return Err("Invalid state".into());
+    }
+
     println!("Confirming transcription...");
     send_confirm()?;
 
     thread::sleep(Duration::from_millis(500));
 
-    set_state("stopped")?;
     println!("Transcription confirmed");
 
     Ok(())
 }
 
 fn toggle_recording() -> Result<(), Box<dyn std::error::Error>> {
-    let state = get_state();
+    if !is_daemon_running() {
+        eprintln!("Error: Daemon not running");
+        eprintln!("Start the daemon with: systemctl --user start voice-dictation");
+        eprintln!("Or run manually: voice-dictation daemon");
+        return Err("Daemon not running".into());
+    }
+
+    let state = get_state()?;
 
     match state.as_str() {
-        "stopped" => start_recording(),
+        "idle" | "stopped" => start_recording(),
         "recording" => confirm_recording(),
         _ => {
             eprintln!("Unknown state: {}", state);
@@ -422,8 +433,10 @@ fn show_status() {
     println!("Daemon: {}", if daemon_running { "running" } else { "NOT running" });
 
     if daemon_running {
-        let state = get_state();
-        println!("State: {}", state);
+        match get_state() {
+            Ok(state) => println!("State: {}", state),
+            Err(e) => println!("State: unavailable ({})", e),
+        }
 
         match get_health_check() {
             Ok((gui, engine, audio)) => {

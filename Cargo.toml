@@ -17,7 +17,7 @@ dictation-engine = { path = "dictation-engine", default-features = false }
 correction-engine = { path = "correction-engine" }
 slint-gui = { path = "slint-gui" }
 test-loop-ui = { path = "test-loop-ui" }
-schema-tui = { git = "https://github.com/MasonRhodesDev/schema-tui.git" }
+schema-tui = { git = "https://github.com/MasonRhodesDev/schema-tui.git", rev = "90bf1526f31cf20852b9c02fb3d17c94746fc425" }
 clap = { version = "4", features = ["derive"] }
 zbus = "5"
 tokio = { workspace = true }
