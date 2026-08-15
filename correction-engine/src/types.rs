@@ -96,8 +96,9 @@ pub struct MonitorConfig {
 
 impl Default for MonitorConfig {
     fn default() -> Self {
-        let data_dir = dirs::data_dir().unwrap_or_else(|| PathBuf::from("~/.local/share"));
-        let vd_dir = data_dir.join("voice-dictation");
+        let vd_dir = hypr_paths::ConfigDirs::from_env()
+            .map(|d| d.data_dir("voice-dictation"))
+            .unwrap_or_default();
 
         Self {
             enabled: true,

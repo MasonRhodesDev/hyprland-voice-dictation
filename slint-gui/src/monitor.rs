@@ -94,7 +94,6 @@ pub fn get_monitor_names_sync() -> Option<Vec<String>> {
 /// This helps handle Hyprland restarts or session switches gracefully
 fn refresh_hyprland_environment() -> bool {
     use std::env;
-    use std::path::Path;
 
     // Try to get fresh environment variables
     let instance_sig = match env::var("HYPRLAND_INSTANCE_SIGNATURE") {
@@ -105,8 +104,8 @@ fn refresh_hyprland_environment() -> bool {
         }
     };
 
-    let runtime_dir = match env::var("XDG_RUNTIME_DIR") {
-        Ok(dir) => dir,
+    let runtime_dir = match hypr_paths::BaseDirs::from_env() {
+        Ok(dirs) => dirs.runtime_dir().to_path_buf(),
         Err(_) => {
             debug!("XDG_RUNTIME_DIR not set");
             return false;
@@ -114,15 +113,17 @@ fn refresh_hyprland_environment() -> bool {
     };
 
     // Construct expected socket path
-    let socket_dir = format!("{}/hypr/{}", runtime_dir, instance_sig);
-    let socket_path = format!("{}/.socket.sock", socket_dir);
+    let socket_path = runtime_dir
+        .join("hypr")
+        .join(&instance_sig)
+        .join(".socket.sock");
 
     // Verify socket exists
-    if Path::new(&socket_path).exists() {
-        debug!("Hyprland socket verified: {}", socket_path);
+    if socket_path.exists() {
+        debug!("Hyprland socket verified: {}", socket_path.display());
         true
     } else {
-        debug!("Hyprland socket not found at: {}", socket_path);
+        debug!("Hyprland socket not found at: {}", socket_path.display());
         false
     }
 }

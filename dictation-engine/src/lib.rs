@@ -852,9 +852,9 @@ pub async fn run() -> Result<()> {
     // Initialize correction monitor (AT-SPI2 based)
     #[cfg(feature = "correction")]
     let correction_monitor = if config.daemon.enable_correction_learning {
-        let data_dir =
-            dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
-        let vd_dir = data_dir.join("voice-dictation");
+        let vd_dir = hypr_paths::ConfigDirs::from_env()
+            .map(|d| d.data_dir("voice-dictation"))
+            .unwrap_or_default();
         let monitor_config = correction_engine::MonitorConfig {
             enabled: true,
             monitor_duration_secs: config.daemon.correction_monitor_duration_secs,
@@ -889,9 +889,9 @@ pub async fn run() -> Result<()> {
     #[cfg(feature = "correction")]
     let wezterm_monitor =
         if config.daemon.enable_correction_learning && config.daemon.correction_backend_wezterm {
-            let data_dir =
-                dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
-            let vd_dir = data_dir.join("voice-dictation");
+            let vd_dir = hypr_paths::ConfigDirs::from_env()
+                .map(|d| d.data_dir("voice-dictation"))
+                .unwrap_or_default();
             let monitor_config = correction_engine::MonitorConfig {
                 enabled: true,
                 monitor_duration_secs: config.daemon.correction_monitor_duration_secs,
@@ -936,9 +936,9 @@ pub async fn run() -> Result<()> {
             .map(|m| m.store_handle())
             .or_else(|| wezterm_monitor.as_ref().map(|m| m.store_handle()));
         if let Some(store) = store_handle {
-            let data_dir =
-                dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
-            let corrections_path = data_dir.join("voice-dictation").join("corrections.json");
+            let corrections_path = hypr_paths::ConfigDirs::from_env()
+                .map(|d| d.data_dir("voice-dictation").join("corrections.json"))
+                .unwrap_or_default();
             tokio::spawn(async move {
                 if let Err(e) = watch_corrections_file(store, corrections_path).await {
                     error!("Corrections file watcher error: {}", e);
