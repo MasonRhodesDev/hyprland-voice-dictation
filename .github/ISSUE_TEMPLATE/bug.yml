@@ -1,0 +1,20 @@
+name: Bug
+description: Something is broken. Attach a local doctor dump.
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor dump
+      description: >
+        Attach the file from `scripts/suite-doctor.sh` (default
+        `$XDG_RUNTIME_DIR/hypr-suite-doctor.txt`, or `--out`). Telemetry
+        never leaves the machine; you attach it here.
+    validations:
+      required: true

@@ -468,28 +468,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-stream"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
-dependencies = [
- "async-stream-impl",
- "futures-core",
- "pin-project-lite",
-]
-
-[[package]]
-name = "async-stream-impl"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "async-task"
 version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4037,9 +4015,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hypr-ipc"
+version = "0.1.0"
+source = "git+https://github.com/MasonRhodesDev/hypr-ipc?rev=367c52d43cf497f754c08490909669e935797c6b#367c52d43cf497f754c08490909669e935797c6b"
+dependencies = [
+ "hypr-paths",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "hypr-logind"
 version = "0.1.0"
-source = "git+https://github.com/MasonRhodesDev/hypr-logind?rev=8c331f285724e671beb71595d1dc8e07a5fcde73#8c331f285724e671beb71595d1dc8e07a5fcde73"
+source = "git+https://github.com/MasonRhodesDev/hypr-logind?rev=52613e91531a8945c88690e1b91d5898113c3bd2#52613e91531a8945c88690e1b91d5898113c3bd2"
 dependencies = [
  "libc",
  "zbus",
@@ -4048,36 +4036,7 @@ dependencies = [
 [[package]]
 name = "hypr-paths"
 version = "0.1.0"
-source = "git+https://github.com/MasonRhodesDev/hypr-paths?rev=535cec729936310b480c99203c05b5900d2a7e71#535cec729936310b480c99203c05b5900d2a7e71"
-
-[[package]]
-name = "hyprland"
-version = "0.4.0-beta.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62fc24052f578592af91e5c60da1893ba6aea266b6ab86ffb72a644cf213fea9"
-dependencies = [
- "async-stream",
- "derive_more 2.1.1",
- "either",
- "futures-lite",
- "hyprland-macros",
- "pastey 0.1.1",
- "serde",
- "serde_json",
- "serde_repr",
- "tokio",
-]
-
-[[package]]
-name = "hyprland-macros"
-version = "0.4.0-beta.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31157e6ccefbad4b0cd7e549db6696691a70c11b108f26bf6bf76eef26af8c10"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
+source = "git+https://github.com/MasonRhodesDev/hypr-paths?rev=3fb776c9b63bd168c9e937e4d295e41d0f5b6b5c#3fb776c9b63bd168c9e937e4d295e41d0f5b6b5c"
 
 [[package]]
 name = "i-slint-backend-linuxkms"
@@ -7691,8 +7650,7 @@ name = "slint-gui"
 version = "0.2.0"
 dependencies = [
  "dictation-types",
- "hypr-paths",
- "hyprland",
+ "hypr-ipc",
  "layer-shika",
  "notify",
  "slint",

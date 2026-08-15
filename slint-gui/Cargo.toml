@@ -9,9 +9,8 @@ description = "Slint-based GUI overlay for voice dictation"
 [dependencies]
 layer-shika = "0.2"
 slint = "1.14"
-hyprland = "0.4.0-alpha.3"
-tokio = { version = "1", features = ["sync", "rt"] }
+tokio = { version = "1", features = ["sync", "rt", "net", "time", "io-util"] }
 tracing = "0.1"
 dictation-types = { path = "../dictation-types" }
 notify = "6"
-hypr-paths = { git = "https://github.com/MasonRhodesDev/hypr-paths", rev = "535cec729936310b480c99203c05b5900d2a7e71" }
+hypr-ipc = { git = "https://github.com/MasonRhodesDev/hypr-ipc", rev = "367c52d43cf497f754c08490909669e935797c6b" }

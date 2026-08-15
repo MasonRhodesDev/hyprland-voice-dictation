@@ -28,8 +28,8 @@ harper-core = "0.68"
 zbus = "5"
 systemd = "0.10"
 dirs = "5"
-hypr-paths = { git = "https://github.com/MasonRhodesDev/hypr-paths", rev = "535cec729936310b480c99203c05b5900d2a7e71" }
-hypr-logind = { git = "https://github.com/MasonRhodesDev/hypr-logind", rev = "8c331f285724e671beb71595d1dc8e07a5fcde73" }
+hypr-paths = { git = "https://github.com/MasonRhodesDev/hypr-paths", rev = "3fb776c9b63bd168c9e937e4d295e41d0f5b6b5c" }
+hypr-logind = { git = "https://github.com/MasonRhodesDev/hypr-logind", rev = "52613e91531a8945c88690e1b91d5898113c3bd2" }
 notify = "6"
 hound = "3.5"
 # Fuzzy vocabulary matching (Jaro-Winkler / Levenshtein) for post-correction

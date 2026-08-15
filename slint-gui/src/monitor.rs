@@ -73,63 +73,45 @@ pub fn get_active_monitor() -> Option<String> {
 
 /// Get the active monitor synchronously via Hyprland IPC
 pub fn get_active_monitor_sync() -> Option<String> {
-    use hyprland::data::Monitors;
-    use hyprland::prelude::*;
-
-    Monitors::get()
-        .ok()
-        .and_then(|monitors| monitors.iter().find(|m| m.focused).map(|m| m.name.clone()))
+    let value = hypr_ipc::hyprctl_json_std(&["-j", "monitors"]).ok()?;
+    value.as_array()?.iter().find_map(|monitor| {
+        if monitor.get("focused").and_then(|v| v.as_bool()).unwrap_or(false) {
+            monitor.get("name").and_then(|n| n.as_str()).map(str::to_string)
+        } else {
+            None
+        }
+    })
 }
 
 /// Get the current monitor names via Hyprland IPC. Returns None when IPC is
 /// unavailable (non-Hyprland compositor, Hyprland restarting).
 pub fn get_monitor_names_sync() -> Option<Vec<String>> {
-    use hyprland::data::Monitors;
-    use hyprland::prelude::*;
-
-    Monitors::get().ok().map(|monitors| monitors.iter().map(|m| m.name.clone()).collect())
+    let value = hypr_ipc::hyprctl_json_std(&["-j", "monitors"]).ok()?;
+    Some(
+        value
+            .as_array()?
+            .iter()
+            .filter_map(|monitor| monitor.get("name").and_then(|n| n.as_str()).map(str::to_string))
+            .collect(),
+    )
 }
 
-/// Refresh Hyprland environment variables and verify socket accessibility
-/// This helps handle Hyprland restarts or session switches gracefully
+/// Re-resolve the live Hyprland event socket (HIS, then lockfile rescan).
 fn refresh_hyprland_environment() -> bool {
-    use std::env;
-
-    // Try to get fresh environment variables
-    let instance_sig = match env::var("HYPRLAND_INSTANCE_SIGNATURE") {
-        Ok(sig) => sig,
-        Err(_) => {
-            debug!("HYPRLAND_INSTANCE_SIGNATURE not set");
-            return false;
+    match hypr_ipc::socket2_path() {
+        Ok(path) => {
+            debug!("Hyprland socket verified: {}", path.display());
+            true
         }
-    };
-
-    let runtime_dir = match hypr_paths::BaseDirs::from_env() {
-        Ok(dirs) => dirs.runtime_dir().to_path_buf(),
         Err(_) => {
-            debug!("XDG_RUNTIME_DIR not set");
-            return false;
+            debug!("Hyprland event socket not found");
+            false
         }
-    };
-
-    // Construct expected socket path
-    let socket_path = runtime_dir.join("hypr").join(&instance_sig).join(".socket.sock");
-
-    // Verify socket exists
-    if socket_path.exists() {
-        debug!("Hyprland socket verified: {}", socket_path.display());
-        true
-    } else {
-        debug!("Hyprland socket not found at: {}", socket_path.display());
-        false
     }
 }
 
 /// Spawn a background thread to track active monitor changes
 pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<AtomicBool>>) {
-    use hyprland::event_listener::{EventListener, MonitorEventData};
-
-    // Initialize global state
     let initial = get_active_monitor_sync();
     info!("Initial active monitor from Hyprland IPC: {:?}", initial);
     let monitor = Arc::new(RwLock::new(initial.unwrap_or_default()));
@@ -137,96 +119,93 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<AtomicBool>>) {
     let _ = changed_at_cell();
 
     thread::spawn(move || {
-        let mut consecutive_failures: u32 = 0;
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+            warn!("failed to start Hyprland monitor listener runtime");
+            return;
+        };
+        rt.block_on(listen_socket2(monitor, reload_flag));
+    });
+}
 
-        loop {
-            refresh_hyprland_environment();
+async fn listen_socket2(monitor: Arc<RwLock<String>>, reload_flag: Option<Arc<AtomicBool>>) {
+    use tokio::io::AsyncBufReadExt;
 
-            let monitor_clone = monitor.clone();
-            let reload_flag_clone = reload_flag.clone();
-            let mut listener = EventListener::new();
-
-            listener.add_active_monitor_changed_handler(move |data: MonitorEventData| {
-                if let Ok(mut m) = monitor_clone.write() {
-                    let old_monitor = m.clone();
-                    debug!(
-                        "Active monitor changed from '{}' to '{}'",
-                        old_monitor, data.monitor_name
-                    );
-                    *m = data.monitor_name.clone();
-
-                    // Trigger GUI reload if flag provided and monitor actually changed
-                    if let Some(ref flag) = reload_flag_clone {
-                        if old_monitor != data.monitor_name {
-                            debug!("Setting reload flag for monitor switch");
-                            flag.store(true, Ordering::SeqCst);
+    let mut consecutive_failures: u32 = 0;
+    loop {
+        refresh_hyprland_environment();
+        let started = Instant::now();
+        match hypr_ipc::connect_socket2().await {
+            Ok(stream) => {
+                info!("connected to Hyprland event socket");
+                consecutive_failures = 0;
+                let mut lines = tokio::io::BufReader::new(stream).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let Some(frame) = hypr_ipc::parse_line(&line) else {
+                        continue;
+                    };
+                    match frame.event.as_str() {
+                        "focusedmon" => {
+                            let name = frame.payload.split(',').next().unwrap_or("").to_string();
+                            if let Ok(mut current) = monitor.write() {
+                                let old_monitor = current.clone();
+                                debug!(
+                                    "Active monitor changed from '{}' to '{}'",
+                                    old_monitor, name
+                                );
+                                *current = name.clone();
+                                if let Some(ref flag) = reload_flag {
+                                    if old_monitor != name {
+                                        debug!("Setting reload flag for monitor switch");
+                                        flag.store(true, Ordering::SeqCst);
+                                    }
+                                }
+                            }
                         }
+                        "monitoraddedv2" => {
+                            let name = frame.payload.split(',').nth(1).unwrap_or("");
+                            note_compositor_change(&format!("monitor added: '{name}'"));
+                        }
+                        "monitorremoved" => {
+                            note_compositor_change(&format!(
+                                "monitor removed: '{}'",
+                                frame.payload
+                            ));
+                        }
+                        "configreloaded" => {
+                            note_compositor_change("hyprland config reloaded");
+                        }
+                        _ => {}
                     }
                 }
-            });
-
-            // Topology changes: don't restart the GUI here. layer-shika creates
-            // and destroys surfaces on Wayland output hotplug itself; we only
-            // note the change so the GUI can verify the result once events settle.
-            listener.add_monitor_added_handler(move |data| {
-                note_compositor_change(&format!("monitor added: '{}'", data.name));
-            });
-            listener.add_monitor_removed_handler(move |name| {
-                note_compositor_change(&format!("monitor removed: '{name}'"));
-            });
-            listener.add_config_reloaded_handler(move || {
-                note_compositor_change("hyprland config reloaded");
-            });
-
-            let started = Instant::now();
-            let result = listener.start_listener();
-            let was_connected = started.elapsed() >= CONNECTED_THRESHOLD;
-
-            match result {
-                Ok(()) => {
-                    info!("Hyprland event listener ended cleanly, reconnecting");
-                }
-                Err(ref e) if was_connected => {
-                    warn!(
-                        "Hyprland IPC connection lost after {}s (compositor restart?): {e}",
-                        started.elapsed().as_secs()
-                    );
-                }
-                Err(ref e) => {
-                    warn!(
-                        "Hyprland event listener connection failed (attempt {}/{}): {e}",
-                        consecutive_failures + 1,
-                        MAX_CONSECUTIVE_FAILURES
-                    );
+                let was_connected = started.elapsed() >= CONNECTED_THRESHOLD;
+                if was_connected {
+                    warn!("Hyprland IPC connection lost after {}s", started.elapsed().as_secs());
+                    set_active_monitor(String::new());
+                    note_compositor_change("hyprland IPC connection lost");
+                } else {
+                    warn!("Hyprland event socket closed before staying connected");
                 }
             }
-
-            if was_connected {
-                consecutive_failures = 0;
-                // Active-monitor state is now stale. Clear it so the GUI falls
-                // back to showing on all monitors until we reconnect, instead of
-                // pinning to a possibly-gone monitor name.
-                set_active_monitor(String::new());
-                note_compositor_change("hyprland IPC connection lost");
-            } else {
+            Err(e) => {
                 consecutive_failures += 1;
+                warn!(
+                    "Hyprland event listener connection failed (attempt {}/{}): {e}",
+                    consecutive_failures, MAX_CONSECUTIVE_FAILURES
+                );
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                     warn!(
                         "Hyprland monitor listener failed {} times, backing off for {}s",
                         consecutive_failures,
                         CIRCUIT_BREAKER_TIMEOUT.as_secs()
                     );
-                    thread::sleep(CIRCUIT_BREAKER_TIMEOUT);
+                    tokio::time::sleep(CIRCUIT_BREAKER_TIMEOUT).await;
                     consecutive_failures = 0;
                 }
             }
-
-            thread::sleep(RETRY_INTERVAL);
-
-            // Re-sync active monitor before the next connection attempt
-            if let Some(name) = get_active_monitor_sync() {
-                set_active_monitor(name);
-            }
         }
-    });
+        tokio::time::sleep(RETRY_INTERVAL).await;
+        if let Some(name) = get_active_monitor_sync() {
+            set_active_monitor(name);
+        }
+    }
 }
