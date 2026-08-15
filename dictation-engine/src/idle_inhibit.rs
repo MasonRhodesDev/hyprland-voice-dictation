@@ -11,14 +11,9 @@ pub struct IdleInhibitor {
 pub async fn acquire(reason: &str) -> Result<IdleInhibitor> {
     let conn = Connection::system().await?;
     let proxy = hypr_logind::LogindManagerProxy::new(&conn).await?;
-    let inhibit = hypr_logind::Inhibitor::acquire(
-        &proxy,
-        "idle:sleep",
-        "voice-dictation",
-        reason,
-        "block",
-    )
-    .await?;
+    let inhibit =
+        hypr_logind::Inhibitor::acquire(&proxy, "idle:sleep", "voice-dictation", reason, "block")
+            .await?;
     info!("Idle/sleep inhibit acquired via logind");
     Ok(IdleInhibitor { _inhibit: inhibit })
 }

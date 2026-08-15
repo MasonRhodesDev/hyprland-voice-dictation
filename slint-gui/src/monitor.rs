@@ -113,10 +113,7 @@ fn refresh_hyprland_environment() -> bool {
     };
 
     // Construct expected socket path
-    let socket_path = runtime_dir
-        .join("hypr")
-        .join(&instance_sig)
-        .join(".socket.sock");
+    let socket_path = runtime_dir.join("hypr").join(&instance_sig).join(".socket.sock");
 
     // Verify socket exists
     if socket_path.exists() {
