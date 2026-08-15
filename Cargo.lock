@@ -2457,6 +2457,7 @@ dependencies = [
  "harper-core",
  "hex",
  "hound",
+ "hypr-logind",
  "hypr-paths",
  "ksni",
  "libc",
@@ -4033,6 +4034,15 @@ dependencies = [
  "tower-service",
  "tracing",
  "windows-registry",
+]
+
+[[package]]
+name = "hypr-logind"
+version = "0.1.0"
+source = "git+https://github.com/MasonRhodesDev/hypr-logind?rev=8c331f285724e671beb71595d1dc8e07a5fcde73#8c331f285724e671beb71595d1dc8e07a5fcde73"
+dependencies = [
+ "libc",
+ "zbus",
 ]
 
 [[package]]
