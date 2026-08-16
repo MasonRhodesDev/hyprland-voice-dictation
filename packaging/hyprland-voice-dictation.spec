@@ -33,7 +33,7 @@
 %global __cargo_common_opts %{?_smp_mflags} -Z avoid-dev-deps --locked
 
 Name:           hyprland-voice-dictation
-Version:        0.5.1
+Version:        0.5.2
 Release:        1%{?dist}
 Summary:        Offline voice dictation for Hyprland with Parakeet speech recognition
 # Project code is MIT OR Apache-2.0; the binary links a large dependency
@@ -120,6 +120,9 @@ install -Dpm0755 scripts/download-parakeet-model.sh %{buildroot}%{_datadir}/%{na
 %{_datadir}/%{name}/download-parakeet-model.sh
 
 %changelog
+* Sun Aug 16 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.5.2-1
+- Pin hypr-paths, hypr-logind, and hypr-ipc to crates.io 0.1.0.
+
 * Fri Jul 24 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.5.1-1
 - Fuzzy vocabulary post-correction: snap transcribed words onto the user
   dictionary to fix vendor/product names and split words (e.g. "aws agent

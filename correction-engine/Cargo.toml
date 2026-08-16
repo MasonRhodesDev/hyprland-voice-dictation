@@ -14,7 +14,7 @@ serde_json = { workspace = true }
 atspi = { version = "0.29", features = ["connection", "proxies", "tokio"] }
 zbus = "5"
 dirs = "5"
-hypr-paths = { git = "https://github.com/MasonRhodesDev/hypr-paths", rev = "3fb776c9b63bd168c9e937e4d295e41d0f5b6b5c" }
+hypr-paths = "0.1.0"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 async-trait = "0.1"

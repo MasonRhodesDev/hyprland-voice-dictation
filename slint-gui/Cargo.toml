@@ -13,4 +13,4 @@ tokio = { version = "1", features = ["sync", "rt", "net", "time", "io-util"] }
 tracing = "0.1"
 dictation-types = { path = "../dictation-types" }
 notify = "6"
-hypr-ipc = { git = "https://github.com/MasonRhodesDev/hypr-ipc", rev = "367c52d43cf497f754c08490909669e935797c6b" }
+hypr-ipc = "0.1.0"

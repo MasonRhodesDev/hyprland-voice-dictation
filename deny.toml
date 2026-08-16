@@ -70,7 +70,4 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/MasonRhodesDev/schema-tui.git",
     "https://github.com/iovxw/ksni.git",
-    "https://github.com/MasonRhodesDev/hypr-paths",
-    "https://github.com/MasonRhodesDev/hypr-logind",
-    "https://github.com/MasonRhodesDev/hypr-ipc",
 ]
