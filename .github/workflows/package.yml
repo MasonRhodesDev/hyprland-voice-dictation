@@ -11,9 +11,9 @@ concurrency:
 
 jobs:
   arch:
-    uses: MasonRhodesDev/packaging-workflows/.github/workflows/arch-package.yml@cda4f4fa38fc8142439665f0e2d1946bc37ac595
+    uses: MasonRhodesDev/packaging-workflows/.github/workflows/arch-package.yml@v1
 
   rpm:
-    uses: MasonRhodesDev/packaging-workflows/.github/workflows/rpm-check.yml@cda4f4fa38fc8142439665f0e2d1946bc37ac595
+    uses: MasonRhodesDev/packaging-workflows/.github/workflows/rpm-check.yml@v1
     with:
       spec-name: hyprland-voice-dictation

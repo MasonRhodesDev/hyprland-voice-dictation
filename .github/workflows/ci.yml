@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   ci:
-    uses: MasonRhodesDev/packaging-workflows/.github/workflows/rust-ci.yml@cda4f4fa38fc8142439665f0e2d1946bc37ac595
+    uses: MasonRhodesDev/packaging-workflows/.github/workflows/rust-ci.yml@v1
     with:
       pacman-deps: pipewire alsa-lib fontconfig freetype2 libxkbcommon wayland systemd pkgconf
       # Build without the pipewire audio backend: libspa-sys 0.10 fails to
