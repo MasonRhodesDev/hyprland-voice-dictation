@@ -10,7 +10,7 @@
 # cargo dependencies themselves are fetched up front in prepare().
 
 pkgname=hyprland-voice-dictation
-pkgver=0.5.3
+pkgver=0.5.4
 pkgrel=1
 pkgdesc='Offline voice dictation for Hyprland with Parakeet speech recognition'
 arch=('x86_64')

@@ -67,7 +67,10 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # packaging/build-srpm.sh):
 #   - schema-tui: our own config-TUI crate
 #   - ksni: tray crate pinned to a rev for a fix not yet on crates.io
+#   - hypr-slint-runtime: owned shared runtime; Cargo.toml pins v0.1.0 and
+#     Cargo.lock pins commit 2c18ead7, while allow-git matches repository URLs
 allow-git = [
     "https://github.com/MasonRhodesDev/schema-tui.git",
     "https://github.com/iovxw/ksni.git",
+    "https://github.com/MasonRhodesDev/hypr-slint-runtime",
 ]

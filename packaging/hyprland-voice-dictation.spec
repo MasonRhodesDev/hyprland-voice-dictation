@@ -33,7 +33,7 @@
 %global __cargo_common_opts %{?_smp_mflags} -Z avoid-dev-deps --locked
 
 Name:           hyprland-voice-dictation
-Version:        0.5.3
+Version:        0.5.4
 Release:        1%{?dist}
 Summary:        Offline voice dictation for Hyprland with Parakeet speech recognition
 # Project code is MIT OR Apache-2.0; the binary links a large dependency
@@ -120,6 +120,9 @@ install -Dpm0755 scripts/download-parakeet-model.sh %{buildroot}%{_datadir}/%{na
 %{_datadir}/%{name}/download-parakeet-model.sh
 
 %changelog
+* Thu Aug 20 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.5.4-1
+- Admit the pinned shared Slint runtime and update h2 for RUSTSEC-2026-0258
+
 * Thu Aug 20 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.5.3-1
 - Freeze the Slint overlay while hidden and wake it from real events
 
