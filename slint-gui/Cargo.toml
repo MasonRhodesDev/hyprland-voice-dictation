@@ -8,7 +8,8 @@ description = "Slint-based GUI overlay for voice dictation"
 
 [dependencies]
 layer-shika = "0.2"
-slint = "1.14"
+slint = "=1.17.1"
+hypr-slint-runtime = { git = "https://github.com/MasonRhodesDev/hypr-slint-runtime", tag = "v0.1.0" }
 tokio = { version = "1", features = ["sync", "rt", "net", "time", "io-util"] }
 tracing = "0.1"
 dictation-types = { path = "../dictation-types" }

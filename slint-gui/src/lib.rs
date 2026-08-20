@@ -4,14 +4,14 @@
 //! Single persistent shell with dynamic property updates for mode switching.
 
 use dictation_types::{GuiControl, GuiState, GuiStatus};
-use layer_shika::calloop::TimeoutAction;
+use hypr_slint_runtime::{IdleScheduler, WaitDecision, WakeHandle};
 use layer_shika::prelude::*;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use slint_interpreter::Value;
 use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, warn};
@@ -30,6 +30,56 @@ pub struct SharedState {
     pub pre_listening: bool,
     /// Typing progress (0.0–1.0) while gui_state == Typing.
     pub typing_progress: f32,
+}
+
+/// Condvar paired with the shared runtime wake. Producers call `signal()` after
+/// changing state. The UI loop wakes immediately, while the clock thread is only
+/// active for visible animation or a real maintenance deadline.
+struct UiClock {
+    wake: WakeHandle,
+    generation: Mutex<u64>,
+    changed: Condvar,
+    empty_since: Mutex<Option<Instant>>,
+}
+
+impl UiClock {
+    fn new(wake: WakeHandle) -> Arc<Self> {
+        Arc::new(Self {
+            wake,
+            generation: Mutex::new(0),
+            changed: Condvar::new(),
+            empty_since: Mutex::new(None),
+        })
+    }
+
+    fn signal(&self) {
+        self.wake.wake();
+        let mut generation = self.generation.lock().expect("UI clock poisoned");
+        *generation = generation.wrapping_add(1);
+        self.changed.notify_one();
+    }
+
+    fn note_surface_count(&self, count: usize) {
+        let mut empty_since = self.empty_since.lock().expect("surface deadline poisoned");
+        match (count, empty_since.is_some()) {
+            (0, false) => *empty_since = Some(Instant::now()),
+            (1.., true) => *empty_since = None,
+            _ => {}
+        }
+        drop(empty_since);
+        self.changed.notify_one();
+    }
+
+    fn next_maintenance(&self, now: Instant) -> Option<Duration> {
+        let topology = monitor::pending_compositor_change()
+            .map(|changed| changed + COMPOSITOR_SETTLE)
+            .map(|deadline| deadline.saturating_duration_since(now));
+        let surfaces = *self.empty_since.lock().expect("surface deadline poisoned");
+        let surfaces = surfaces
+            .map(|empty| empty + SURFACE_LOSS_GRACE)
+            .map(|deadline| deadline.saturating_duration_since(now));
+        [topology, surfaces].into_iter().flatten().min()
+    }
 }
 
 impl Default for SharedState {
@@ -69,7 +119,7 @@ fn resolve_ui_path(name: &str) -> String {
 }
 
 /// Spawn file watcher for UI hot-reload
-fn spawn_ui_file_watcher(reload_flag: Arc<AtomicBool>) {
+fn spawn_ui_file_watcher(reload_flag: Arc<AtomicBool>, clock: Arc<UiClock>) {
     let Some(ui_dir) = get_ui_config_dir() else {
         info!("No UI config directory found, hot-reload disabled");
         return;
@@ -82,6 +132,7 @@ fn spawn_ui_file_watcher(reload_flag: Arc<AtomicBool>) {
 
     std::thread::spawn(move || {
         let reload_flag_clone = reload_flag.clone();
+        let clock_clone = clock.clone();
         let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
             move |res: std::result::Result<notify::Event, notify::Error>| {
                 if let Ok(event) = res {
@@ -94,6 +145,7 @@ fn spawn_ui_file_watcher(reload_flag: Arc<AtomicBool>) {
                         if is_slint {
                             info!("UI file changed, triggering reload...");
                             reload_flag_clone.store(true, Ordering::SeqCst);
+                            clock_clone.signal();
                         }
                     }
                 }
@@ -138,6 +190,13 @@ pub fn run_integrated(
     // Create shared state
     let shared_state = Arc::new(RwLock::new(SharedState::default()));
 
+    let (wake_sender, wake_receiver) = layer_shika::calloop::channel::channel();
+    let wake = WakeHandle::new(move || {
+        let _ = wake_sender.send(());
+    });
+    let clock = UiClock::new(wake);
+    let mut wake_receiver = Some(wake_receiver);
+
     // Create reload flag for hot-reload
     let reload_flag = Arc::new(AtomicBool::new(false));
 
@@ -152,13 +211,17 @@ pub fn run_integrated(
         shared_state.clone(),
         gui_status_tx.clone(),
         runtime_handle.clone(),
+        clock.clone(),
     );
 
     // Spawn active monitor listener (updates global state on monitor change)
-    monitor::spawn_active_monitor_listener(None);
+    let monitor_clock = clock.clone();
+    monitor::spawn_active_monitor_listener(Arc::new(move || monitor_clock.signal()));
 
     // Spawn UI file watcher for hot-reload
-    spawn_ui_file_watcher(reload_flag.clone());
+    spawn_ui_file_watcher(reload_flag.clone(), clock.clone());
+
+    spawn_ui_clock(shared_state.clone(), clock.clone());
 
     // Run the single persistent shell with reload support.
     // Shell creation can fail transiently — most commonly right after resume or
@@ -167,7 +230,13 @@ pub fn run_integrated(
     info!("Creating Wayland layer shell (this may take a few seconds)...");
     let mut backoff = Duration::from_secs(1);
     loop {
-        match run_shell(shared_state.clone(), reload_flag.clone(), gui_status_tx.clone()) {
+        match run_shell(
+            shared_state.clone(),
+            reload_flag.clone(),
+            gui_status_tx.clone(),
+            clock.clone(),
+            &mut wake_receiver,
+        ) {
             Ok(()) => return Ok(()),
             Err(e) => {
                 let msg = e.to_string();
@@ -201,10 +270,12 @@ fn spawn_channel_listener(
     shared_state: Arc<RwLock<SharedState>>,
     gui_status_tx: mpsc::Sender<GuiStatus>,
     runtime_handle: tokio::runtime::Handle,
+    clock: Arc<UiClock>,
 ) {
     // Control message listener
     let state_clone = shared_state.clone();
     let status_tx = gui_status_tx.clone();
+    let control_clock = clock.clone();
     runtime_handle.spawn(async move {
         loop {
             match gui_control_rx.recv().await {
@@ -265,6 +336,7 @@ fn spawn_channel_listener(
                             });
                         }
                     }
+                    control_clock.signal();
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     warn!("Control channel lagged by {} messages", n);
@@ -279,6 +351,7 @@ fn spawn_channel_listener(
 
     // Spectrum listener
     let state_clone = shared_state.clone();
+    let spectrum_clock = clock;
     runtime_handle.spawn(async move {
         loop {
             match spectrum_rx.recv().await {
@@ -287,12 +360,62 @@ fn spawn_channel_listener(
                     if let Ok(mut state) = state_clone.write() {
                         state.spectrum_values = bands;
                     }
+                    spectrum_clock.signal();
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     });
+}
+
+fn state_has_visible_animation(state: GuiState) -> bool {
+    matches!(state, GuiState::Transcribing | GuiState::Typing | GuiState::Closing)
+}
+
+/// Run the presentation clock off the UI thread. It sleeps indefinitely while
+/// hidden/static, wakes on producer events, and emits frame wakes only while a
+/// visible Rust-driven animation is active.
+fn spawn_ui_clock(shared_state: Arc<RwLock<SharedState>>, clock: Arc<UiClock>) {
+    std::thread::Builder::new()
+        .name("voice-ui-clock".into())
+        .spawn(move || {
+            let scheduler = IdleScheduler::default();
+            let mut observed_generation = 0;
+            loop {
+                let animated = shared_state
+                    .read()
+                    .map(|state| state_has_visible_animation(state.gui_state))
+                    .unwrap_or(false);
+                let decision = scheduler.decide(animated, clock.next_maintenance(Instant::now()));
+
+                let mut generation = clock.generation.lock().expect("UI clock poisoned");
+                if *generation != observed_generation {
+                    observed_generation = *generation;
+                    continue;
+                }
+
+                match decision {
+                    WaitDecision::Indefinite => {
+                        generation = clock.changed.wait(generation).expect("UI clock poisoned");
+                        observed_generation = *generation;
+                    }
+                    WaitDecision::Frame(delay) | WaitDecision::Timer(delay) => {
+                        let (next, timeout) = clock
+                            .changed
+                            .wait_timeout(generation, delay)
+                            .expect("UI clock poisoned");
+                        generation = next;
+                        observed_generation = *generation;
+                        if timeout.timed_out() {
+                            drop(generation);
+                            clock.signal();
+                        }
+                    }
+                }
+            }
+        })
+        .expect("failed to start UI clock");
 }
 
 /// Simple spectrum computation - 8 frequency bands from audio samples
@@ -345,11 +468,11 @@ const EXIT_CODE_RELOAD: i32 = 64;
 /// Exit code when all layer surfaces are lost (triggers systemd restart via Restart=on-failure)
 const EXIT_CODE_SURFACES_LOST: i32 = 1;
 
-/// Number of timer ticks (~16ms each) to wait before exiting after all surfaces are
-/// lost (~10s). Generous on purpose: during resume or DP re-enumeration all outputs
+/// Time to wait before exiting after all surfaces are lost. Generous on purpose:
+/// during resume or DP re-enumeration all outputs
 /// can disappear for several seconds and layer-shika recreates the surfaces when
 /// they come back — exiting early just restarts the daemon into the same churn.
-const SURFACE_LOSS_GRACE_TICKS: u32 = 625;
+const SURFACE_LOSS_GRACE: Duration = Duration::from_secs(10);
 
 /// How long compositor topology events must be quiet before we verify that every
 /// monitor has an overlay surface (and restart only if one is missing).
@@ -413,6 +536,8 @@ fn run_shell(
     shared_state: Arc<RwLock<SharedState>>,
     reload_flag: Arc<AtomicBool>,
     gui_status_tx: mpsc::Sender<GuiStatus>,
+    clock: Arc<UiClock>,
+    wake_receiver: &mut Option<layer_shika::calloop::channel::Channel<()>>,
 ) -> GuiResult<()> {
     let ui_file = resolve_ui_path("dictation");
     info!("Loading UI from: {}", ui_file);
@@ -458,22 +583,25 @@ fn run_shell(
     let event_loop = runtime.event_loop_handle();
     info!("Got event loop handle");
 
-    // Set up periodic timer to sync shared state to component properties
-    // This runs inside the event loop and can safely access the component
-    let update_interval = Duration::from_millis(16); // ~60fps
-
-    let mut empty_surface_ticks: u32 = 0;
     let mut gui_initialized = false;
     // Last gui_state we emitted a log line for, so we log transitions instead of every frame.
     let mut last_logged_state: Option<GuiState> = None;
     // Spinner rotation, advanced here each tick (capped at the timer rate) instead of via a
     // free-running Slint animation, so a long/stuck spinner state can't drive uncapped repaints.
     let mut spinner_angle: f32 = 0.0;
+    let mut last_frame = Instant::now();
 
+    let wake_for_callback = clock.wake.clone();
+    let clock_for_callback = clock.clone();
+    let wake_receiver = wake_receiver.take().ok_or("UI wake source was already consumed")?;
     event_loop
-        .add_timer(update_interval, move |_deadline: Instant, app_state| {
-            // Advance the spinner at a fixed rate (one full turn/sec), bounded by the timer.
-            spinner_angle = (spinner_angle + 360.0 * update_interval.as_secs_f32()) % 360.0;
+        .insert_source(wake_receiver, move |event, (), app_state| {
+            if !matches!(event, layer_shika::calloop::channel::Event::Msg(())) {
+                return;
+            }
+            // Acknowledge the consumed edge before draining state so a concurrent
+            // producer cannot be coalesced into an edge already removed by calloop.
+            wake_for_callback.acknowledge();
 
             // Check for UI file reload request (dev workflow)
             if reload_flag.load(Ordering::SeqCst) {
@@ -524,13 +652,18 @@ fn run_shell(
             let surface_count = app_state.surfaces_with_keys().count();
             if surface_count > 0 {
                 gui_initialized = true;
-                empty_surface_ticks = 0;
+                clock_for_callback.note_surface_count(surface_count);
             } else if gui_initialized {
-                empty_surface_ticks += 1;
-                if empty_surface_ticks >= SURFACE_LOSS_GRACE_TICKS {
+                clock_for_callback.note_surface_count(0);
+                let expired = clock_for_callback
+                    .empty_since
+                    .lock()
+                    .expect("surface deadline poisoned")
+                    .is_some_and(|since| since.elapsed() >= SURFACE_LOSS_GRACE);
+                if expired {
                     error!(
                         "All layer surfaces lost for ~{}s after init, exiting for systemd restart",
-                        (empty_surface_ticks as u64 * 16) / 1000
+                        SURFACE_LOSS_GRACE.as_secs()
                     );
                     std::process::exit(EXIT_CODE_SURFACES_LOST);
                 }
@@ -540,6 +673,15 @@ fn run_shell(
             let active_monitor = monitor::get_active_monitor();
 
             if let Ok(state) = shared_state.read() {
+                if state_has_visible_animation(state.gui_state) {
+                    let now = Instant::now();
+                    spinner_angle =
+                        (spinner_angle + 360.0 * now.duration_since(last_frame).as_secs_f32())
+                            % 360.0;
+                    last_frame = now;
+                } else {
+                    last_frame = Instant::now();
+                }
                 // Log state transitions only (not every frame) to avoid flooding the journal.
                 if last_logged_state != Some(state.gui_state) {
                     if state.gui_state != GuiState::Hidden {
@@ -645,12 +787,11 @@ fn run_shell(
                 }
             }
 
-            // Return ToDuration to reschedule the timer
-            TimeoutAction::ToDuration(update_interval)
         })
-        .map_err(|e| format!("Failed to add timer: {}", e))?;
+        .map_err(|e| format!("Failed to add UI wake source: {}", e))?;
+    clock.signal();
 
-    info!("Timer added successfully, about to start shell event loop");
+    info!("Event-driven UI wake source ready; starting shell event loop");
     info!("Starting shell event loop");
     runtime.run().map_err(|e| format!("Shell run error: {}", e))?;
 
@@ -658,4 +799,58 @@ fn run_shell(
     // Exit the process so systemd can restart us with fresh surfaces.
     error!("Shell event loop exited unexpectedly, exiting for systemd restart");
     std::process::exit(EXIT_CODE_SURFACES_LOST);
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn hidden_and_event_driven_listening_do_not_run_a_frame_clock() {
+        let scheduler = IdleScheduler::default();
+        for state in [GuiState::Hidden, GuiState::PreListening, GuiState::Listening] {
+            assert!(!state_has_visible_animation(state));
+            assert_eq!(scheduler.decide(false, None), WaitDecision::Indefinite);
+        }
+    }
+
+    #[test]
+    fn spinner_states_request_frames_and_hidden_defrosts_on_one_edge() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let wake = WakeHandle::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        assert!(wake.wake());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // Consuming/acknowledging the edge permits the next state change to wake.
+        assert!(wake.acknowledge());
+        assert!(wake.wake());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let scheduler = IdleScheduler::new(Duration::from_millis(16));
+        for state in [GuiState::Transcribing, GuiState::Typing, GuiState::Closing] {
+            assert!(state_has_visible_animation(state));
+            assert_eq!(
+                scheduler.decide(true, None),
+                WaitDecision::Frame(Duration::from_millis(16))
+            );
+        }
+    }
+
+    #[test]
+    fn maintenance_deadlines_do_not_become_hidden_polling() {
+        let clock = UiClock::new(WakeHandle::new(|| {}));
+        assert_eq!(clock.next_maintenance(Instant::now()), None);
+
+        clock.note_surface_count(0);
+        let remaining = clock.next_maintenance(Instant::now()).expect("surface deadline");
+        assert!(remaining <= SURFACE_LOSS_GRACE);
+        assert!(remaining > Duration::from_secs(9));
+
+        clock.note_surface_count(1);
+        assert_eq!(clock.next_maintenance(Instant::now()), None);
+    }
 }

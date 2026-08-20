@@ -1,6 +1,5 @@
 //! Monitor detection and active monitor tracking for Hyprland
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -111,7 +110,7 @@ fn refresh_hyprland_environment() -> bool {
 }
 
 /// Spawn a background thread to track active monitor changes
-pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<AtomicBool>>) {
+pub fn spawn_active_monitor_listener(wake: Arc<dyn Fn() + Send + Sync>) {
     let initial = get_active_monitor_sync();
     info!("Initial active monitor from Hyprland IPC: {:?}", initial);
     let monitor = Arc::new(RwLock::new(initial.unwrap_or_default()));
@@ -123,11 +122,11 @@ pub fn spawn_active_monitor_listener(reload_flag: Option<Arc<AtomicBool>>) {
             warn!("failed to start Hyprland monitor listener runtime");
             return;
         };
-        rt.block_on(listen_socket2(monitor, reload_flag));
+        rt.block_on(listen_socket2(monitor, wake));
     });
 }
 
-async fn listen_socket2(monitor: Arc<RwLock<String>>, reload_flag: Option<Arc<AtomicBool>>) {
+async fn listen_socket2(monitor: Arc<RwLock<String>>, wake: Arc<dyn Fn() + Send + Sync>) {
     use tokio::io::AsyncBufReadExt;
 
     let mut consecutive_failures: u32 = 0;
@@ -153,26 +152,26 @@ async fn listen_socket2(monitor: Arc<RwLock<String>>, reload_flag: Option<Arc<At
                                     old_monitor, name
                                 );
                                 *current = name.clone();
-                                if let Some(ref flag) = reload_flag {
-                                    if old_monitor != name {
-                                        debug!("Setting reload flag for monitor switch");
-                                        flag.store(true, Ordering::SeqCst);
-                                    }
+                                if old_monitor != name {
+                                    wake();
                                 }
                             }
                         }
                         "monitoraddedv2" => {
                             let name = frame.payload.split(',').nth(1).unwrap_or("");
                             note_compositor_change(&format!("monitor added: '{name}'"));
+                            wake();
                         }
                         "monitorremoved" => {
                             note_compositor_change(&format!(
                                 "monitor removed: '{}'",
                                 frame.payload
                             ));
+                            wake();
                         }
                         "configreloaded" => {
                             note_compositor_change("hyprland config reloaded");
+                            wake();
                         }
                         _ => {}
                     }
@@ -182,6 +181,7 @@ async fn listen_socket2(monitor: Arc<RwLock<String>>, reload_flag: Option<Arc<At
                     warn!("Hyprland IPC connection lost after {}s", started.elapsed().as_secs());
                     set_active_monitor(String::new());
                     note_compositor_change("hyprland IPC connection lost");
+                    wake();
                 } else {
                     warn!("Hyprland event socket closed before staying connected");
                 }
@@ -206,6 +206,7 @@ async fn listen_socket2(monitor: Arc<RwLock<String>>, reload_flag: Option<Arc<At
         tokio::time::sleep(RETRY_INTERVAL).await;
         if let Some(name) = get_active_monitor_sync() {
             set_active_monitor(name);
+            wake();
         }
     }
 }
