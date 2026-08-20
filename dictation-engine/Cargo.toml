@@ -38,10 +38,10 @@ crossbeam-channel = "0.5"
 chrono = { version = "0.4", features = ["serde"] }
 # Silero VAD (neural voice activity detection)
 # NOTE: Keep exact versions aligned with parakeet-rs requirements
-ort = "=2.0.0-rc.10"
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "ndarray", "load-dynamic"] }
 ndarray = "=0.16.1"
 # Parakeet engine
-parakeet-rs = "0.2"
+parakeet-rs = { version = "0.2", default-features = false, features = ["cpu"] }
 # Tokenizer for CTC beam search hotword processing
 tokenizers = { version = "0.22.2", features = ["onig"] }
 # FFT for mel spectrogram extraction in CtcDirectEngine
@@ -50,7 +50,7 @@ rustfft = "6.4"
 sha2 = "0.10"
 hex = "0.4"
 # VAD model download
-reqwest = { version = "0.12", features = ["blocking", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "multipart", "rustls-tls"] }
 # PipeWire native audio backend
 # 0.10+ required: older releases pin bindgen 0.69, which generates broken
 # (opaque) bindings with libclang >= 19 and fails against PipeWire 1.6 headers.

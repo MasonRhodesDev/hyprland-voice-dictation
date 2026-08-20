@@ -23,7 +23,7 @@ zbus = "5"
 tokio = { workspace = true }
 systemd = "0.10"
 serde_json = { workspace = true }
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [workspace]
 members = [
