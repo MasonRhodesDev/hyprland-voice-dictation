@@ -2,17 +2,8 @@
 # produced by packaging/build-srpm.sh (source tarball from the git tag +
 # vendored cargo deps as Source1 — no rust-*-devel packages needed).
 #
-# ============================================================================
-# IMPORTANT — NETWORK REQUIRED AT BUILD TIME (ort / ONNX Runtime):
-# the `ort` crate's build script downloads prebuilt ONNX Runtime binaries
-# during %build. The vendored cargo sources make dependency *resolution*
-# fully offline, but the ort download is an HTTP fetch outside cargo's
-# control. The COPR project MUST have networking enabled
-# (`copr-cli modify --enable-net on <project>` or the "Enable internet
-# access" checkbox) until ort is switched to its `load-dynamic` feature
-# with a system-provided onnxruntime library.
-# ============================================================================
-#
+# ONNX Runtime is loaded dynamically from the system package. Cargo never
+# downloads or links a bundled copy, keeping offline COPR builds reproducible.
 # The test suite runs by default. Disable for a one-off build with
 # --without check; COPR builds run the suite.
 %bcond_without check
@@ -33,7 +24,7 @@
 %global __cargo_common_opts %{?_smp_mflags} -Z avoid-dev-deps --locked
 
 Name:           hyprland-voice-dictation
-Version:        0.5.4
+Version:        0.5.5
 Release:        1%{?dist}
 Summary:        Offline voice dictation for Hyprland with Parakeet speech recognition
 # Project code is MIT OR Apache-2.0; the binary links a large dependency
@@ -51,9 +42,6 @@ BuildRequires:  pkg-config
 BuildRequires:  clang-devel
 # ort-sys links the system ONNX Runtime (no network in COPR for its downloader)
 BuildRequires:  pkgconfig(libonnxruntime)
-# reqwest (VAD model download) pulls native-tls -> openssl-sys, which needs the
-# openssl headers to build.
-BuildRequires:  openssl-devel
 BuildRequires:  pipewire-devel
 BuildRequires:  alsa-lib-devel
 BuildRequires:  fontconfig-devel
@@ -63,6 +51,7 @@ BuildRequires:  wayland-devel
 BuildRequires:  systemd-devel
 Requires:       wtype
 Requires:       pipewire
+Requires:       onnxruntime
 Recommends:     playerctl
 
 %description
@@ -120,6 +109,9 @@ install -Dpm0755 scripts/download-parakeet-model.sh %{buildroot}%{_datadir}/%{na
 %{_datadir}/%{name}/download-parakeet-model.sh
 
 %changelog
+* Thu Aug 20 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.5.5-1
+- Use Rustls for HTTP and dynamically load system ONNX Runtime, removing native OpenSSL build dependencies
+
 * Thu Aug 20 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.5.4-1
 - Admit the pinned shared Slint runtime and update h2 for RUSTSEC-2026-0258
 
