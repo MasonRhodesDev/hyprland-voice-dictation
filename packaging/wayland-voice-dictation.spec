@@ -24,7 +24,7 @@
 %global __cargo_common_opts %{?_smp_mflags} -Z avoid-dev-deps --locked
 
 Name:           wayland-voice-dictation
-Version:        0.6.0
+Version:        0.6.1
 Release:        1%{?dist}
 Summary:        Offline voice dictation for Wayland desktops with Parakeet speech recognition
 # Project code is MIT OR Apache-2.0; the binary links a large dependency
@@ -109,6 +109,9 @@ install -Dpm0755 scripts/download-parakeet-model.sh %{buildroot}%{_datadir}/%{na
 %{_datadir}/%{name}/download-parakeet-model.sh
 
 %changelog
+* Sat Aug 22 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.6.1-1
+- Resolve hypr-ipc 0.1.1 so the old hypr-paths crate leaves the dependency graph.
+
 * Sat Aug 22 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.6.0-1
 - Rename package from hyprland-voice-dictation (desktop-commons ADR 0005).
 - Depend on xdg-paths and logind-session (renamed crates).
