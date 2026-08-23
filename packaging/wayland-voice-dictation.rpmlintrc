@@ -1,4 +1,4 @@
-# rpmlint filters for hyprland-voice-dictation. Lets CI gate on rpmlint
+# rpmlint filters for wayland-voice-dictation. Lets CI gate on rpmlint
 # without tripping over domain vocabulary and our deliberate vendored-source
 # layout.
 

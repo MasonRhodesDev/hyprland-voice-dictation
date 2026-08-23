@@ -96,7 +96,7 @@ pub struct MonitorConfig {
 
 impl Default for MonitorConfig {
     fn default() -> Self {
-        let vd_dir = hypr_paths::ConfigDirs::from_env()
+        let vd_dir = xdg_paths::ConfigDirs::from_env()
             .map(|d| d.data_dir("voice-dictation"))
             .unwrap_or_default();
 

@@ -12,5 +12,5 @@ jobs:
     uses: MasonRhodesDev/packaging-workflows/.github/workflows/release.yml@v1
     secrets: inherit
     with:
-      spec-name: hyprland-voice-dictation
+      spec-name: wayland-voice-dictation
       security: true

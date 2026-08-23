@@ -1,6 +1,6 @@
 post_install() {
     echo ""
-    echo "==> hyprland-voice-dictation installed successfully."
+    echo "==> wayland-voice-dictation installed successfully."
     echo ""
     echo "==> NEXT STEPS:"
     echo ""
@@ -13,7 +13,7 @@ post_install() {
     echo "    3. Add a keybind in your Hyprland config:"
     echo "       bind = SUPER, V, exec, voice-dictation toggle"
     echo ""
-    echo "    See: https://github.com/MasonRhodesDev/hyprland-voice-dictation"
+    echo "    See: https://github.com/MasonRhodesDev/wayland-voice-dictation"
     echo ""
 }
 

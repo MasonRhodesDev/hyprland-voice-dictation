@@ -1,6 +1,6 @@
-# Hyprland Voice Dictation
+# Wayland Voice Dictation
 
-Offline voice dictation for Hyprland using NVIDIA Parakeet TDT speech recognition. Press a key to start recording, press again to transcribe and type the result into any focused window.
+Offline voice dictation for Wayland desktops using NVIDIA Parakeet TDT speech recognition. Press a key to start recording, press again to transcribe and type the result into any focused window.
 
 ## Features
 
@@ -60,25 +60,25 @@ Server = https://masonrhodesdev.github.io/arch-repo/x86_64
 Then install:
 
 ```bash
-sudo pacman -Sy hyprland-voice-dictation
+sudo pacman -Sy wayland-voice-dictation
 ```
 
 ### Fedora
 
 ```bash
-sudo dnf copr enable solaris765/hyprland-voice-dictation
-sudo dnf install hyprland-voice-dictation
+sudo dnf copr enable solaris765/wayland-voice-dictation
+sudo dnf install wayland-voice-dictation
 ```
 
 Both packages install the binary to `/usr/bin/voice-dictation`, the systemd
 user unit, and the standalone model download script under
-`/usr/share/hyprland-voice-dictation/`.
+`/usr/share/wayland-voice-dictation/`.
 
 ### From source (development)
 
 ```bash
-git clone https://github.com/MasonRhodesDev/hyprland-voice-dictation
-cd hyprland-voice-dictation
+git clone https://github.com/MasonRhodesDev/wayland-voice-dictation
+cd wayland-voice-dictation
 
 make install
 ```
@@ -122,7 +122,7 @@ Alternatively, use the standalone shell script (requires `curl`):
 ```bash
 bash scripts/download-parakeet-model.sh
 # or, from a packaged install:
-bash /usr/share/hyprland-voice-dictation/download-parakeet-model.sh
+bash /usr/share/wayland-voice-dictation/download-parakeet-model.sh
 ```
 
 ## Setup
@@ -242,7 +242,7 @@ dist/
   voice-dictation.service     systemd user unit (packaged payload)
 packaging/
   PKGBUILD                    Arch Linux package
-  hyprland-voice-dictation.spec  Fedora RPM spec (COPR)
+  wayland-voice-dictation.spec  Fedora RPM spec (COPR)
   build-srpm.sh               SRPM builder (vendored cargo deps)
 scripts/
   check-deps.sh               Dependency checker

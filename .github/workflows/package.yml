@@ -16,4 +16,4 @@ jobs:
   rpm:
     uses: MasonRhodesDev/packaging-workflows/.github/workflows/rpm-check.yml@v1
     with:
-      spec-name: hyprland-voice-dictation
+      spec-name: wayland-voice-dictation

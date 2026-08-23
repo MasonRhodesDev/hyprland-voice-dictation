@@ -129,7 +129,7 @@ pub fn discover_socket() -> Option<PathBuf> {
         debug!("WEZTERM_UNIX_SOCKET set but socket is not live: {}", path.display());
     }
 
-    let sock_dir = hypr_paths::BaseDirs::from_env().ok()?.runtime_path("wezterm");
+    let sock_dir = xdg_paths::BaseDirs::from_env().ok()?.runtime_path("wezterm");
 
     let mut live: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
     for entry in std::fs::read_dir(&sock_dir).ok()?.flatten() {

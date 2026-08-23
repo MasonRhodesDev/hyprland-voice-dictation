@@ -1,7 +1,7 @@
 # Maintainer: Mason Rhodes <mrhodesdev@gmail.com>
 #
-# Arch package for hyprland-voice-dictation. Same payload as the Fedora RPM
-# (packaging/hyprland-voice-dictation.spec); all paths are identical across
+# Arch package for wayland-voice-dictation. Same payload as the Fedora RPM
+# (packaging/wayland-voice-dictation.spec); all paths are identical across
 # both distros. Usable directly with makepkg from this directory after a
 # release tag is pushed.
 #
@@ -9,13 +9,13 @@
 # binaries at build time, so build() needs network access even though the
 # cargo dependencies themselves are fetched up front in prepare().
 
-pkgname=hyprland-voice-dictation
-pkgver=0.5.5
+pkgname=wayland-voice-dictation
+pkgver=0.6.0
 pkgrel=1
-pkgdesc='Offline voice dictation for Hyprland with Parakeet speech recognition'
+pkgdesc='Offline voice dictation for Wayland desktops with Parakeet speech recognition'
 arch=('x86_64')
 options=(!lto)  # onig's C objects become GCC LTO bitcode that ld.lld cannot read (same as game-mode/ring)
-url='https://github.com/MasonRhodesDev/hyprland-voice-dictation'
+url='https://github.com/MasonRhodesDev/wayland-voice-dictation'
 license=('MIT' 'Apache-2.0')
 depends=('wtype' 'pipewire' 'alsa-lib' 'fontconfig' 'freetype2' 'libxkbcommon'
          'wayland' 'systemd')

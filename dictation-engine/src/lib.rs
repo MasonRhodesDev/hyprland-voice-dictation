@@ -852,7 +852,7 @@ pub async fn run() -> Result<()> {
     // Initialize correction monitor (AT-SPI2 based)
     #[cfg(feature = "correction")]
     let correction_monitor = if config.daemon.enable_correction_learning {
-        let vd_dir = hypr_paths::ConfigDirs::from_env()
+        let vd_dir = xdg_paths::ConfigDirs::from_env()
             .map(|d| d.data_dir("voice-dictation"))
             .unwrap_or_default();
         let monitor_config = correction_engine::MonitorConfig {
@@ -889,7 +889,7 @@ pub async fn run() -> Result<()> {
     #[cfg(feature = "correction")]
     let wezterm_monitor =
         if config.daemon.enable_correction_learning && config.daemon.correction_backend_wezterm {
-            let vd_dir = hypr_paths::ConfigDirs::from_env()
+            let vd_dir = xdg_paths::ConfigDirs::from_env()
                 .map(|d| d.data_dir("voice-dictation"))
                 .unwrap_or_default();
             let monitor_config = correction_engine::MonitorConfig {
@@ -936,7 +936,7 @@ pub async fn run() -> Result<()> {
             .map(|m| m.store_handle())
             .or_else(|| wezterm_monitor.as_ref().map(|m| m.store_handle()));
         if let Some(store) = store_handle {
-            let corrections_path = hypr_paths::ConfigDirs::from_env()
+            let corrections_path = xdg_paths::ConfigDirs::from_env()
                 .map(|d| d.data_dir("voice-dictation").join("corrections.json"))
                 .unwrap_or_default();
             tokio::spawn(async move {

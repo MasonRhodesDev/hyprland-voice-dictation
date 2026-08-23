@@ -1,4 +1,4 @@
-# hyprland-voice-dictation — install automation
+# wayland-voice-dictation — install automation
 #
 # Usage:
 #   make build        # cargo build --release

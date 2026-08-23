@@ -12,7 +12,7 @@
 #
 # NOTE: the RPM %build needs network for the ort crate's ONNX Runtime
 # download — the COPR project must have "enable internet access" on (see
-# the comment block in hyprland-voice-dictation.spec).
+# the comment block in wayland-voice-dictation.spec).
 #
 # This script stays fully usable locally:
 #   --head builds from HEAD instead of the tag (testing only — never
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-NAME=hyprland-voice-dictation
+NAME=wayland-voice-dictation
 SPEC="$REPO/packaging/$NAME.spec"
 SOURCES="${HOME}/rpmbuild/SOURCES"
 COPR_PROJECT="${COPR_PROJECT:-$NAME}"

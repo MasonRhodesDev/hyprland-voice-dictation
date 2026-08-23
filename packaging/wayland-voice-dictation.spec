@@ -1,4 +1,4 @@
-# RPM spec for hyprland-voice-dictation. Built in COPR from a local SRPM
+# RPM spec for wayland-voice-dictation. Built in COPR from a local SRPM
 # produced by packaging/build-srpm.sh (source tarball from the git tag +
 # vendored cargo deps as Source1 — no rust-*-devel packages needed).
 #
@@ -23,14 +23,14 @@
 # as `%%cargo_install --locked`.
 %global __cargo_common_opts %{?_smp_mflags} -Z avoid-dev-deps --locked
 
-Name:           hyprland-voice-dictation
-Version:        0.5.5
+Name:           wayland-voice-dictation
+Version:        0.6.0
 Release:        1%{?dist}
-Summary:        Offline voice dictation for Hyprland with Parakeet speech recognition
+Summary:        Offline voice dictation for Wayland desktops with Parakeet speech recognition
 # Project code is MIT OR Apache-2.0; the binary links a large dependency
 # tree — see LICENSE.dependencies generated at build time.
 License:        MIT OR Apache-2.0
-URL:            https://github.com/MasonRhodesDev/hyprland-voice-dictation
+URL:            https://github.com/MasonRhodesDev/wayland-voice-dictation
 Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 Source1:        %{name}-%{version}-vendor.tar.xz
 
@@ -109,6 +109,10 @@ install -Dpm0755 scripts/download-parakeet-model.sh %{buildroot}%{_datadir}/%{na
 %{_datadir}/%{name}/download-parakeet-model.sh
 
 %changelog
+* Sat Aug 22 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.6.0-1
+- Rename package from hyprland-voice-dictation (desktop-commons ADR 0005).
+- Depend on xdg-paths and logind-session (renamed crates).
+
 * Thu Aug 20 2026 Mason Rhodes <mrhodesdev@gmail.com> - 0.5.5-1
 - Use Rustls for HTTP and dynamically load system ONNX Runtime, removing native OpenSSL build dependencies
 
