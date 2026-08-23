@@ -10,7 +10,7 @@
 # cargo dependencies themselves are fetched up front in prepare().
 
 pkgname=wayland-voice-dictation
-pkgver=0.6.1
+pkgver=0.6.2
 pkgrel=1
 pkgdesc='Offline voice dictation for Wayland desktops with Parakeet speech recognition'
 arch=('x86_64')
