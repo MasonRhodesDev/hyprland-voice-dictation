@@ -427,6 +427,24 @@ struct DeviceManagerConfig {
 }
 
 /// Manages audio devices with idle timeout and hotplug support.
+/// How long to wait before the idle-release timeout is due.
+///
+/// `None` means nothing is armed and the caller may block indefinitely --
+/// which is the point: a daemon that re-checks an unarmed deadline on a
+/// fixed cadence never lets the machine settle (desktop-commons ADR 0002).
+/// `Some(ZERO)` means it is already due.
+fn next_idle_deadline(
+    idle_for: Option<Duration>,
+    timeout: Duration,
+    holds_backend: bool,
+) -> Option<Duration> {
+    if !holds_backend {
+        // Nothing to release, so the timeout would fire into a no-op.
+        return None;
+    }
+    Some(timeout.saturating_sub(idle_for?))
+}
+
 struct DeviceManager {
     config: DeviceManagerConfig,
     backend: Option<Box<dyn AudioBackend>>,
@@ -548,6 +566,21 @@ impl DeviceManager {
             backend.flush()?;
         }
         Ok(())
+    }
+
+    /// How long until the idle-release timeout expires, if one is armed.
+    ///
+    /// The daemon waits on this instead of re-checking on a fixed cadence:
+    /// an idle daemon that wakes ten times a second to ask whether a
+    /// deadline has passed is the shape desktop-commons ADR 0002 forbids,
+    /// and it keeps the CPU out of deeper idle states for the entire time
+    /// the machine is doing nothing.
+    fn next_idle_deadline(&self) -> Option<Duration> {
+        next_idle_deadline(
+            self.stopped_at.map(|stopped_at| stopped_at.elapsed()),
+            Duration::from_secs(self.config.idle_release_timeout_secs),
+            self.backend.is_some(),
+        )
     }
 
     /// Check if idle timeout has expired and release backend if so.
@@ -1177,8 +1210,28 @@ pub async fn run() -> Result<()> {
                     }
                 }
 
-                // Wait for D-Bus commands with timeout
-                match tokio::time::timeout(Duration::from_millis(100), command_rx.recv()).await {
+                // Wait for a D-Bus command, or for whichever maintenance
+                // deadline comes first -- not on a fixed cadence. Idle is
+                // where this daemon spends nearly all of its life, so a
+                // blind 100ms re-check was ten wakes a second, for days,
+                // to ask whether a timeout that may not even be armed had
+                // passed (desktop-commons ADR 0002). With neither deadline
+                // armed it now blocks until a command arrives.
+                let next_deadline = [
+                    device_manager.next_idle_deadline(),
+                    engine_stopped_at.map(|stopped_at| {
+                        Duration::from_secs(config.daemon.engine_idle_timeout_secs)
+                            .saturating_sub(stopped_at.elapsed())
+                    }),
+                ]
+                .into_iter()
+                .flatten()
+                .min();
+                let command = match next_deadline {
+                    Some(deadline) => tokio::time::timeout(deadline, command_rx.recv()).await,
+                    None => Ok(command_rx.recv().await),
+                };
+                match command {
                     Ok(Some(cmd)) => match cmd {
                         DaemonCommand::StartRecording => {
                             info!("Received StartRecording command");
@@ -1837,4 +1890,36 @@ pub async fn run() -> Result<()> {
         std::process::exit(64);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod idle_deadline_tests {
+    use super::next_idle_deadline;
+    use std::time::Duration;
+
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn nothing_armed_means_wait_for_a_command() {
+        assert_eq!(next_idle_deadline(None, TIMEOUT, true), None);
+        assert_eq!(next_idle_deadline(Some(Duration::ZERO), TIMEOUT, false), None);
+    }
+
+    #[test]
+    fn an_armed_timer_yields_its_remaining_time() {
+        assert_eq!(
+            next_idle_deadline(Some(Duration::from_secs(10)), TIMEOUT, true),
+            Some(Duration::from_secs(20))
+        );
+    }
+
+    #[test]
+    fn an_overdue_timer_is_due_now_rather_than_wrapping() {
+        // saturating: a deadline in the past must fire immediately, not
+        // wrap into a ~584-year sleep.
+        assert_eq!(
+            next_idle_deadline(Some(Duration::from_secs(90)), TIMEOUT, true),
+            Some(Duration::ZERO)
+        );
+    }
 }
