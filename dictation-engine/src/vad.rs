@@ -266,15 +266,31 @@ pub fn create_vad(
 
         match silero::SileroVadDetector::ensure_model(&model_dir) {
             Ok(model_path) => {
-                match silero::SileroVadDetector::new(&model_path, vad_threshold, sample_rate) {
-                    Ok(detector) => {
+                // catch_unwind: ort loads libonnxruntime.so lazily and
+                // PANICS when it is missing rather than returning an error,
+                // so the Err arm below never sees that case. Without this a
+                // machine without the ONNX runtime installed gets a crash
+                // where the surrounding code plainly intends a fallback --
+                // and CI, whose container has no libonnxruntime.so, has
+                // been red on it since 2026-08-23.
+                let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    silero::SileroVadDetector::new(&model_path, vad_threshold, sample_rate)
+                }));
+                match built {
+                    Ok(Ok(detector)) => {
                         debug!("Using Silero VAD with threshold {}", vad_threshold);
                         return Box::new(detector);
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         tracing::warn!(
                             "Failed to create Silero VAD: {}, falling back to dB threshold",
                             e
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "Silero VAD panicked while loading (ONNX Runtime missing?), \
+                             falling back to dB threshold"
                         );
                     }
                 }
@@ -318,7 +334,11 @@ mod tests {
 
     #[test]
     fn test_create_vad_returns_db_threshold() {
-        // Without silero-vad feature, should always return DbThresholdVad
+        // VAD enabled, but the result must still be a working detector even
+        // when Silero cannot be built -- no model on disk, no ONNX Runtime
+        // (ort panics rather than erroring on a missing libonnxruntime.so),
+        // no network. Falling back is the documented intent of create_vad,
+        // and this asserts it holds rather than assuming the feature is off.
         let mut vad = create_vad(true, 0.5, -40.0, 16000);
 
         // Test that it works like DbThresholdVad
