@@ -409,7 +409,15 @@ impl HealthState {
         }
     }
 
-    /// Check if all subsystems are healthy enough to send watchdog keepalive
+    /// Whether the transcription engine is currently loaded.
+    ///
+    /// NOT a health signal, despite the name and its original doc comment
+    /// ("healthy enough to send watchdog keepalive"): `engine_healthy` is
+    /// set false when the engine is deliberately unloaded after an idle
+    /// timeout to reclaim memory. Gating the watchdog on it restarts an
+    /// idle daemon. It has never had a caller; it is kept because the
+    /// engine-loaded state is worth reporting, not because it means what
+    /// its name suggests.
     pub fn is_healthy(&self) -> bool {
         // Engine health is the critical check - if it loaded, we're functional
         // Audio health is only relevant during recording
@@ -967,7 +975,6 @@ pub async fn run() -> Result<()> {
 
     // Spawn dedicated watchdog task — decoupled from the event loop so long typing/processing
     // operations don't starve the watchdog and cause systemd to kill us.
-    let watchdog_health = Arc::clone(&health_state);
     tokio::spawn(async move {
         // A liveness heartbeat cannot be event-driven: systemd is asking
         // whether we are still alive, and only a periodic message answers
@@ -979,15 +986,13 @@ pub async fn run() -> Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(90));
         loop {
             interval.tick().await;
-            // Gated on health, which is the point of a watchdog: a daemon
-            // whose engine has failed should be restarted, not kept alive
-            // by a heartbeat that reports nothing about it. Before this the
-            // keepalive was unconditional and is_healthy() had no callers,
-            // so systemd only ever caught a fully wedged process.
-            if !watchdog_health.is_healthy() {
-                warn!("watchdog: unhealthy, withholding keepalive so systemd restarts us");
-                continue;
-            }
+            // NOT gated on engine_healthy. That flag is set false when the
+            // engine is *deliberately* released after an idle timeout to
+            // reclaim memory (see the Idle branch), so gating on it would
+            // withhold keepalives from a perfectly healthy idle daemon and
+            // have systemd restart it every time the user walked away.
+            // There is no real health signal in this daemon today; see the
+            // note on is_healthy().
             if let Err(e) = notify(false, [(STATE_WATCHDOG, "1")].iter()) {
                 debug!("Failed to send watchdog keepalive: {}", e);
             }
@@ -1862,17 +1867,16 @@ mod watchdog_health_tests {
     use std::sync::atomic::Ordering;
 
     #[test]
-    fn an_unhealthy_daemon_withholds_its_keepalive() {
-        // The watchdog's whole purpose: a daemon whose engine has failed
-        // must stop claiming to be alive, so systemd restarts it. The
-        // keepalive used to be unconditional and is_healthy() had no
-        // callers at all, so systemd only ever caught a fully wedged
-        // process -- never a broken one.
+    fn engine_loaded_is_not_a_health_signal() {
+        // Pins why the watchdog must NOT gate on this. engine_healthy goes
+        // false on the deliberate idle release, so a daemon that is simply
+        // idle looks "unhealthy" -- gating on it would have systemd restart
+        // an idle daemon on a loop.
         let health = HealthState::new();
-        assert!(!health.is_healthy(), "a daemon that has not loaded its engine yet is not healthy");
         health.engine_healthy.store(true, Ordering::Relaxed);
         assert!(health.is_healthy());
+        // ...the same transition the idle release performs.
         health.engine_healthy.store(false, Ordering::Relaxed);
-        assert!(!health.is_healthy(), "an engine failure must be visible to the watchdog");
+        assert!(!health.is_healthy(), "engine_loaded tracks the engine, not the daemon's health");
     }
 }
