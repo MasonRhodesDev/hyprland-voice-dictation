@@ -9,12 +9,12 @@ Restart=on-failure
 RestartSec=5
 # Exit code 64 = UI reload requested, should trigger restart
 RestartForceExitStatus=64
-# Watchdog timeout: systemd will kill and restart if no keepalive received within 30s
-# A liveness heartbeat is the one thing that cannot be event-driven, so it
-# is made cheap instead: the daemon idles for days at a time, and 30s meant
-# waking it every 15s for ever. 300s still restarts a wedged or unhealthy
-# daemon within five minutes.
-WatchdogSec=300
+# No WatchdogSec. A liveness heartbeat is the one thing here that cannot be
+# event-driven, and this one could not detect a wedged daemon anyway: the
+# keepalive was decoupled from the state machine, so it pinged regardless of
+# whether the loop was turning. Restart=on-failure covers the case it did
+# catch (the process dying). A genuine hang is immediately visible -- the
+# hotkey does nothing -- and one restart away.
 Environment="RUST_LOG=info"
 Environment="GUI_LOG=info"
 StandardOutput=journal

@@ -5,7 +5,7 @@ use std::fs;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use systemd::daemon::{notify, STATE_READY, STATE_WATCHDOG};
+use systemd::daemon::{notify, STATE_READY};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
@@ -973,32 +973,16 @@ pub async fn run() -> Result<()> {
     // Create shared health state
     let health_state = Arc::new(HealthState::new());
 
-    // Spawn dedicated watchdog task — decoupled from the event loop so long typing/processing
-    // operations don't starve the watchdog and cause systemd to kill us.
-    tokio::spawn(async move {
-        // A liveness heartbeat cannot be event-driven: systemd is asking
-        // whether we are still alive, and only a periodic message answers
-        // that -- a daemon that pinged solely on events would look
-        // identical, while hung, to one that is merely idle. What it can be
-        // is infrequent. WatchdogSec=300 wants a ping every 150s at the
-        // latest; a minute of margin covers a scheduling hiccup without
-        // making this the process's busiest timer.
-        let mut interval = tokio::time::interval(Duration::from_secs(90));
-        loop {
-            interval.tick().await;
-            // NOT gated on engine_healthy. That flag is set false when the
-            // engine is *deliberately* released after an idle timeout to
-            // reclaim memory (see the Idle branch), so gating on it would
-            // withhold keepalives from a perfectly healthy idle daemon and
-            // have systemd restart it every time the user walked away.
-            // There is no real health signal in this daemon today; see the
-            // note on is_healthy().
-            if let Err(e) = notify(false, [(STATE_WATCHDOG, "1")].iter()) {
-                debug!("Failed to send watchdog keepalive: {}", e);
-            }
-        }
-    });
-
+    // No systemd watchdog. It could only ever detect whole-runtime death,
+    // which Restart=on-failure already covers: the keepalive task was
+    // deliberately decoupled from the state machine ("so long typing or
+    // processing does not starve the watchdog"), and a decoupled heartbeat
+    // still pings while the loop it is supposed to be vouching for is
+    // wedged. It also had no usable health signal -- engine_healthy goes
+    // false on the deliberate idle release -- so gating it restarted an
+    // idle daemon. What it did have was a forever-timer and the risk of
+    // SIGABRT mid-dictation when a runtime under heavy inference missed a
+    // ping. READY=1 below is kept: startup ordering is real.
     // Create audio channel (shared between DeviceManager and processing)
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
     let audio_rx_shared = Arc::new(tokio::sync::Mutex::new(audio_rx));
