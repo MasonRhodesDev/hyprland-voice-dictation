@@ -967,10 +967,27 @@ pub async fn run() -> Result<()> {
 
     // Spawn dedicated watchdog task — decoupled from the event loop so long typing/processing
     // operations don't starve the watchdog and cause systemd to kill us.
+    let watchdog_health = Arc::clone(&health_state);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(15));
+        // A liveness heartbeat cannot be event-driven: systemd is asking
+        // whether we are still alive, and only a periodic message answers
+        // that -- a daemon that pinged solely on events would look
+        // identical, while hung, to one that is merely idle. What it can be
+        // is infrequent. WatchdogSec=300 wants a ping every 150s at the
+        // latest; a minute of margin covers a scheduling hiccup without
+        // making this the process's busiest timer.
+        let mut interval = tokio::time::interval(Duration::from_secs(90));
         loop {
             interval.tick().await;
+            // Gated on health, which is the point of a watchdog: a daemon
+            // whose engine has failed should be restarted, not kept alive
+            // by a heartbeat that reports nothing about it. Before this the
+            // keepalive was unconditional and is_healthy() had no callers,
+            // so systemd only ever caught a fully wedged process.
+            if !watchdog_health.is_healthy() {
+                warn!("watchdog: unhealthy, withholding keepalive so systemd restarts us");
+                continue;
+            }
             if let Err(e) = notify(false, [(STATE_WATCHDOG, "1")].iter()) {
                 debug!("Failed to send watchdog keepalive: {}", e);
             }
@@ -1837,4 +1854,25 @@ pub async fn run() -> Result<()> {
         std::process::exit(64);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod watchdog_health_tests {
+    use super::HealthState;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn an_unhealthy_daemon_withholds_its_keepalive() {
+        // The watchdog's whole purpose: a daemon whose engine has failed
+        // must stop claiming to be alive, so systemd restarts it. The
+        // keepalive used to be unconditional and is_healthy() had no
+        // callers at all, so systemd only ever caught a fully wedged
+        // process -- never a broken one.
+        let health = HealthState::new();
+        assert!(!health.is_healthy(), "a daemon that has not loaded its engine yet is not healthy");
+        health.engine_healthy.store(true, Ordering::Relaxed);
+        assert!(health.is_healthy());
+        health.engine_healthy.store(false, Ordering::Relaxed);
+        assert!(!health.is_healthy(), "an engine failure must be visible to the watchdog");
+    }
 }

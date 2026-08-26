@@ -10,7 +10,11 @@ RestartSec=5
 # Exit code 64 = UI reload requested, should trigger restart
 RestartForceExitStatus=64
 # Watchdog timeout: systemd will kill and restart if no keepalive received within 30s
-WatchdogSec=30
+# A liveness heartbeat is the one thing that cannot be event-driven, so it
+# is made cheap instead: the daemon idles for days at a time, and 30s meant
+# waking it every 15s for ever. 300s still restarts a wedged or unhealthy
+# daemon within five minutes.
+WatchdogSec=300
 Environment="RUST_LOG=info"
 Environment="GUI_LOG=info"
 StandardOutput=journal
