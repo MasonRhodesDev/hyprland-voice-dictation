@@ -1219,10 +1219,17 @@ pub async fn run() -> Result<()> {
                 // armed it now blocks until a command arrives.
                 let next_deadline = [
                     device_manager.next_idle_deadline(),
-                    engine_stopped_at.map(|stopped_at| {
-                        Duration::from_secs(config.daemon.engine_idle_timeout_secs)
-                            .saturating_sub(stopped_at.elapsed())
-                    }),
+                    // Through the same helper, so "armed" means the same
+                    // thing on both sides: a deadline with nothing left to
+                    // release is not a deadline. Inlining the arithmetic
+                    // here would be correct only while engine_stopped_at
+                    // and preview_engine are always written in lockstep --
+                    // true today, but nothing would catch a change.
+                    next_idle_deadline(
+                        engine_stopped_at.map(|stopped_at| stopped_at.elapsed()),
+                        Duration::from_secs(config.daemon.engine_idle_timeout_secs),
+                        preview_engine.is_some(),
+                    ),
                 ]
                 .into_iter()
                 .flatten()
