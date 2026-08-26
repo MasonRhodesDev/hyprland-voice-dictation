@@ -253,7 +253,18 @@ async fn run_tray_update_loop(
     mut state_rx: watch::Receiver<DaemonState>,
     backend_type: BackendType,
 ) {
-    let mut refresh_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    // The device list only changes when hardware appears or disappears, and
+    // there is no event source for that here: ksni has no menu-open hook,
+    // and the audio backend's needs_recreate flag reports stream failure,
+    // not topology. So it is polled -- but sparingly, and only in the state
+    // where the list is actionable.
+    //
+    // Deliberately not rewritten as an event subscription (`pactl
+    // subscribe` or similar). This process already wakes every 15s for the
+    // systemd Type=notify watchdog, which is required, so removing this
+    // timer would not let it sleep any longer; the only saving is the
+    // subprocess spawns, and 60s halves those without a stale-menu cliff.
+    let mut refresh_interval = tokio::time::interval(std::time::Duration::from_secs(60));
     refresh_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Skip the immediate first tick
     refresh_interval.tick().await;
@@ -283,6 +294,12 @@ async fn run_tray_update_loop(
                 }
             }
             _ = refresh_interval.tick() => {
+                // Only while idle: mid-recording the list is not actionable
+                // (a device switch takes effect on the next recording), so
+                // shelling out to enumerate it is pure waste.
+                if *state_rx.borrow() != DaemonState::Idle {
+                    continue;
+                }
                 let bt = backend_type;
                 if handle
                     .update(move |tray| {
