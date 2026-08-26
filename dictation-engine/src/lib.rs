@@ -5,7 +5,7 @@ use std::fs;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use systemd::daemon::{notify, STATE_READY, STATE_WATCHDOG};
+use systemd::daemon::{notify, STATE_READY};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
@@ -409,7 +409,15 @@ impl HealthState {
         }
     }
 
-    /// Check if all subsystems are healthy enough to send watchdog keepalive
+    /// Whether the transcription engine is currently loaded.
+    ///
+    /// NOT a health signal, despite the name and its original doc comment
+    /// ("healthy enough to send watchdog keepalive"): `engine_healthy` is
+    /// set false when the engine is deliberately unloaded after an idle
+    /// timeout to reclaim memory. Gating the watchdog on it restarts an
+    /// idle daemon. It has never had a caller; it is kept because the
+    /// engine-loaded state is worth reporting, not because it means what
+    /// its name suggests.
     pub fn is_healthy(&self) -> bool {
         // Engine health is the critical check - if it loaded, we're functional
         // Audio health is only relevant during recording
@@ -965,18 +973,16 @@ pub async fn run() -> Result<()> {
     // Create shared health state
     let health_state = Arc::new(HealthState::new());
 
-    // Spawn dedicated watchdog task — decoupled from the event loop so long typing/processing
-    // operations don't starve the watchdog and cause systemd to kill us.
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(15));
-        loop {
-            interval.tick().await;
-            if let Err(e) = notify(false, [(STATE_WATCHDOG, "1")].iter()) {
-                debug!("Failed to send watchdog keepalive: {}", e);
-            }
-        }
-    });
-
+    // No systemd watchdog. It could only ever detect whole-runtime death,
+    // which Restart=on-failure already covers: the keepalive task was
+    // deliberately decoupled from the state machine ("so long typing or
+    // processing does not starve the watchdog"), and a decoupled heartbeat
+    // still pings while the loop it is supposed to be vouching for is
+    // wedged. It also had no usable health signal -- engine_healthy goes
+    // false on the deliberate idle release -- so gating it restarted an
+    // idle daemon. What it did have was a forever-timer and the risk of
+    // SIGABRT mid-dictation when a runtime under heavy inference missed a
+    // ping. READY=1 below is kept: startup ordering is real.
     // Create audio channel (shared between DeviceManager and processing)
     let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<i16>>();
     let audio_rx_shared = Arc::new(tokio::sync::Mutex::new(audio_rx));
@@ -1837,4 +1843,24 @@ pub async fn run() -> Result<()> {
         std::process::exit(64);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod watchdog_health_tests {
+    use super::HealthState;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn engine_loaded_is_not_a_health_signal() {
+        // Pins why the watchdog must NOT gate on this. engine_healthy goes
+        // false on the deliberate idle release, so a daemon that is simply
+        // idle looks "unhealthy" -- gating on it would have systemd restart
+        // an idle daemon on a loop.
+        let health = HealthState::new();
+        health.engine_healthy.store(true, Ordering::Relaxed);
+        assert!(health.is_healthy());
+        // ...the same transition the idle release performs.
+        health.engine_healthy.store(false, Ordering::Relaxed);
+        assert!(!health.is_healthy(), "engine_loaded tracks the engine, not the daemon's health");
+    }
 }
